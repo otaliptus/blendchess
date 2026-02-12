@@ -60,6 +60,10 @@
   const playerRoster = document.getElementById('playerRoster');
   const playModeEl = document.getElementById('playMode');
   const serverUrlEl = document.getElementById('serverUrl');
+  const fileLabelsTop = Array.from(document.querySelectorAll('.file-labels-top span'));
+  const fileLabelsBottom = Array.from(document.querySelectorAll('.file-labels-bottom span'));
+  const rankLabelsLeft = Array.from(document.querySelectorAll('.rank-labels-left span'));
+  const rankLabelsRight = Array.from(document.querySelectorAll('.rank-labels-right span'));
   const connectServerEl = document.getElementById('connectServer');
   const createRoomEl = document.getElementById('createRoom');
   const joinRoomCodeEl = document.getElementById('joinRoomCode');
@@ -96,7 +100,11 @@
         : 'wss://blendchess-ws.omertalib42.workers.dev'
     );
   const SERVER_URL_STORAGE_KEY = 'blendchess.serverUrl';
+  const ONLINE_SESSION_STORAGE_KEY = 'blendchess.onlineSession';
+  const AUTO_RECONNECT_MAX_ATTEMPTS = 6;
+  const AUTO_RECONNECT_BASE_DELAY_MS = 1200;
   const DRAW_CLAIM_REASONS = ['threefold', 'fiftyMove', 'seventyFiveMove', 'fivefold', 'insufficientMaterial'];
+  const MASKED_MOVE_TEXT = '****';
   const DRAW_REASON_ALIASES = {
     threefold: 'threefold',
     fiftymove: 'fiftyMove',
@@ -118,9 +126,156 @@
     color: null,
     players: [],
     awaitingStateSync: false,
+    reconnectAttempts: 0,
+    reconnectTimer: null,
+    resumeInFlight: false,
+    intentionalLeave: false,
   };
 
+  let audioContext = null;
   let state = newGameState();
+
+  function getAudioContext() {
+    if (audioContext) {
+      return audioContext;
+    }
+
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      return null;
+    }
+
+    audioContext = new Ctx();
+    return audioContext;
+  }
+
+  function unlockAudio() {
+    const ctx = getAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  }
+
+  function scheduleTone(ctx, options) {
+    const {
+      frequency,
+      delay = 0,
+      duration = 0.08,
+      gain = 0.06,
+      type = 'triangle',
+    } = options;
+    const startTime = ctx.currentTime + delay;
+    const endTime = startTime + duration;
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, startTime);
+
+    gainNode.gain.setValueAtTime(0.0001, startTime);
+    gainNode.gain.exponentialRampToValueAtTime(gain, startTime + 0.01);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, endTime);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    oscillator.start(startTime);
+    oscillator.stop(endTime + 0.02);
+  }
+
+  function playMoveSound() {
+    const ctx = getAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    unlockAudio();
+    scheduleTone(ctx, {
+      frequency: 420,
+      duration: 0.045,
+      gain: 0.045,
+      type: 'square',
+    });
+    scheduleTone(ctx, {
+      frequency: 320,
+      delay: 0.05,
+      duration: 0.055,
+      gain: 0.05,
+      type: 'triangle',
+    });
+  }
+
+  function playCaptureSound(role) {
+    const ctx = getAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    unlockAudio();
+    if (role === 'loser') {
+      scheduleTone(ctx, {
+        frequency: 260,
+        duration: 0.09,
+        gain: 0.065,
+        type: 'sawtooth',
+      });
+      scheduleTone(ctx, {
+        frequency: 170,
+        delay: 0.05,
+        duration: 0.13,
+        gain: 0.06,
+        type: 'sawtooth',
+      });
+      return;
+    }
+
+    scheduleTone(ctx, {
+      frequency: 620,
+      duration: 0.06,
+      gain: 0.055,
+      type: 'triangle',
+    });
+    scheduleTone(ctx, {
+      frequency: 760,
+      delay: 0.03,
+      duration: 0.08,
+      gain: 0.055,
+      type: 'triangle',
+    });
+  }
+
+  function playMoveFeedback(options = {}) {
+    const {
+      capture = false,
+      moverColor = null,
+      capturedColor = null,
+    } = options;
+
+    if (!capture) {
+      playMoveSound();
+      return;
+    }
+
+    if (!isOnlineMode() || !multiplayer.color) {
+      playCaptureSound('taker');
+      return;
+    }
+
+    if (moverColor && moverColor === multiplayer.color) {
+      playCaptureSound('taker');
+      return;
+    }
+
+    if (capturedColor && capturedColor === multiplayer.color) {
+      playCaptureSound('loser');
+      return;
+    }
+
+    playCaptureSound('taker');
+  }
 
   function readSavedServerUrl() {
     try {
@@ -141,6 +296,109 @@
     } catch {
       // no-op
     }
+  }
+
+  function clearReconnectTimer() {
+    if (multiplayer.reconnectTimer) {
+      window.clearTimeout(multiplayer.reconnectTimer);
+      multiplayer.reconnectTimer = null;
+    }
+  }
+
+  function readSavedOnlineSession() {
+    try {
+      const raw = window.localStorage.getItem(ONLINE_SESSION_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        return null;
+      }
+
+      const roomCode = normalizeRoomCode(parsed.roomCode);
+      const playerId = typeof parsed.playerId === 'string' ? parsed.playerId.trim() : '';
+      const socketUrl = typeof parsed.socketUrl === 'string' ? parsed.socketUrl.trim() : '';
+      const color = parsed.color === 'w' || parsed.color === 'b' ? parsed.color : null;
+
+      if (!roomCode || !playerId) {
+        return null;
+      }
+
+      return {
+        roomCode,
+        playerId,
+        socketUrl: socketUrl || DEFAULT_SERVER_URL,
+        color,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function clearSavedOnlineSession() {
+    try {
+      window.localStorage.removeItem(ONLINE_SESSION_STORAGE_KEY);
+    } catch {
+      // no-op
+    }
+  }
+
+  function saveOnlineSession() {
+    if (!multiplayer.roomCode || !multiplayer.playerId) {
+      return;
+    }
+
+    const session = {
+      roomCode: normalizeRoomCode(multiplayer.roomCode),
+      playerId: multiplayer.playerId,
+      color: multiplayer.color || null,
+      socketUrl: (serverUrlEl.value.trim() || multiplayer.socketUrl || DEFAULT_SERVER_URL),
+    };
+
+    try {
+      window.localStorage.setItem(ONLINE_SESSION_STORAGE_KEY, JSON.stringify(session));
+    } catch {
+      // no-op
+    }
+  }
+
+  function updateOnlineSessionPersistence() {
+    if (isOnlineMode() && multiplayer.roomCode && multiplayer.playerId) {
+      saveOnlineSession();
+      return;
+    }
+    clearSavedOnlineSession();
+  }
+
+  function scheduleAutoReconnect() {
+    if (
+      multiplayer.intentionalLeave
+      || !isOnlineMode()
+      || !multiplayer.roomCode
+      || !multiplayer.playerId
+      || multiplayer.resumeInFlight
+    ) {
+      return;
+    }
+
+    if (multiplayer.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
+      addEvent('Reconnect attempts exhausted. Click Connect to retry.');
+      syncMultiplayerPanel();
+      syncMultiplayerControlState();
+      return;
+    }
+
+    multiplayer.reconnectAttempts += 1;
+    const attempt = multiplayer.reconnectAttempts;
+    const delay = Math.min(7000, AUTO_RECONNECT_BASE_DELAY_MS * attempt);
+    syncMultiplayerPanel();
+    syncMultiplayerControlState();
+    clearReconnectTimer();
+    multiplayer.reconnectTimer = window.setTimeout(() => {
+      resumeOnlineSession(`Reconnect attempt ${attempt}`);
+    }, delay);
   }
 
   function newGameState() {
@@ -185,6 +443,76 @@
     }
   }
 
+  async function resumeOnlineSession(contextText = 'Refreshing session') {
+    if (multiplayer.resumeInFlight) {
+      return;
+    }
+
+    const saved = readSavedOnlineSession();
+    if (!saved) {
+      return;
+    }
+
+    multiplayer.resumeInFlight = true;
+    multiplayer.intentionalLeave = false;
+    clearReconnectTimer();
+
+    multiplayer.roomCode = saved.roomCode;
+    multiplayer.playerId = saved.playerId;
+    multiplayer.color = multiplayer.color || saved.color || null;
+    multiplayer.socketUrl = saved.socketUrl || DEFAULT_SERVER_URL;
+    serverUrlEl.value = multiplayer.socketUrl;
+    joinRoomCodeEl.value = saved.roomCode;
+    saveServerUrl(multiplayer.socketUrl);
+
+    if (!isOnlineMode()) {
+      playModeEl.value = 'online';
+      setMode('online');
+    }
+
+    syncMultiplayerControlState();
+    syncMultiplayerPanel();
+    addEvent(`${contextText}. Rejoining room ${saved.roomCode}...`);
+    render();
+
+    try {
+      await connectSocket();
+      sendSocketMessage(
+        WEBSOCKET_TYPES.JOIN_ROOM,
+        { nickname: 'Player', resume: true },
+        saved.roomCode,
+      );
+    } catch (error) {
+      addEvent(`Reconnect failed: ${error.message}`);
+      render();
+    } finally {
+      multiplayer.resumeInFlight = false;
+      syncMultiplayerControlState();
+    }
+  }
+
+  function tryResumeOnlineSessionOnLoad() {
+    const saved = readSavedOnlineSession();
+    if (!saved) {
+      return;
+    }
+
+    if (!isOnlineMode()) {
+      playModeEl.value = 'online';
+      setMode('online');
+    }
+
+    multiplayer.roomCode = saved.roomCode;
+    multiplayer.playerId = saved.playerId;
+    multiplayer.color = saved.color || null;
+    multiplayer.socketUrl = saved.socketUrl || DEFAULT_SERVER_URL;
+    joinRoomCodeEl.value = saved.roomCode;
+    serverUrlEl.value = multiplayer.socketUrl;
+    syncMultiplayerPanel();
+    syncMultiplayerControlState();
+    resumeOnlineSession('Recovered room from last session');
+  }
+
   function isOnlineMode() {
     return playModeEl.value === 'online';
   }
@@ -194,6 +522,95 @@
       return state.turn;
     }
     return multiplayer.color || null;
+  }
+
+  function getPerspectiveColor() {
+    if (isOnlineMode()) {
+      return multiplayer.color || state.turn;
+    }
+    return state.turn;
+  }
+
+  function shouldRevealBoardAndHistory() {
+    return state.gameOver;
+  }
+
+  function shouldMaskOpponentMoves() {
+    return isOnlineMode() && !shouldRevealBoardAndHistory();
+  }
+
+  function maskMoveText(text) {
+    if (!text) {
+      return '';
+    }
+    return MASKED_MOVE_TEXT;
+  }
+
+  function formatMoveForViewer(text, color) {
+    if (!text) {
+      return '';
+    }
+    if (!shouldMaskOpponentMoves()) {
+      return text;
+    }
+    if (!multiplayer.color) {
+      return MASKED_MOVE_TEXT;
+    }
+    return color === multiplayer.color ? text : MASKED_MOVE_TEXT;
+  }
+
+  function formatEventForViewer(entry) {
+    if (!shouldMaskOpponentMoves()) {
+      return entry;
+    }
+
+    const timestampMatch = entry.match(/^(\[[^\]]+\]\s*)(.*)$/);
+    const prefix = timestampMatch ? timestampMatch[1] : '';
+    const body = timestampMatch ? timestampMatch[2] : entry;
+
+    if (/^You played\s+/i.test(body) || /^Opponent moved/i.test(body)) {
+      return entry;
+    }
+
+    const playedByColor = body.match(/^(White|Black) played\s+(.+)$/);
+    if (playedByColor) {
+      const moverColor = playedByColor[1] === 'White' ? 'w' : 'b';
+      if (multiplayer.color && moverColor === multiplayer.color) {
+        return entry;
+      }
+      return `${prefix}${playedByColor[1]} played ${maskMoveText(playedByColor[2])}`;
+    }
+
+    const genericPlayed = body.match(/^Move played:\s+(.+)$/);
+    if (genericPlayed) {
+      return `${prefix}Move played: ${maskMoveText(genericPlayed[1])}`;
+    }
+
+    return entry;
+  }
+
+  function updateBoardFrameLabels(flipped) {
+    const files = flipped
+      ? ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a']
+      : ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const ranks = flipped
+      ? ['1', '2', '3', '4', '5', '6', '7', '8']
+      : ['8', '7', '6', '5', '4', '3', '2', '1'];
+
+    for (let i = 0; i < 8; i += 1) {
+      if (fileLabelsTop[i + 1]) {
+        fileLabelsTop[i + 1].textContent = files[i];
+      }
+      if (fileLabelsBottom[i + 1]) {
+        fileLabelsBottom[i + 1].textContent = files[i];
+      }
+      if (rankLabelsLeft[i]) {
+        rankLabelsLeft[i].textContent = ranks[i];
+      }
+      if (rankLabelsRight[i]) {
+        rankLabelsRight[i].textContent = ranks[i];
+      }
+    }
   }
 
   function toMoveColorFromState() {
@@ -240,13 +657,13 @@
   function addEvent(text) {
     const prefix = new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' });
     state.events.unshift(`[${prefix}] ${text}`);
-    state.events = state.events.slice(0, 20);
   }
 
-  function setMode(mode) {
+  function setMode(mode, options = {}) {
+    const { preserveSession = false } = options;
     multiplayer.mode = mode;
     if (mode === 'local') {
-      clearRoomSession();
+      clearRoomSession({ clearSavedSession: !preserveSession });
       state = newGameState();
       state.hardMode = hardModeEl.checked;
     }
@@ -261,10 +678,24 @@
         ? `${multiplayer.color === 'w' ? 'White' : 'Black'}`
         : 'waiting';
       const roomReady = multiplayer.roomCode ? `Room ${multiplayer.roomCode}` : 'No room';
-      const connectionText = multiplayer.connected ? 'Connected' : 'Not connected';
+      let connectionText = multiplayer.connected ? 'Connected' : 'Not connected';
+      if (multiplayer.resumeInFlight) {
+        connectionText = 'Reconnecting...';
+      } else if (
+        !multiplayer.connected
+        && multiplayer.reconnectAttempts > 0
+        && multiplayer.reconnectAttempts <= AUTO_RECONNECT_MAX_ATTEMPTS
+        && multiplayer.roomCode
+        && !multiplayer.intentionalLeave
+      ) {
+        connectionText = `Reconnecting (${multiplayer.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})`;
+      }
       const connectedCount = multiplayer.players.filter((player) => player.connected !== false).length;
       multiplayerStatusEl.textContent = `Online mode · ${connectionText} · ${roomReady} · You are ${playerColor}.`;
       multiplayerInfoEl.textContent = `Players connected: ${connectedCount}/2`;
+      if (multiplayer.roomCode && multiplayer.playerId) {
+        multiplayerInfoEl.textContent += ' · Refresh-safe session enabled.';
+      }
       const roster = multiplayer.players
         .map((player) => {
           const connectionState = player.connected === false ? 'disconnected' : 'connected';
@@ -285,13 +716,13 @@
 
   function syncMultiplayerControlState() {
     const online = isOnlineMode();
-    connectServerEl.disabled = !online || multiplayer.connected;
-    createRoomEl.disabled = !online || !multiplayer.connected;
-    joinRoomEl.disabled = !online || !multiplayer.connected;
-    joinRoomCodeEl.disabled = !online || !multiplayer.connected;
+    connectServerEl.disabled = !online || multiplayer.connected || multiplayer.resumeInFlight;
+    createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
+    joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
+    joinRoomCodeEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
     copyRoomCodeEl.disabled = !online || !multiplayer.roomCode;
     leaveRoomEl.disabled = !online;
-    serverUrlEl.disabled = multiplayer.connected;
+    serverUrlEl.disabled = multiplayer.connected || multiplayer.resumeInFlight;
     claimDrawEl.disabled = online ? !multiplayer.connected : false;
     resignEl.disabled = !online || !multiplayer.connected;
   }
@@ -313,35 +744,51 @@
     }
   }
 
-  function clearRoomSession() {
+  function clearRoomSession(options = {}) {
+    const { clearSavedSession = false } = options;
     if (!isOnlineMode()) {
       // reset server state and return to local rules
       disconnectSocket();
     }
+    clearReconnectTimer();
+    multiplayer.reconnectAttempts = 0;
+    multiplayer.resumeInFlight = false;
     multiplayer.connected = false;
     multiplayer.playerId = null;
     multiplayer.color = null;
     multiplayer.roomCode = '';
     multiplayer.players = [];
     multiplayer.awaitingStateSync = false;
+    multiplayer.intentionalLeave = false;
+    if (clearSavedSession) {
+      clearSavedOnlineSession();
+    }
   }
 
   function renderBoard() {
     boardEl.replaceChildren();
-    const visibleColor = isOnlineMode() ? multiplayer.color : state.turn;
+    const perspectiveColor = getPerspectiveColor();
+    const revealAll = shouldRevealBoardAndHistory();
+    const visibleColor = revealAll ? null : perspectiveColor;
+    const flipped = perspectiveColor === 'b';
 
-    for (let r = 0; r < 8; r += 1) {
-      for (let c = 0; c < 8; c += 1) {
+    updateBoardFrameLabels(flipped);
+    boardEl.classList.toggle('revealed', revealAll);
+
+    for (let displayR = 0; displayR < 8; displayR += 1) {
+      for (let displayC = 0; displayC < 8; displayC += 1) {
+        const r = flipped ? 7 - displayR : displayR;
+        const c = flipped ? 7 - displayC : displayC;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'square';
-        button.classList.add((r + c) % 2 === 0 ? 'light' : 'dark');
+        button.classList.add((displayR + displayC) % 2 === 0 ? 'light' : 'dark');
         button.dataset.r = String(r);
         button.dataset.c = String(c);
         button.addEventListener('click', () => handleSquareClick(r, c));
 
         const piece = state.board[r][c];
-        if (piece && piece.color === visibleColor) {
+        if (piece && (revealAll || piece.color === visibleColor)) {
           button.classList.add('visible', 'piece', piece.color === 'w' ? 'white' : 'black');
           button.textContent = PIECE_SYMBOLS[piece.color][piece.type];
         } else {
@@ -361,7 +808,7 @@
     eventsEl.replaceChildren();
     for (const entry of state.events) {
       const item = document.createElement('li');
-      item.textContent = entry;
+      item.textContent = formatEventForViewer(entry);
       eventsEl.appendChild(item);
     }
   }
@@ -374,8 +821,14 @@
       const white = document.createElement('td');
       const black = document.createElement('td');
       num.textContent = String(move.num);
-      white.textContent = move.white || '';
-      black.textContent = move.black || '';
+      white.textContent = formatMoveForViewer(move.white || '', 'w');
+      black.textContent = formatMoveForViewer(move.black || '', 'b');
+      if (white.textContent === MASKED_MOVE_TEXT) {
+        white.classList.add('masked');
+      }
+      if (black.textContent === MASKED_MOVE_TEXT) {
+        black.classList.add('masked');
+      }
       row.appendChild(num);
       row.appendChild(white);
       row.appendChild(black);
@@ -585,6 +1038,8 @@
         multiplayer.color = match.color;
       }
     }
+
+    updateOnlineSessionPersistence();
   }
 
   function pickPromotionFromOptions(promotionMoves) {
@@ -613,6 +1068,11 @@
     } else {
       state.halfMoveClock += 1;
     }
+    playMoveFeedback({
+      capture: Boolean(outcome.captured),
+      moverColor: attempted.piece.color,
+      capturedColor: outcome.captured?.color || null,
+    });
 
     if (outcome.captured) {
       state.captured[outcome.captured.color] += 1;
@@ -715,6 +1175,8 @@
   }
 
   function handleSquareClick(r, c) {
+    unlockAudio();
+
     if (state.gameOver) {
       return;
     }
@@ -866,6 +1328,8 @@
 
       socket.addEventListener('open', () => {
         multiplayer.connected = true;
+        multiplayer.reconnectAttempts = 0;
+        clearReconnectTimer();
         multiplayer.connectPromise = null;
         multiplayerStatusEl.textContent = `Connected to ${nextServerUrl}.`;
         syncMultiplayerControlState();
@@ -885,17 +1349,18 @@
       socket.addEventListener('close', () => {
         const wasOnline = isOnlineMode();
         const hadRoom = Boolean(multiplayer.roomCode);
+        const shouldAutoReconnect = wasOnline && hadRoom && !multiplayer.intentionalLeave;
         multiplayer.connected = false;
         multiplayer.connectPromise = null;
         multiplayer.awaitingStateSync = false;
-        multiplayerStatusEl.textContent = wasOnline && hadRoom
-          ? 'Disconnected. Reconnect to continue this room.'
-          : 'Disconnected.';
         if (wasOnline) {
           syncMultiplayerPanel();
           render();
         }
         syncMultiplayerControlState();
+        if (shouldAutoReconnect) {
+          scheduleAutoReconnect();
+        }
       });
     });
 
@@ -918,7 +1383,9 @@
       applyPlayerIdentity(message, payload);
       multiplayer.color = multiplayer.color || payload.playerColor || payload.color;
       multiplayer.players = payload.players || [];
+      multiplayer.intentionalLeave = false;
       syncFromRoomPayload(message);
+      saveOnlineSession();
       addEvent(`Room ${multiplayer.roomCode} created. Share this code with your friend.`);
       if (!joinRoomCodeEl.value || !joinRoomCodeEl.value.trim()) {
         joinRoomCodeEl.value = multiplayer.roomCode;
@@ -930,6 +1397,7 @@
     if (type === WEBSOCKET_TYPES.PLAYER_ASSIGNED) {
       applyPlayerIdentity(message, payload);
       multiplayer.players = payload.players || multiplayer.players;
+      saveOnlineSession();
       syncMultiplayerPanel();
       render();
       return;
@@ -939,6 +1407,8 @@
       multiplayer.roomCode = normalizeRoomCode(message.roomCode || payload.roomCode);
       applyPlayerIdentity(message, payload);
       multiplayer.players = payload.players || [];
+      multiplayer.intentionalLeave = false;
+      saveOnlineSession();
       syncMultiplayerPanel();
       render();
       return;
@@ -954,19 +1424,39 @@
           return;
         }
       }
+      updateOnlineSessionPersistence();
       render();
       return;
     }
 
     if (type === WEBSOCKET_TYPES.MOVE_APPLIED) {
+      const previousCaptured = { ...state.captured };
       if (payload.game && !hydrateGameState(payload.game)) {
         return;
       }
       if (Array.isArray(payload?.game?.players)) {
         multiplayer.players = payload.game.players;
       }
+      const moverColor = payload.color || payload.movedBy || otherColor(state.turn);
+      let capturedColor = null;
+      if (state.captured.w > previousCaptured.w) {
+        capturedColor = 'w';
+      } else if (state.captured.b > previousCaptured.b) {
+        capturedColor = 'b';
+      }
+      playMoveFeedback({
+        capture: Boolean(capturedColor),
+        moverColor,
+        capturedColor,
+      });
       if (payload.san) {
-        addEvent(`Move played: ${payload.san}`);
+        if (!shouldRevealBoardAndHistory() && moverColor && multiplayer.color && moverColor !== multiplayer.color) {
+          addEvent('Opponent moved ****');
+        } else if (moverColor && multiplayer.color && moverColor === multiplayer.color) {
+          addEvent(`You played ${payload.san}`);
+        } else {
+          addEvent(`Move played: ${maskMoveText(payload.san)}`);
+        }
       }
       render();
       return;
@@ -1014,6 +1504,12 @@
 
     if (type === WEBSOCKET_TYPES.ERROR) {
       const text = ERROR_TEXT[payload.errorCode] || payload.message || 'Server error.';
+      if (
+        payload.errorCode === 'UNKNOWN_ROOM'
+        || payload.errorCode === 'PLAYER_NOT_FOUND'
+      ) {
+        clearSavedOnlineSession();
+      }
       addEvent(`Server error: ${text}`);
       render();
       return;
@@ -1036,6 +1532,7 @@
 
   async function handleCreateRoom() {
     try {
+      multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
       if (!sendSocketMessage(WEBSOCKET_TYPES.CREATE_ROOM, { nickname: 'Player' })) {
@@ -1059,6 +1556,7 @@
     }
 
     try {
+      multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
       if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, { nickname: 'Player' }, roomCode)) {
@@ -1092,8 +1590,11 @@
   }
 
   function handleLeaveRoom() {
+    multiplayer.intentionalLeave = true;
+    clearSavedOnlineSession();
+    clearReconnectTimer();
     disconnectSocket();
-    clearRoomSession();
+    clearRoomSession({ clearSavedSession: true });
     if (isOnlineMode()) {
       playModeEl.value = 'local';
     }
@@ -1148,6 +1649,13 @@
   });
 
   playModeEl.addEventListener('change', (event) => {
+    if (event.target.value === 'local') {
+      clearSavedOnlineSession();
+      multiplayer.intentionalLeave = true;
+      clearReconnectTimer();
+    } else {
+      multiplayer.intentionalLeave = false;
+    }
     setMode(event.target.value);
   });
 
@@ -1179,8 +1687,12 @@
     handleResign();
   });
 
-  setMode('local');
+  window.addEventListener('pointerdown', unlockAudio, { once: true });
+  window.addEventListener('keydown', unlockAudio, { once: true });
+
+  setMode('local', { preserveSession: true });
   state.hardMode = hardModeEl.checked;
   applyUrlPrefill();
+  tryResumeOnlineSessionOnLoad();
   render();
 })();
