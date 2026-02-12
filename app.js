@@ -52,6 +52,10 @@
   const capturesEl = document.getElementById('captures');
   const eventsEl = document.getElementById('events');
   const moveBody = document.getElementById('moveBody');
+  const replayPrevEl = document.getElementById('replayPrev');
+  const replayNextEl = document.getElementById('replayNext');
+  const replayFinalEl = document.getElementById('replayFinal');
+  const replayBannerEl = document.getElementById('replayBanner');
   const hardModeEl = document.getElementById('hardMode');
   const newGameEl = document.getElementById('newGame');
   const multiplayerStatusEl = document.getElementById('multiplayerStatus');
@@ -134,6 +138,10 @@
 
   let audioContext = null;
   let state = newGameState();
+  let replayHistory = [];
+  let pendingServerAttempt = null;
+  const replay = { active: false, ply: 0 };
+  const illegalAttemptsByPly = {};
 
   function getAudioContext() {
     if (audioContext) {
@@ -275,6 +283,198 @@
     }
 
     playCaptureSound('taker');
+  }
+
+  function getCurrentPly() {
+    let ply = 0;
+    for (const pair of state.movePairs) {
+      if (pair.white) {
+        ply += 1;
+      }
+      if (pair.black) {
+        ply += 1;
+      }
+    }
+    return ply;
+  }
+
+  function normalizeEventColor(color) {
+    return color === 'w' || color === 'b' ? color : null;
+  }
+
+  function inferEventColor(text) {
+    if (/^White\b/i.test(text)) {
+      return 'w';
+    }
+    if (/^Black\b/i.test(text)) {
+      return 'b';
+    }
+    if (/^You\b/i.test(text)) {
+      return normalizeEventColor(multiplayer.color);
+    }
+    if (/^Opponent\b/i.test(text) && multiplayer.color) {
+      return otherColor(multiplayer.color);
+    }
+    return null;
+  }
+
+  function normalizeEventEntry(entry) {
+    if (entry && typeof entry === 'object' && typeof entry.text === 'string') {
+      return {
+        time: typeof entry.time === 'string' && entry.time ? entry.time : '--:--',
+        move: Number.isInteger(entry.move) ? entry.move : getCurrentPly(),
+        text: entry.text,
+        color: normalizeEventColor(entry.color) || inferEventColor(entry.text),
+      };
+    }
+
+    if (typeof entry === 'string') {
+      const match = entry.match(/^\[(\d{1,2}:\d{2})(?:\s*\|\s*M(\d+))?\]\s*(.*)$/);
+      if (match) {
+        const move = Number.isInteger(Number(match[2])) ? Number(match[2]) : getCurrentPly();
+        return {
+          time: match[1],
+          move,
+          text: match[3],
+          color: inferEventColor(match[3]),
+        };
+      }
+      return {
+        time: '--:--',
+        move: getCurrentPly(),
+        text: entry,
+        color: inferEventColor(entry),
+      };
+    }
+
+    return {
+      time: '--:--',
+      move: getCurrentPly(),
+      text: String(entry || ''),
+      color: null,
+    };
+  }
+
+  function clearIllegalAttempts() {
+    Object.keys(illegalAttemptsByPly).forEach((key) => {
+      delete illegalAttemptsByPly[key];
+    });
+  }
+
+  function buildReplaySnapshotFromState(ply) {
+    return {
+      ply,
+      board: cloneBoard(state.board),
+      turn: state.turn,
+    };
+  }
+
+  function getReplaySnapshot(targetPly) {
+    return replayHistory.find((entry) => entry.ply === targetPly) || null;
+  }
+
+  function syncReplayHistoryWithState() {
+    const ply = getCurrentPly();
+    if (ply === 0 && replayHistory.length && replayHistory[replayHistory.length - 1].ply > 0) {
+      clearIllegalAttempts();
+      replayHistory = [];
+      replay.active = false;
+      replay.ply = 0;
+      pendingServerAttempt = null;
+    }
+
+    const snapshot = buildReplaySnapshotFromState(ply);
+    const existing = getReplaySnapshot(ply);
+    if (existing) {
+      existing.board = snapshot.board;
+      existing.turn = snapshot.turn;
+    } else {
+      replayHistory.push(snapshot);
+      replayHistory.sort((a, b) => a.ply - b.ply);
+    }
+
+    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
+    if (!state.gameOver) {
+      replay.active = false;
+      replay.ply = maxPly;
+    } else if (!replay.active) {
+      replay.ply = maxPly;
+    } else if (replay.ply > maxPly) {
+      replay.ply = maxPly;
+    }
+  }
+
+  function describePly(ply) {
+    if (ply <= 0) {
+      return 'initial position';
+    }
+    const side = ply % 2 === 1 ? 'White' : 'Black';
+    const fullMove = Math.ceil(ply / 2);
+    return `${side} move ${fullMove}`;
+  }
+
+  function getIllegalAttemptsForPly(ply) {
+    const key = String(ply);
+    return illegalAttemptsByPly[key] || [];
+  }
+
+  function recordIllegalAttempt(from, to, reason, color, forcedPly = null) {
+    const ply = Number.isInteger(forcedPly) ? forcedPly : (getCurrentPly() + 1);
+    const key = String(ply);
+    if (!illegalAttemptsByPly[key]) {
+      illegalAttemptsByPly[key] = [];
+    }
+    illegalAttemptsByPly[key].push({
+      from: { ...from },
+      to: { ...to },
+      reason: String(reason || '').trim(),
+      color: normalizeEventColor(color),
+    });
+  }
+
+  function updateReplayBannerAndControls() {
+    const hasReplay = state.gameOver && replayHistory.length > 1;
+    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
+    replayPrevEl.disabled = !hasReplay || replay.ply <= 0;
+    replayNextEl.disabled = !hasReplay || replay.ply >= maxPly;
+    replayFinalEl.disabled = !hasReplay || replay.ply === maxPly;
+
+    if (!hasReplay) {
+      replayBannerEl.textContent = state.gameOver
+        ? 'No replay states available for this game.'
+        : 'Replay becomes available when the game ends.';
+      return;
+    }
+
+    const attempts = getIllegalAttemptsForPly(replay.ply);
+    if (!attempts.length) {
+      replayBannerEl.textContent = `Viewing ${describePly(replay.ply)}. No illegal attempts recorded on this turn.`;
+      return;
+    }
+
+    const details = attempts
+      .map((attempt) => `${colorName(attempt.color || 'w')} tried ${squareName(attempt.from)} to ${squareName(attempt.to)} (${attempt.reason || 'illegal'})`)
+      .join('  |  ');
+    replayBannerEl.textContent = `Viewing ${describePly(replay.ply)}. Illegal attempts: ${details}`;
+  }
+
+  function setReplayPly(nextPly) {
+    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
+    const normalized = Math.max(0, Math.min(maxPly, nextPly));
+    replay.active = true;
+    replay.ply = normalized;
+    render();
+  }
+
+  function setReplayFinal() {
+    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
+    replay.active = true;
+    replay.ply = maxPly;
+    render();
+  }
+
+  function stepReplay(delta) {
+    setReplayPly(replay.ply + delta);
   }
 
   function readSavedServerUrl() {
@@ -563,10 +763,7 @@
     if (!shouldMaskOpponentMoves()) {
       return entry;
     }
-
-    const timestampMatch = entry.match(/^(\[[^\]]+\]\s*)(.*)$/);
-    const prefix = timestampMatch ? timestampMatch[1] : '';
-    const body = timestampMatch ? timestampMatch[2] : entry;
+    const body = entry;
 
     if (/^You played\s+/i.test(body) || /^Opponent moved/i.test(body)) {
       return entry;
@@ -578,12 +775,12 @@
       if (multiplayer.color && moverColor === multiplayer.color) {
         return entry;
       }
-      return `${prefix}${playedByColor[1]} played ${maskMoveText(playedByColor[2])}`;
+      return `${playedByColor[1]} played ${maskMoveText(playedByColor[2])}`;
     }
 
     const genericPlayed = body.match(/^Move played:\s+(.+)$/);
     if (genericPlayed) {
-      return `${prefix}Move played: ${maskMoveText(genericPlayed[1])}`;
+      return `Move played: ${maskMoveText(genericPlayed[1])}`;
     }
 
     return entry;
@@ -654,9 +851,15 @@
     }
   }
 
-  function addEvent(text) {
+  function addEvent(text, options = {}) {
     const prefix = new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' });
-    state.events.unshift(`[${prefix}] ${text}`);
+    const event = normalizeEventEntry({
+      time: prefix,
+      move: Number.isInteger(options.move) ? options.move : getCurrentPly(),
+      color: normalizeEventColor(options.color) || inferEventColor(text),
+      text,
+    });
+    state.events.unshift(event);
   }
 
   function setMode(mode, options = {}) {
@@ -666,6 +869,11 @@
       clearRoomSession({ clearSavedSession: !preserveSession });
       state = newGameState();
       state.hardMode = hardModeEl.checked;
+      replayHistory = [];
+      replay.active = false;
+      replay.ply = 0;
+      clearIllegalAttempts();
+      pendingServerAttempt = null;
     }
     syncMultiplayerControlState();
     syncMultiplayerPanel();
@@ -771,6 +979,8 @@
     const revealAll = shouldRevealBoardAndHistory();
     const visibleColor = revealAll ? null : perspectiveColor;
     const flipped = perspectiveColor === 'b';
+    const replaySnapshot = replay.active ? getReplaySnapshot(replay.ply) : null;
+    const boardState = replaySnapshot ? replaySnapshot.board : state.board;
 
     updateBoardFrameLabels(flipped);
     boardEl.classList.toggle('revealed', revealAll);
@@ -787,7 +997,7 @@
         button.dataset.c = String(c);
         button.addEventListener('click', () => handleSquareClick(r, c));
 
-        const piece = state.board[r][c];
+        const piece = boardState[r][c];
         if (piece && (revealAll || piece.color === visibleColor)) {
           button.classList.add('visible', 'piece', piece.color === 'w' ? 'white' : 'black');
           button.textContent = PIECE_SYMBOLS[piece.color][piece.type];
@@ -795,7 +1005,7 @@
           button.classList.add('hidden');
         }
 
-        if (state.selected && state.selected.r === r && state.selected.c === c) {
+        if (!replay.active && state.selected && state.selected.r === r && state.selected.c === c) {
           button.classList.add('selected');
         }
 
@@ -807,19 +1017,25 @@
   function renderEvents() {
     eventsEl.replaceChildren();
     for (const entry of state.events) {
+      const normalized = normalizeEventEntry(entry);
       const item = document.createElement('li');
-      item.textContent = formatEventForViewer(entry);
+      const formattedText = formatEventForViewer(normalized.text);
+      item.textContent = `[${normalized.time} | M${normalized.move}] ${formattedText}`;
+      item.classList.add(`event-${normalized.color || 'neutral'}`);
       eventsEl.appendChild(item);
     }
   }
 
   function renderMoves() {
     moveBody.replaceChildren();
+    const activePly = replay.active ? replay.ply : getCurrentPly();
     for (const move of state.movePairs) {
       const row = document.createElement('tr');
       const num = document.createElement('td');
       const white = document.createElement('td');
       const black = document.createElement('td');
+      const whitePly = ((move.num - 1) * 2) + 1;
+      const blackPly = whitePly + 1;
       num.textContent = String(move.num);
       white.textContent = formatMoveForViewer(move.white || '', 'w');
       black.textContent = formatMoveForViewer(move.black || '', 'b');
@@ -829,11 +1045,30 @@
       if (black.textContent === MASKED_MOVE_TEXT) {
         black.classList.add('masked');
       }
+      if (move.white && state.gameOver) {
+        white.classList.add('move-cell');
+        white.addEventListener('click', () => {
+          setReplayPly(whitePly);
+        });
+        if (activePly === whitePly) {
+          white.classList.add('active');
+        }
+      }
+      if (move.black && state.gameOver) {
+        black.classList.add('move-cell');
+        black.addEventListener('click', () => {
+          setReplayPly(blackPly);
+        });
+        if (activePly === blackPly) {
+          black.classList.add('active');
+        }
+      }
       row.appendChild(num);
       row.appendChild(white);
       row.appendChild(black);
       moveBody.appendChild(row);
     }
+    updateReplayBannerAndControls();
   }
 
   function renderStatus() {
@@ -899,7 +1134,10 @@
     }
 
     if (isInCheck(state.board, opponent)) {
-      addEvent(`${colorName(opponent)} is in check.`);
+      addEvent(`${colorName(opponent)} is in check.`, {
+        color: opponent,
+        move: getCurrentPly(),
+      });
     }
   }
 
@@ -935,7 +1173,9 @@
       movePairs: snapshot.movePairs
         ? snapshot.movePairs.map((item) => ({ ...item }))
         : base.movePairs,
-      events: snapshot.events ? snapshot.events.slice() : base.events,
+      events: snapshot.events
+        ? snapshot.events.map((entry) => normalizeEventEntry(entry))
+        : base.events,
       captured: snapshot.captured ? { ...snapshot.captured } : base.captured,
       winner: snapshot.winner || null,
       result: snapshot.result || null,
@@ -1076,15 +1316,22 @@
 
     if (outcome.captured) {
       state.captured[outcome.captured.color] += 1;
-      addEvent(`${colorName(outcome.captured.color)} piece was taken.`);
+      addEvent(`${colorName(outcome.captured.color)} piece was taken.`, {
+        color: attempted.piece.color,
+        move: getCurrentPly() + 1,
+      });
     }
 
     const san = moveToSAN(beforeBoard, beforeEnPassant, attempted, state.board, state.enPassant);
     addMoveRecord(state.turn, san);
-    addEvent(`${toMoveColorFromState()} played ${san}`);
+    addEvent(`${toMoveColorFromState()} played ${san}`, {
+      color: attempted.piece.color,
+      move: getCurrentPly(),
+    });
 
     state.turn = otherColor(state.turn);
     recordCurrentPosition(state);
+    pendingServerAttempt = null;
     checkAfterLegalMove();
   }
 
@@ -1114,6 +1361,12 @@
       payload.promotion = attempted.promotion;
     }
 
+    pendingServerAttempt = {
+      from: { ...attempted.from },
+      to: { ...attempted.to },
+      color: attempted.piece.color,
+      ply: getCurrentPly() + 1,
+    };
     sendSocketMessage(WEBSOCKET_TYPES.MOVE_INTENT, payload, multiplayer.roomCode);
     addEvent('Move sent.');
     state.selected = null;
@@ -1232,14 +1485,23 @@
     if (!attempted) {
       const message = `${toMoveColorFromState()} attempted an illegal move ${squareName(from)} to ${squareName({ r, c })}`;
       const reason = moveRejectionReason(from, { r, c });
+      const illegalPly = getCurrentPly() + 1;
+      const illegalColor = state.turn;
+      recordIllegalAttempt(from, { r, c }, reason, illegalColor, illegalPly);
       if (state.hardMode) {
-        addEvent(`${message}; ${reason} Turn forfeited.`);
+        addEvent(`${message}; ${reason} Turn forfeited.`, {
+          color: illegalColor,
+          move: illegalPly,
+        });
         state.selected = null;
         state.turn = otherColor(state.turn);
         evaluateAfterTurnChange();
         render();
       } else {
-        addEvent(`${message}. ${reason}`);
+        addEvent(`${message}. ${reason}`, {
+          color: illegalColor,
+          move: illegalPly,
+        });
         state.selected = null;
         render();
       }
@@ -1449,13 +1711,23 @@
         moverColor,
         capturedColor,
       });
+      pendingServerAttempt = null;
       if (payload.san) {
         if (!shouldRevealBoardAndHistory() && moverColor && multiplayer.color && moverColor !== multiplayer.color) {
-          addEvent('Opponent moved ****');
+          addEvent('Opponent moved ****', {
+            color: moverColor,
+            move: getCurrentPly(),
+          });
         } else if (moverColor && multiplayer.color && moverColor === multiplayer.color) {
-          addEvent(`You played ${payload.san}`);
+          addEvent(`You played ${payload.san}`, {
+            color: moverColor,
+            move: getCurrentPly(),
+          });
         } else {
-          addEvent(`Move played: ${maskMoveText(payload.san)}`);
+          addEvent(`Move played: ${maskMoveText(payload.san)}`, {
+            color: moverColor,
+            move: getCurrentPly(),
+          });
         }
       }
       render();
@@ -1496,8 +1768,23 @@
 
     if (type === WEBSOCKET_TYPES.MOVE_REJECTED) {
       const reason = ERROR_TEXT[payload.reasonCode] || payload.reasonCode || 'Move rejected by server.';
+      const pendingColor = pendingServerAttempt?.color || state.turn;
+      const pendingPly = Number.isInteger(pendingServerAttempt?.ply) ? pendingServerAttempt.ply : (getCurrentPly() + 1);
+      if (pendingServerAttempt?.from && pendingServerAttempt?.to) {
+        recordIllegalAttempt(
+          pendingServerAttempt.from,
+          pendingServerAttempt.to,
+          reason,
+          pendingColor,
+          pendingPly,
+        );
+      }
+      pendingServerAttempt = null;
       state.selected = null;
-      addEvent(`Move rejected: ${reason}`);
+      addEvent(`Move rejected: ${reason}`, {
+        color: pendingColor,
+        move: pendingPly,
+      });
       render();
       return;
     }
@@ -1633,6 +1920,7 @@
   }
 
   function render() {
+    syncReplayHistoryWithState();
     renderBoard();
     renderEvents();
     renderMoves();
@@ -1673,6 +1961,18 @@
 
   copyRoomCodeEl.addEventListener('click', () => {
     handleCopyCode();
+  });
+
+  replayPrevEl.addEventListener('click', () => {
+    stepReplay(-1);
+  });
+
+  replayNextEl.addEventListener('click', () => {
+    stepReplay(1);
+  });
+
+  replayFinalEl.addEventListener('click', () => {
+    setReplayFinal();
   });
 
   leaveRoomEl.addEventListener('click', () => {

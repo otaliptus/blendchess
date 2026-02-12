@@ -306,6 +306,24 @@ button {
   font-size: 0.92rem;
 }
 
+.events li.event-white {
+  background: #f8f8f8;
+  color: #1b1b1b;
+  border-left-color: #d9d9d9;
+}
+
+.events li.event-black {
+  background: #151515;
+  color: #f7f7f7;
+  border-left-color: #4d4d4d;
+}
+
+.events li.event-neutral {
+  background: #243b59;
+  color: #f4f7ff;
+  border-left-color: #7fb3e8;
+}
+
 .log-table {
   width: 100%;
   border-collapse: collapse;
@@ -326,6 +344,37 @@ button {
 .log-table td.masked {
   letter-spacing: 0.08em;
   font-weight: 700;
+}
+
+.log-table td.move-cell {
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.log-table td.move-cell:hover {
+  background: rgba(110, 174, 235, 0.18);
+}
+
+.log-table td.move-cell.active {
+  background: rgba(255, 218, 118, 0.28);
+  color: #ffeec1;
+  font-weight: 700;
+}
+
+.replay-controls {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.replay-banner {
+  margin: 8px 0 0;
+  font-size: 0.86rem;
+  color: #d7e5ff;
+  background: rgba(49, 71, 99, 0.6);
+  border: 1px solid #4b6689;
+  padding: 8px 9px;
+  border-radius: 8px;
 }
 
 @media (max-width: 880px) {
