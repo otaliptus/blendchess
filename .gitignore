@@ -1,0 +1,3 @@
+server/node_modules/
+ws-worker/node_modules/
+*.log

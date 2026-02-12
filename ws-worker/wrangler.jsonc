@@ -1,0 +1,19 @@
+{
+  "name": "blendchess-ws",
+  "main": "src/index.js",
+  "compatibility_date": "2026-02-12",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GAME_HUB",
+        "class_name": "GameHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GameHub"]
+    }
+  ]
+}

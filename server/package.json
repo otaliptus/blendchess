@@ -1,0 +1,16 @@
+{
+  "name": "blendchess-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Authoritative multiplayer server for Blendchess",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "nanoid": "^5.0.8",
+    "ws": "^8.18.0"
+  }
+}

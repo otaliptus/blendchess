@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Blind Chess</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <h1>Blind Chess</h1>
+        <p>Local pass-and-play, blind mode by default.</p>
+      </header>
+      <section class="toolbar toolbar-main">
+        <label class="checkbox">
+          <input id="hardMode" type="checkbox" />
+          <span>Hard mode (illegal moves lose turn)</span>
+        </label>
+        <button id="newGame">New game</button>
+      </section>
+      <section class="toolbar toolbar-multiplayer">
+        <label class="labeled-control" for="playMode">Mode</label>
+        <select id="playMode">
+          <option value="local">Local</option>
+          <option value="online">Online Friend</option>
+        </select>
+
+        <label class="labeled-control" for="serverUrl">Server WS URL</label>
+        <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
+        <button id="connectServer">Connect</button>
+        <button id="createRoom">Create room</button>
+
+        <input id="joinRoomCode" placeholder="Room code" />
+        <button id="joinRoom">Join room</button>
+        <button id="copyRoomCode">Copy invite</button>
+        <button id="claimDraw">Claim draw</button>
+        <button id="resign">Resign</button>
+        <button id="leaveRoom">Leave room</button>
+      </section>
+      <div class="status" id="status"></div>
+      <div class="status status-info" id="multiplayerStatus"></div>
+      <div class="layout">
+        <section class="board-shell">
+          <div class="board-wrap">
+            <div class="file-labels file-labels-top" aria-hidden="true">
+              <span></span>
+              <span>a</span>
+              <span>b</span>
+              <span>c</span>
+              <span>d</span>
+              <span>e</span>
+              <span>f</span>
+              <span>g</span>
+              <span>h</span>
+              <span></span>
+            </div>
+            <div class="board-row">
+              <div class="rank-labels rank-labels-left" aria-hidden="true">
+                <span>8</span>
+                <span>7</span>
+                <span>6</span>
+                <span>5</span>
+                <span>4</span>
+                <span>3</span>
+                <span>2</span>
+                <span>1</span>
+              </div>
+              <div id="board" class="board" aria-label="Blind chess board"></div>
+              <div class="rank-labels rank-labels-right" aria-hidden="true">
+                <span>8</span>
+                <span>7</span>
+                <span>6</span>
+                <span>5</span>
+                <span>4</span>
+                <span>3</span>
+                <span>2</span>
+                <span>1</span>
+              </div>
+            </div>
+            <div class="file-labels file-labels-bottom" aria-hidden="true">
+              <span></span>
+              <span>a</span>
+              <span>b</span>
+              <span>c</span>
+              <span>d</span>
+              <span>e</span>
+              <span>f</span>
+              <span>g</span>
+              <span>h</span>
+              <span></span>
+            </div>
+          </div>
+        </section>
+        <aside class="side-panel">
+          <div class="panel-card">
+            <h2>Game info</h2>
+            <p id="modeText">Mode: strict (illegal moves are rejected)</p>
+            <p id="captures">White pieces lost: 0, Black pieces lost: 0</p>
+            <p id="multiplayerInfo">You are playing locally.</p>
+            <p id="roomCodeBadge">Room: not active</p>
+            <p id="playerRoster"></p>
+          </div>
+          <div class="panel-card">
+            <h2>Events</h2>
+            <ul id="events" class="events"></ul>
+          </div>
+          <div class="panel-card">
+            <h2>Move log</h2>
+            <table id="moveLog" class="log-table">
+              <thead>
+                <tr><th>#</th><th>White</th><th>Black</th></tr>
+              </thead>
+              <tbody id="moveBody"></tbody>
+            </table>
+          </div>
+        </aside>
+      </div>
+    </main>
+    <script src="chess-core.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
