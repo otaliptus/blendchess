@@ -93,7 +93,7 @@
     || (
       window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
         ? 'ws://localhost:3000'
-        : 'wss://blendchess-ws.<your-worker-subdomain>.workers.dev'
+        : 'wss://blendchess-ws.omertalib42.workers.dev'
     );
   const SERVER_URL_STORAGE_KEY = 'blendchess.serverUrl';
   const DRAW_CLAIM_REASONS = ['threefold', 'fiftyMove', 'seventyFiveMove', 'fivefold', 'insufficientMaterial'];
