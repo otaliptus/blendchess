@@ -42,6 +42,14 @@
       <div class="status status-info" id="multiplayerStatus"></div>
       <div class="layout">
         <section class="board-shell">
+          <div class="replay-toolbar">
+            <div class="replay-controls">
+              <button id="replayPrev" type="button">Prev</button>
+              <button id="replayNext" type="button">Next</button>
+              <button id="replayFinal" type="button">Final</button>
+            </div>
+            <p id="replayBanner" class="replay-banner">Replay becomes available when the game ends.</p>
+          </div>
           <div class="board-wrap">
             <div class="file-labels file-labels-top" aria-hidden="true">
               <span></span>
@@ -113,12 +121,6 @@
               </thead>
               <tbody id="moveBody"></tbody>
             </table>
-            <div class="replay-controls">
-              <button id="replayPrev" type="button">Prev</button>
-              <button id="replayNext" type="button">Next</button>
-              <button id="replayFinal" type="button">Final</button>
-            </div>
-            <p id="replayBanner" class="replay-banner">Replay becomes available when the game ends.</p>
           </div>
         </aside>
       </div>

@@ -19,6 +19,7 @@
     MOVE_INTENT: 'move_intent',
     MOVE_APPLIED: 'move_applied',
     MOVE_REJECTED: 'move_rejected',
+    SET_HARD_MODE: 'set_hard_mode',
     CLAIM_DRAW: 'claim_draw',
     DRAW_RESULT: 'draw_result',
     RESIGN: 'resign',
@@ -142,6 +143,7 @@
   let pendingServerAttempt = null;
   const replay = { active: false, ply: 0 };
   const illegalAttemptsByPly = {};
+  const captureMarkersByPly = {};
 
   function getAudioContext() {
     if (audioContext) {
@@ -361,6 +363,57 @@
     });
   }
 
+  function clearCaptureMarkers() {
+    Object.keys(captureMarkersByPly).forEach((key) => {
+      delete captureMarkersByPly[key];
+    });
+  }
+
+  function setCaptureMarkerForPly(ply, marker) {
+    if (!Number.isInteger(ply) || ply <= 0 || !marker) {
+      return;
+    }
+
+    captureMarkersByPly[String(ply)] = {
+      square: marker.square ? { ...marker.square } : null,
+      moverColor: normalizeEventColor(marker.moverColor),
+      capturedColor: normalizeEventColor(marker.capturedColor),
+    };
+  }
+
+  function getCaptureMarkerForPly(ply) {
+    if (!Number.isInteger(ply) || ply <= 0) {
+      return null;
+    }
+    return captureMarkersByPly[String(ply)] || null;
+  }
+
+  function resolveCaptureMarkerClass(marker, perspectiveColor) {
+    if (!marker?.square) {
+      return '';
+    }
+
+    if (perspectiveColor && marker.moverColor === perspectiveColor) {
+      return 'capture-win';
+    }
+
+    if (perspectiveColor && marker.capturedColor === perspectiveColor) {
+      return 'capture-loss';
+    }
+
+    return '';
+  }
+
+  function deriveCaptureSquare(from, to, enPassantCapture) {
+    if (!from || !to) {
+      return null;
+    }
+    if (enPassantCapture) {
+      return { r: from.r, c: to.c };
+    }
+    return { ...to };
+  }
+
   function buildReplaySnapshotFromState(ply) {
     return {
       ply,
@@ -377,6 +430,7 @@
     const ply = getCurrentPly();
     if (ply === 0 && replayHistory.length && replayHistory[replayHistory.length - 1].ply > 0) {
       clearIllegalAttempts();
+      clearCaptureMarkers();
       replayHistory = [];
       replay.active = false;
       replay.ply = 0;
@@ -873,6 +927,7 @@
       replay.active = false;
       replay.ply = 0;
       clearIllegalAttempts();
+      clearCaptureMarkers();
       pendingServerAttempt = null;
     }
     syncMultiplayerControlState();
@@ -924,6 +979,10 @@
 
   function syncMultiplayerControlState() {
     const online = isOnlineMode();
+    const canEditHardMode = !online
+      || !multiplayer.connected
+      || !multiplayer.color
+      || multiplayer.color === 'w';
     connectServerEl.disabled = !online || multiplayer.connected || multiplayer.resumeInFlight;
     createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
     joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
@@ -933,14 +992,15 @@
     serverUrlEl.disabled = multiplayer.connected || multiplayer.resumeInFlight;
     claimDrawEl.disabled = online ? !multiplayer.connected : false;
     resignEl.disabled = !online || !multiplayer.connected;
+    hardModeEl.disabled = !canEditHardMode || multiplayer.resumeInFlight;
   }
 
   function updateModeText() {
     if (isOnlineMode()) {
       if (state.hardMode) {
-        modeText.textContent = 'Online friend mode: illegal moves are sent to server.';
+        modeText.textContent = 'Online hard mode: illegal moves forfeit turn (server enforced).';
       } else {
-        modeText.textContent = 'Online friend mode: illegal moves are rejected by server.';
+        modeText.textContent = 'Online strict mode: illegal moves are rejected by server.';
       }
       return;
     }
@@ -981,6 +1041,9 @@
     const flipped = perspectiveColor === 'b';
     const replaySnapshot = replay.active ? getReplaySnapshot(replay.ply) : null;
     const boardState = replaySnapshot ? replaySnapshot.board : state.board;
+    const markerPly = replay.active ? replay.ply : getCurrentPly();
+    const captureMarker = getCaptureMarkerForPly(markerPly);
+    const captureMarkerClass = resolveCaptureMarkerClass(captureMarker, perspectiveColor);
 
     updateBoardFrameLabels(flipped);
     boardEl.classList.toggle('revealed', revealAll);
@@ -1007,6 +1070,14 @@
 
         if (!replay.active && state.selected && state.selected.r === r && state.selected.c === c) {
           button.classList.add('selected');
+        }
+        if (
+          captureMarkerClass
+          && captureMarker?.square
+          && captureMarker.square.r === r
+          && captureMarker.square.c === c
+        ) {
+          button.classList.add(captureMarkerClass);
         }
 
         boardEl.appendChild(button);
@@ -1185,9 +1256,13 @@
       positionCounts: snapshot.positionCounts
         ? { ...snapshot.positionCounts }
         : base.positionCounts,
-      hardMode: hardModeEl.checked,
+      hardMode: typeof snapshot.hardMode === 'boolean'
+        ? snapshot.hardMode
+        : hardModeEl.checked,
       selected: null,
     };
+
+    hardModeEl.checked = state.hardMode;
 
     return true;
   }
@@ -1297,6 +1372,7 @@
   }
 
   function applyLocalMove(attempted) {
+    const movePly = getCurrentPly() + 1;
     const beforeBoard = cloneBoard(state.board);
     const beforeEnPassant = state.enPassant ? { ...state.enPassant } : null;
     const outcome = applyMove(state.board, attempted, state.enPassant);
@@ -1316,9 +1392,14 @@
 
     if (outcome.captured) {
       state.captured[outcome.captured.color] += 1;
+      setCaptureMarkerForPly(movePly, {
+        square: deriveCaptureSquare(attempted.from, attempted.to, Boolean(attempted.enPassant)),
+        moverColor: attempted.piece.color,
+        capturedColor: outcome.captured.color,
+      });
       addEvent(`${colorName(outcome.captured.color)} piece was taken.`, {
         color: attempted.piece.color,
-        move: getCurrentPly() + 1,
+        move: movePly,
       });
     }
 
@@ -1370,6 +1451,42 @@
     sendSocketMessage(WEBSOCKET_TYPES.MOVE_INTENT, payload, multiplayer.roomCode);
     addEvent('Move sent.');
     state.selected = null;
+  }
+
+  function requestRawMoveIntentToServer(from, to, color) {
+    if (!multiplayer.connected || !multiplayer.roomCode || !isMyTurn()) {
+      return false;
+    }
+
+    pendingServerAttempt = {
+      from: { ...from },
+      to: { ...to },
+      color,
+      ply: getCurrentPly() + 1,
+    };
+    return sendSocketMessage(
+      WEBSOCKET_TYPES.MOVE_INTENT,
+      { from: { ...from }, to: { ...to } },
+      multiplayer.roomCode,
+    );
+  }
+
+  function sendHardModeUpdate() {
+    if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
+      return;
+    }
+
+    if (multiplayer.color && multiplayer.color !== 'w') {
+      addEvent('Only White can change hard mode in online rooms.');
+      hardModeEl.checked = state.hardMode;
+      return;
+    }
+
+    sendSocketMessage(
+      WEBSOCKET_TYPES.SET_HARD_MODE,
+      { enabled: Boolean(state.hardMode) },
+      multiplayer.roomCode,
+    );
   }
 
   function handleClaimDraw() {
@@ -1487,6 +1604,24 @@
       const reason = moveRejectionReason(from, { r, c });
       const illegalPly = getCurrentPly() + 1;
       const illegalColor = state.turn;
+      if (isOnlineMode()) {
+        const sent = requestRawMoveIntentToServer(from, { r, c }, illegalColor);
+        if (sent) {
+          addEvent(`${message}. Sent to server for validation.`, {
+            color: illegalColor,
+            move: illegalPly,
+          });
+        } else {
+          addEvent('Could not send move to server.', {
+            color: illegalColor,
+            move: illegalPly,
+          });
+        }
+        state.selected = null;
+        render();
+        return;
+      }
+
       recordIllegalAttempt(from, { r, c }, reason, illegalColor, illegalPly);
       if (state.hardMode) {
         addEvent(`${message}; ${reason} Turn forfeited.`, {
@@ -1706,6 +1841,18 @@
       } else if (state.captured.b > previousCaptured.b) {
         capturedColor = 'b';
       }
+      const appliedPly = getCurrentPly();
+      if (capturedColor && payload.move?.from && payload.move?.to) {
+        setCaptureMarkerForPly(appliedPly, {
+          square: deriveCaptureSquare(
+            payload.move.from,
+            payload.move.to,
+            Boolean(payload.move.enPassant),
+          ),
+          moverColor,
+          capturedColor,
+        });
+      }
       playMoveFeedback({
         capture: Boolean(capturedColor),
         moverColor,
@@ -1781,10 +1928,15 @@
       }
       pendingServerAttempt = null;
       state.selected = null;
-      addEvent(`Move rejected: ${reason}`, {
-        color: pendingColor,
-        move: pendingPly,
-      });
+      if (payload.game) {
+        hydrateGameState(payload.game);
+      }
+      if (!payload.forfeited) {
+        addEvent(`Move rejected: ${reason}`, {
+          color: pendingColor,
+          move: pendingPly,
+        });
+      }
       render();
       return;
     }
@@ -1822,7 +1974,10 @@
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
-      if (!sendSocketMessage(WEBSOCKET_TYPES.CREATE_ROOM, { nickname: 'Player' })) {
+      if (!sendSocketMessage(WEBSOCKET_TYPES.CREATE_ROOM, {
+        nickname: 'Player',
+        hardMode: Boolean(state.hardMode),
+      })) {
         return;
       }
       addEvent('Requesting room...');
@@ -1929,6 +2084,7 @@
 
   hardModeEl.addEventListener('change', () => {
     state.hardMode = hardModeEl.checked;
+    sendHardModeUpdate();
     renderStatus();
   });
 

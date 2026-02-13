@@ -11,6 +11,7 @@ const {
   applyMove,
   isInCheck,
   colorName,
+  squareName,
   otherColor,
   moveToSAN,
   cloneBoard,
@@ -39,6 +40,7 @@ const TYPES = {
   MOVE_INTENT: 'move_intent',
   MOVE_APPLIED: 'move_applied',
   MOVE_REJECTED: 'move_rejected',
+  SET_HARD_MODE: 'set_hard_mode',
   CLAIM_DRAW: 'claim_draw',
   DRAW_RESULT: 'draw_result',
   RESIGN: 'resign',
@@ -131,6 +133,7 @@ function createRoomState(roomCode) {
     gameOver: base.gameOver,
     boardVersion: 0,
     waitingForStart: true,
+    hardMode: false,
     createdAt: Date.now(),
     lastActivity: Date.now(),
   };
@@ -232,6 +235,7 @@ function createGameSnapshot(room) {
     halfMoveClock: room.halfMoveClock,
     positionCounts: { ...room.positionCounts },
     waitingForStart: room.waitingForStart,
+    hardMode: Boolean(room.hardMode),
     players: getSeatAssignments(room),
   };
 }
@@ -301,6 +305,7 @@ function createResetRoom(room) {
   fresh.players = room.players;
   fresh.playerOrder = room.playerOrder;
   fresh.waitingForStart = connectedPlayerCount(fresh) < 2;
+  fresh.hardMode = Boolean(room.hardMode);
   return fresh;
 }
 
@@ -503,6 +508,30 @@ export class GameHub extends DurableObject {
     });
 
     if (!candidate) {
+      if (room.hardMode) {
+        room.turn = otherColor(player.color);
+        room.boardVersion += 1;
+        addEvent(
+          room,
+          `${colorName(player.color)} attempted illegal move ${squareName(normalized.from)} to ${squareName(normalized.to)}. Turn forfeited by hard mode.`,
+        );
+        const terminal = evaluateTerminalState(room);
+        if (terminal.isTerminal) {
+          room.gameOver = true;
+          room.result = terminal.result;
+          room.winner = terminal.winner;
+          if (terminal.eventText) {
+            addEvent(room, terminal.eventText);
+          }
+        }
+        return {
+          ok: false,
+          reason: ERROR_CODES.ILLEGAL_MOVE,
+          forfeited: true,
+          boardVersion: room.boardVersion,
+          nextTurn: room.turn,
+        };
+      }
       return { ok: false, reason: ERROR_CODES.ILLEGAL_MOVE };
     }
 
@@ -634,6 +663,7 @@ export class GameHub extends DurableObject {
     if (type === TYPES.CREATE_ROOM) {
       const roomCode = makeRoomCode(this.rooms);
       const room = createRoomState(roomCode);
+      room.hardMode = Boolean(payload.hardMode);
       this.rooms.set(roomCode, room);
 
       connection.roomCode = roomCode;
@@ -692,6 +722,39 @@ export class GameHub extends DurableObject {
       if (!room) {
         this.sendErrorToConnection(connectionId, envelope.roomCode, connection.playerId || '', ERROR_CODES.UNKNOWN_ROOM, 'Room does not exist.');
         return;
+      }
+
+      const requestedPlayerId = typeof envelope.playerId === 'string'
+        ? envelope.playerId.trim()
+        : '';
+      const wantsResume = Boolean(payload && payload.resume);
+      if (wantsResume && requestedPlayerId) {
+        const existingSeat = room.players[requestedPlayerId];
+        if (!existingSeat) {
+          this.sendErrorToConnection(
+            connectionId,
+            envelope.roomCode,
+            connection.playerId || '',
+            ERROR_CODES.PLAYER_NOT_FOUND,
+            'Saved player seat not found in this room.',
+          );
+          return;
+        }
+
+        const previousConnection = this.findConnectionByPlayerId(requestedPlayerId);
+        if (previousConnection && previousConnection.id !== connectionId) {
+          previousConnection.roomCode = '';
+          previousConnection.playerId = '';
+          previousConnection.color = null;
+          this.connections.delete(previousConnection.id);
+          try {
+            previousConnection.ws.close(1000, 'Session resumed from another connection.');
+          } catch {
+            // no-op
+          }
+        }
+
+        connection.playerId = requestedPlayerId;
       }
 
       connection.roomCode = envelope.roomCode;
@@ -785,6 +848,24 @@ export class GameHub extends DurableObject {
       return;
     }
 
+    if (type === TYPES.SET_HARD_MODE) {
+      if (player.color !== 'w') {
+        this.sendErrorToConnection(connectionId, room.roomCode, connection.playerId, ERROR_CODES.WRONG_COLOR, 'Only White may set hard mode.');
+        return;
+      }
+
+      room.hardMode = Boolean(payload.enabled);
+      addEvent(room, `Hard mode ${room.hardMode ? 'enabled' : 'disabled'} by White.`);
+      this.broadcast(room, (targetId) =>
+        createMessage(TYPES.GAME_STATE, room.roomCode, targetId, {
+          game: createGameSnapshot(room),
+        }),
+      );
+      this.pruneRooms();
+      await this.persist();
+      return;
+    }
+
     if (type === TYPES.CLAIM_DRAW) {
       const result = this.claimDraw(room, player, payload);
       if (!result.ok) {
@@ -852,9 +933,30 @@ export class GameHub extends DurableObject {
           connectionId,
           createMessage(TYPES.MOVE_REJECTED, room.roomCode, connection.playerId, {
             reasonCode: result.reason,
+            forfeited: Boolean(result.forfeited),
+            game: result.forfeited ? createGameSnapshot(room) : undefined,
             moveIntent: payload,
           }),
         );
+        if (result.forfeited) {
+          for (const targetId of room.playerOrder) {
+            if (targetId === connection.playerId) {
+              continue;
+            }
+            const targetPlayer = room.players[targetId];
+            if (!targetPlayer || !targetPlayer.connected) {
+              continue;
+            }
+            this.sendToPlayer(
+              targetId,
+              createMessage(TYPES.GAME_STATE, room.roomCode, targetId, {
+                game: createGameSnapshot(room),
+              }),
+            );
+          }
+          this.pruneRooms();
+          await this.persist();
+        }
         return;
       }
 
