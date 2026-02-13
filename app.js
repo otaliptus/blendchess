@@ -57,6 +57,9 @@
   const replayNextEl = document.getElementById('replayNext');
   const replayFinalEl = document.getElementById('replayFinal');
   const replayBannerEl = document.getElementById('replayBanner');
+  const checkAlertEl = document.getElementById('checkAlert');
+  const flashBannerEl = document.getElementById('flashBanner');
+  const exportPgnEl = document.getElementById('exportPgn');
   const hardModeEl = document.getElementById('hardMode');
   const newGameEl = document.getElementById('newGame');
   const multiplayerStatusEl = document.getElementById('multiplayerStatus');
@@ -144,6 +147,8 @@
   const replay = { active: false, ply: 0 };
   const illegalAttemptsByPly = {};
   const captureMarkersByPly = {};
+  const moveHighlightsByPly = {};
+  let bannerTimer = null;
 
   function getAudioContext() {
     if (audioContext) {
@@ -369,6 +374,126 @@
     });
   }
 
+  function clearMoveHighlights() {
+    Object.keys(moveHighlightsByPly).forEach((key) => {
+      delete moveHighlightsByPly[key];
+    });
+  }
+
+  function setMoveHighlightForPly(ply, highlight) {
+    if (!Number.isInteger(ply) || ply <= 0 || !highlight) {
+      return;
+    }
+
+    moveHighlightsByPly[String(ply)] = {
+      from: highlight.from ? { ...highlight.from } : null,
+      to: highlight.to ? { ...highlight.to } : null,
+      san: typeof highlight.san === 'string' ? highlight.san : '',
+    };
+  }
+
+  function getMoveHighlightForPly(ply) {
+    if (!Number.isInteger(ply) || ply <= 0) {
+      return null;
+    }
+    return moveHighlightsByPly[String(ply)] || null;
+  }
+
+  function findKingSquare(board, color) {
+    for (let r = 0; r < 8; r += 1) {
+      for (let c = 0; c < 8; c += 1) {
+        const piece = board[r][c];
+        if (piece && piece.type === 'K' && piece.color === color) {
+          return { r, c };
+        }
+      }
+    }
+    return null;
+  }
+
+  function showTransientBanner(text) {
+    if (!flashBannerEl) {
+      return;
+    }
+    flashBannerEl.textContent = text;
+    flashBannerEl.classList.add('visible');
+    if (bannerTimer) {
+      window.clearTimeout(bannerTimer);
+    }
+    bannerTimer = window.setTimeout(() => {
+      flashBannerEl.classList.remove('visible');
+    }, 1800);
+  }
+
+  function showIllegalMoveBanner(from, to, reason) {
+    showTransientBanner(`Illegal: ${squareName(from)} → ${squareName(to)} (${reason})`);
+  }
+
+  function getPgnResult() {
+    if (state.winner === 'White') {
+      return '1-0';
+    }
+    if (state.winner === 'Black') {
+      return '0-1';
+    }
+    if (state.gameOver) {
+      return '1/2-1/2';
+    }
+    return '*';
+  }
+
+  function buildPgnText() {
+    const resultTag = getPgnResult();
+    const date = new Date();
+    const dateTag = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+    const headers = [
+      '[Event "BlendChess Game"]',
+      `[Site "${window.location.origin}"]`,
+      `[Date "${dateTag}"]`,
+      '[White "White"]',
+      '[Black "Black"]',
+      `[Result "${resultTag}"]`,
+    ];
+
+    const tokens = [];
+    for (const pair of state.movePairs) {
+      tokens.push(`${pair.num}.`);
+      if (pair.white) {
+        tokens.push(pair.white);
+      }
+      if (pair.black) {
+        tokens.push(pair.black);
+      }
+    }
+    tokens.push(resultTag);
+
+    return `${headers.join('\n')}\n\n${tokens.join(' ').trim()}\n`;
+  }
+
+  async function handleExportPgn() {
+    const pgnText = buildPgnText();
+    const filename = `blendchess-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.pgn`;
+    try {
+      const blob = new Blob([pgnText], { type: 'application/x-chess-pgn;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showTransientBanner(`PGN exported: ${filename}`);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(pgnText);
+        showTransientBanner('PGN copied to clipboard.');
+      } catch {
+        showTransientBanner('Could not export PGN.');
+      }
+    }
+  }
+
   function setCaptureMarkerForPly(ply, marker) {
     if (!Number.isInteger(ply) || ply <= 0 || !marker) {
       return;
@@ -431,6 +556,7 @@
     if (ply === 0 && replayHistory.length && replayHistory[replayHistory.length - 1].ply > 0) {
       clearIllegalAttempts();
       clearCaptureMarkers();
+      clearMoveHighlights();
       replayHistory = [];
       replay.active = false;
       replay.ply = 0;
@@ -500,9 +626,11 @@
       return;
     }
 
+    const highlight = getMoveHighlightForPly(replay.ply);
     const attempts = getIllegalAttemptsForPly(replay.ply);
+    const sanText = highlight?.san ? ` SAN: ${highlight.san}.` : '';
     if (!attempts.length) {
-      replayBannerEl.textContent = `Viewing ${describePly(replay.ply)}. No illegal attempts recorded on this turn.`;
+      replayBannerEl.textContent = `Viewing ${describePly(replay.ply)}.${sanText} No illegal attempts recorded on this turn.`;
       return;
     }
 
@@ -928,6 +1056,7 @@
       replay.ply = 0;
       clearIllegalAttempts();
       clearCaptureMarkers();
+      clearMoveHighlights();
       pendingServerAttempt = null;
     }
     syncMultiplayerControlState();
@@ -1044,6 +1173,11 @@
     const markerPly = replay.active ? replay.ply : getCurrentPly();
     const captureMarker = getCaptureMarkerForPly(markerPly);
     const captureMarkerClass = resolveCaptureMarkerClass(captureMarker, perspectiveColor);
+    const moveHighlight = getMoveHighlightForPly(markerPly);
+    const turnForBoard = replaySnapshot ? replaySnapshot.turn : state.turn;
+    const checkSquare = turnForBoard && isInCheck(boardState, turnForBoard)
+      ? findKingSquare(boardState, turnForBoard)
+      : null;
 
     updateBoardFrameLabels(flipped);
     boardEl.classList.toggle('revealed', revealAll);
@@ -1078,6 +1212,15 @@
           && captureMarker.square.c === c
         ) {
           button.classList.add(captureMarkerClass);
+        }
+        if (moveHighlight?.from && moveHighlight.from.r === r && moveHighlight.from.c === c) {
+          button.classList.add('last-move-from');
+        }
+        if (moveHighlight?.to && moveHighlight.to.r === r && moveHighlight.to.c === c) {
+          button.classList.add('last-move-to');
+        }
+        if (checkSquare && checkSquare.r === r && checkSquare.c === c) {
+          button.classList.add('check-king');
         }
 
         boardEl.appendChild(button);
@@ -1139,12 +1282,19 @@
       row.appendChild(black);
       moveBody.appendChild(row);
     }
+    exportPgnEl.disabled = getCurrentPly() === 0;
     updateReplayBannerAndControls();
   }
 
   function renderStatus() {
     updateModeText();
     let status = '';
+    const replaySnapshot = replay.active ? getReplaySnapshot(replay.ply) : null;
+    const boardState = replaySnapshot ? replaySnapshot.board : state.board;
+    const boardTurn = replaySnapshot ? replaySnapshot.turn : state.turn;
+    const inCheckNow = boardTurn
+      ? isInCheck(boardState, boardTurn) && (!state.gameOver || replay.active)
+      : false;
     if (state.gameOver) {
       if (state.result === 'resign') {
         status = `${state.winner} wins by resignation.`;
@@ -1181,6 +1331,13 @@
       status = `${toMoveColorFromState()} to move.`;
     }
     statusEl.textContent = status;
+    if (inCheckNow) {
+      checkAlertEl.hidden = false;
+      checkAlertEl.textContent = `CHECK: ${colorName(boardTurn)}`;
+    } else {
+      checkAlertEl.hidden = true;
+      checkAlertEl.textContent = 'CHECK';
+    }
     capturesEl.textContent = `White pieces lost: ${state.captured.w}, Black pieces lost: ${state.captured.b}`;
     syncMultiplayerPanel();
   }
@@ -1404,6 +1561,11 @@
     }
 
     const san = moveToSAN(beforeBoard, beforeEnPassant, attempted, state.board, state.enPassant);
+    setMoveHighlightForPly(movePly, {
+      from: attempted.from,
+      to: attempted.to,
+      san,
+    });
     addMoveRecord(state.turn, san);
     addEvent(`${toMoveColorFromState()} played ${san}`, {
       color: attempted.piece.color,
@@ -1471,14 +1633,16 @@
     );
   }
 
-  function sendHardModeUpdate() {
+  function sendHardModeUpdate(previousHardMode = state.hardMode) {
     if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
       return;
     }
 
     if (multiplayer.color && multiplayer.color !== 'w') {
+      state.hardMode = previousHardMode;
+      hardModeEl.checked = previousHardMode;
+      showTransientBanner('Only White can change hard mode.');
       addEvent('Only White can change hard mode in online rooms.');
-      hardModeEl.checked = state.hardMode;
       return;
     }
 
@@ -1607,6 +1771,7 @@
       if (isOnlineMode()) {
         const sent = requestRawMoveIntentToServer(from, { r, c }, illegalColor);
         if (sent) {
+          showTransientBanner(`Checking ${squareName(from)} → ${squareName({ r, c })}...`);
           addEvent(`${message}. Sent to server for validation.`, {
             color: illegalColor,
             move: illegalPly,
@@ -1623,6 +1788,7 @@
       }
 
       recordIllegalAttempt(from, { r, c }, reason, illegalColor, illegalPly);
+      showIllegalMoveBanner(from, { r, c }, reason);
       if (state.hardMode) {
         addEvent(`${message}; ${reason} Turn forfeited.`, {
           color: illegalColor,
@@ -1842,6 +2008,13 @@
         capturedColor = 'b';
       }
       const appliedPly = getCurrentPly();
+      if (payload.move?.from && payload.move?.to) {
+        setMoveHighlightForPly(appliedPly, {
+          from: payload.move.from,
+          to: payload.move.to,
+          san: payload.san || '',
+        });
+      }
       if (capturedColor && payload.move?.from && payload.move?.to) {
         setCaptureMarkerForPly(appliedPly, {
           square: deriveCaptureSquare(
@@ -1917,6 +2090,8 @@
       const reason = ERROR_TEXT[payload.reasonCode] || payload.reasonCode || 'Move rejected by server.';
       const pendingColor = pendingServerAttempt?.color || state.turn;
       const pendingPly = Number.isInteger(pendingServerAttempt?.ply) ? pendingServerAttempt.ply : (getCurrentPly() + 1);
+      const attemptedFrom = pendingServerAttempt?.from || payload?.moveIntent?.from || null;
+      const attemptedTo = pendingServerAttempt?.to || payload?.moveIntent?.to || null;
       if (pendingServerAttempt?.from && pendingServerAttempt?.to) {
         recordIllegalAttempt(
           pendingServerAttempt.from,
@@ -1925,6 +2100,11 @@
           pendingColor,
           pendingPly,
         );
+      }
+      if (attemptedFrom && attemptedTo) {
+        showIllegalMoveBanner(attemptedFrom, attemptedTo, reason);
+      } else {
+        showTransientBanner(`Illegal move (${reason})`);
       }
       pendingServerAttempt = null;
       state.selected = null;
@@ -2083,8 +2263,9 @@
   }
 
   hardModeEl.addEventListener('change', () => {
+    const previousHardMode = state.hardMode;
     state.hardMode = hardModeEl.checked;
-    sendHardModeUpdate();
+    sendHardModeUpdate(previousHardMode);
     renderStatus();
   });
 
@@ -2117,6 +2298,10 @@
 
   copyRoomCodeEl.addEventListener('click', () => {
     handleCopyCode();
+  });
+
+  exportPgnEl.addEventListener('click', () => {
+    handleExportPgn();
   });
 
   replayPrevEl.addEventListener('click', () => {

@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Blind Chess</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Space+Grotesk:wght@400;500;600&display=swap"
+    />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
@@ -40,6 +46,7 @@
       </section>
       <div class="status" id="status"></div>
       <div class="status status-info" id="multiplayerStatus"></div>
+      <div id="flashBanner" class="flash-banner" aria-live="polite"></div>
       <div class="layout">
         <section class="board-shell">
           <div class="replay-toolbar">
@@ -48,6 +55,7 @@
               <button id="replayNext" type="button">Next</button>
               <button id="replayFinal" type="button">Final</button>
             </div>
+            <div id="checkAlert" class="check-alert" aria-live="polite" hidden>CHECK</div>
             <p id="replayBanner" class="replay-banner">Replay becomes available when the game ends.</p>
           </div>
           <div class="board-wrap">
@@ -115,6 +123,7 @@
           </div>
           <div class="panel-card">
             <h2>Move log</h2>
+            <button id="exportPgn" type="button">Export PGN</button>
             <table id="moveLog" class="log-table">
               <thead>
                 <tr><th>#</th><th>White</th><th>Black</th></tr>
