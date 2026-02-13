@@ -1571,9 +1571,6 @@
     const captureMarkerClass = resolveCaptureMarkerClass(captureMarker, perspectiveColor);
     const moveHighlight = getMoveHighlightForPly(markerPly);
     const turnForBoard = replaySnapshot ? replaySnapshot.turn : state.turn;
-    const checkSquare = turnForBoard && isInCheck(boardState, turnForBoard)
-      ? findKingSquare(boardState, turnForBoard)
-      : null;
 
     updateBoardFrameLabels(flipped);
     boardEl.classList.toggle('revealed', revealAll);
@@ -1624,9 +1621,6 @@
           && moveHighlight.to.c === c
         ) {
           button.classList.add('last-move-to');
-        }
-        if (checkSquare && checkSquare.r === r && checkSquare.c === c) {
-          button.classList.add('check-king');
         }
 
         boardEl.appendChild(button);
