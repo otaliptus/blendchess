@@ -1232,6 +1232,9 @@
     if (!isOnlineMode()) {
       return state.turn;
     }
+    if (!multiplayer.connected || !multiplayer.roomCode) {
+      return state.turn;
+    }
     if (isSpectatorMode()) {
       return null;
     }
@@ -1385,6 +1388,16 @@
     multiplayer.mode = mode;
     if (mode === 'local') {
       clearRoomSession({ clearSavedSession: !preserveSession });
+      state = newGameState();
+      state.hardMode = hardModeEl.checked;
+      replayHistory = [];
+      replay.active = false;
+      replay.ply = 0;
+      clearIllegalAttempts();
+      clearCaptureMarkers();
+      clearMoveHighlights();
+      pendingServerAttempt = null;
+    } else if (mode === 'online') {
       state = newGameState();
       state.hardMode = hardModeEl.checked;
       replayHistory = [];
@@ -1760,7 +1773,7 @@
     const currentVersion = Number.isInteger(state.boardVersion) ? state.boardVersion : null;
 
     if (Number.isInteger(incomingVersion) && Number.isInteger(currentVersion)) {
-      if (incomingVersion < currentVersion) {
+      if (!isOnlineMode() && incomingVersion < currentVersion) {
         return false;
       }
 
@@ -2134,6 +2147,7 @@
     unlockAudio();
 
     if (state.gameOver) {
+      showTransientBanner('Game over. Start a new game to continue.');
       return;
     }
 
