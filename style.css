@@ -814,7 +814,7 @@ input::placeholder {
   font-size: clamp(1.6rem, 3.8vw, 2.5rem);
   line-height: 1;
   font-weight: 600;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .piece.white {
