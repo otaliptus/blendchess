@@ -1000,6 +1000,10 @@ input::placeholder {
   text-transform: uppercase;
 }
 
+.check-alert[hidden] {
+  display: none !important;
+}
+
 .check-alert::before {
   content: "!";
   width: 16px;

@@ -1259,6 +1259,24 @@
     return isOnlineMode() && !isSpectatorMode() && !shouldRevealBoardAndHistory();
   }
 
+  function moveColorFromPly(ply) {
+    if (!Number.isInteger(ply) || ply <= 0) {
+      return null;
+    }
+    return ply % 2 === 1 ? 'w' : 'b';
+  }
+
+  function shouldShowMoveHighlightForPly(ply) {
+    if (!shouldMaskOpponentMoves()) {
+      return true;
+    }
+    const moverColor = moveColorFromPly(ply);
+    if (!moverColor || !multiplayer.color) {
+      return false;
+    }
+    return moverColor === multiplayer.color;
+  }
+
   function maskMoveText(text) {
     if (!text) {
       return '';
@@ -1601,10 +1619,20 @@
         ) {
           button.classList.add(captureMarkerClass);
         }
-        if (moveHighlight?.from && moveHighlight.from.r === r && moveHighlight.from.c === c) {
+        if (
+          shouldShowMoveHighlightForPly(markerPly)
+          && moveHighlight?.from
+          && moveHighlight.from.r === r
+          && moveHighlight.from.c === c
+        ) {
           button.classList.add('last-move-from');
         }
-        if (moveHighlight?.to && moveHighlight.to.r === r && moveHighlight.to.c === c) {
+        if (
+          shouldShowMoveHighlightForPly(markerPly)
+          && moveHighlight?.to
+          && moveHighlight.to.r === r
+          && moveHighlight.to.c === c
+        ) {
           button.classList.add('last-move-to');
         }
         if (checkSquare && checkSquare.r === r && checkSquare.c === c) {
