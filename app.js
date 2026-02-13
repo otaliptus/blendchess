@@ -1601,16 +1601,6 @@
         if (!replay.active && state.selected && state.selected.r === r && state.selected.c === c) {
           button.classList.add('selected');
         }
-        if (!replay.active && state.selected && !state.gameOver && isMyTurn()) {
-          const legalMoves = generateLegalMoves(boardState, turnForBoard, state.enPassant);
-          const legalFromSelected = legalMoves.filter(
-            (m) => m.from.r === state.selected.r && m.from.c === state.selected.c,
-          );
-          const moveToThis = legalFromSelected.find((m) => m.to.r === r && m.to.c === c);
-          if (moveToThis) {
-            button.classList.add(moveToThis.capture ? 'legal-capture-target' : 'legal-target');
-          }
-        }
         if (
           captureMarkerClass
           && captureMarker?.square
