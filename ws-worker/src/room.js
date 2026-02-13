@@ -119,6 +119,8 @@ function createRoomState(roomCode) {
     roomCode,
     players: {},
     playerOrder: [],
+    spectators: {},
+    spectatorOrder: [],
     board: base.board,
     turn: base.turn,
     enPassant: base.enPassant,
@@ -179,6 +181,13 @@ function connectedPlayerCount(room) {
   }, 0);
 }
 
+function connectedSpectatorCount(room) {
+  return (room.spectatorOrder || []).reduce((count, spectatorId) => {
+    const spectator = room.spectators?.[spectatorId];
+    return spectator && spectator.connected ? count + 1 : count;
+  }, 0);
+}
+
 function isRoomReady(room) {
   return connectedPlayerCount(room) === 2;
 }
@@ -218,6 +227,17 @@ function getSeatAssignments(room) {
   });
 }
 
+function getSpectatorAssignments(room) {
+  return (room.spectatorOrder || []).map((spectatorId) => {
+    const spectator = room.spectators[spectatorId];
+    return {
+      spectatorId: spectator.id,
+      nickname: spectator.nickname,
+      connected: spectator.connected,
+    };
+  });
+}
+
 function createGameSnapshot(room) {
   return {
     roomCode: room.roomCode,
@@ -237,6 +257,8 @@ function createGameSnapshot(room) {
     waitingForStart: room.waitingForStart,
     hardMode: Boolean(room.hardMode),
     players: getSeatAssignments(room),
+    spectators: getSpectatorAssignments(room),
+    spectatorCount: connectedSpectatorCount(room),
   };
 }
 
@@ -304,9 +326,24 @@ function createResetRoom(room) {
   const fresh = createRoomState(room.roomCode);
   fresh.players = room.players;
   fresh.playerOrder = room.playerOrder;
+  fresh.spectators = room.spectators || {};
+  fresh.spectatorOrder = room.spectatorOrder || [];
   fresh.waitingForStart = connectedPlayerCount(fresh) < 2;
   fresh.hardMode = Boolean(room.hardMode);
   return fresh;
+}
+
+function normalizeRoomState(room) {
+  if (!room || typeof room !== 'object') {
+    return room;
+  }
+
+  room.players = room.players || {};
+  room.playerOrder = Array.isArray(room.playerOrder) ? room.playerOrder : [];
+  room.spectators = room.spectators || {};
+  room.spectatorOrder = Array.isArray(room.spectatorOrder) ? room.spectatorOrder : [];
+  room.hardMode = Boolean(room.hardMode);
+  return room;
 }
 
 export class GameHub extends DurableObject {
@@ -323,7 +360,7 @@ export class GameHub extends DurableObject {
     const persisted = await this.ctx.storage.get('rooms');
     if (persisted && typeof persisted === 'object') {
       for (const [roomCode, room] of Object.entries(persisted)) {
-        this.rooms.set(roomCode, room);
+        this.rooms.set(roomCode, normalizeRoomState(room));
       }
     }
   }
@@ -339,6 +376,9 @@ export class GameHub extends DurableObject {
       const hasConnected = room.playerOrder.some((playerId) => {
         const player = room.players[playerId];
         return player && player.connected;
+      }) || (room.spectatorOrder || []).some((spectatorId) => {
+        const spectator = room.spectators?.[spectatorId];
+        return spectator && spectator.connected;
       });
       if (!hasConnected && now - room.lastActivity > ROOM_TTL_MS) {
         this.rooms.delete(roomCode);
@@ -388,7 +428,22 @@ export class GameHub extends DurableObject {
       if (!player || !player.connected) {
         continue;
       }
-      this.sendToPlayer(playerId, makeMessage(playerId));
+      const message = makeMessage(playerId, 'player');
+      if (message) {
+        this.sendToPlayer(playerId, message);
+      }
+    }
+
+    for (const spectatorId of room.spectatorOrder || []) {
+      const spectator = room.spectators[spectatorId];
+      if (!spectator || !spectator.connected) {
+        continue;
+      }
+      const message = makeMessage(spectatorId, 'spectator');
+      if (!message) {
+        continue;
+      }
+      this.sendToConnection(spectator.connectionId, message);
     }
   }
 
@@ -399,6 +454,7 @@ export class GameHub extends DurableObject {
       currentPlayer.nickname = nickname || currentPlayer.nickname;
       currentPlayer.connectionId = connection.id;
       connection.color = currentPlayer.color;
+      connection.role = 'player';
       return { ok: true, player: currentPlayer };
     }
 
@@ -424,14 +480,38 @@ export class GameHub extends DurableObject {
 
     connection.playerId = playerId;
     connection.color = color;
+    connection.role = 'player';
 
     return { ok: true, player };
+  }
+
+  assignSpectator(room, connection, nickname = 'Spectator') {
+    const spectatorId = connection.id;
+    const existing = room.spectators[spectatorId];
+    if (existing) {
+      existing.connected = true;
+      existing.nickname = nickname || existing.nickname;
+      existing.connectionId = connection.id;
+    } else {
+      room.spectators[spectatorId] = {
+        id: spectatorId,
+        nickname: nickname || 'Spectator',
+        connected: true,
+        connectionId: connection.id,
+      };
+      room.spectatorOrder.push(spectatorId);
+    }
+
+    connection.role = 'spectator';
+    connection.playerId = '';
+    connection.color = null;
+    return room.spectators[spectatorId];
   }
 
   ensureRoom(roomCode) {
     const existing = this.rooms.get(roomCode);
     if (existing) {
-      return existing;
+      return normalizeRoomState(existing);
     }
     return null;
   }
@@ -680,9 +760,11 @@ export class GameHub extends DurableObject {
         connectionId,
         createMessage(TYPES.ROOM_CREATED, roomCode, connection.playerId, {
           roomCode,
+          role: 'player',
           playerColor: assigned.player.color,
           playerId: connection.playerId,
           players: getSeatAssignments(room),
+          spectators: getSpectatorAssignments(room),
           gameStarted: !room.waitingForStart,
           game: createGameSnapshot(room),
         }),
@@ -704,10 +786,12 @@ export class GameHub extends DurableObject {
         }),
       );
 
-      this.broadcast(room, (targetId) =>
-        createMessage(TYPES.ROOM_JOINED, roomCode, targetId, {
+      this.broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.ROOM_JOINED, roomCode, targetRole === 'player' ? targetId : '', {
           roomCode,
+          role: targetRole === 'spectator' ? 'spectator' : 'player',
           players: getSeatAssignments(room),
+          spectators: getSpectatorAssignments(room),
           gameStarted: !room.waitingForStart,
         }),
       );
@@ -721,6 +805,56 @@ export class GameHub extends DurableObject {
       const room = this.ensureRoom(envelope.roomCode);
       if (!room) {
         this.sendErrorToConnection(connectionId, envelope.roomCode, connection.playerId || '', ERROR_CODES.UNKNOWN_ROOM, 'Room does not exist.');
+        return;
+      }
+
+      if (payload.spectator) {
+        if (connection.playerId && room.players[connection.playerId]) {
+          this.sendErrorToConnection(
+            connectionId,
+            envelope.roomCode,
+            connection.playerId || '',
+            ERROR_CODES.WRONG_COLOR,
+            'Already joined as player in this room. Leave first to spectate.',
+          );
+          return;
+        }
+
+        connection.roomCode = envelope.roomCode;
+        const spectator = this.assignSpectator(room, connection, payload.nickname || 'Spectator');
+        touchRoom(room);
+
+        this.sendToConnection(
+          connectionId,
+          createMessage(TYPES.ROOM_JOINED, room.roomCode, '', {
+            roomCode: room.roomCode,
+            role: 'spectator',
+            spectatorId: spectator.id,
+            players: getSeatAssignments(room),
+            spectators: getSpectatorAssignments(room),
+            gameStarted: !room.waitingForStart,
+          }),
+        );
+
+        this.sendToConnection(
+          connectionId,
+          createMessage(TYPES.GAME_STATE, room.roomCode, '', {
+            game: createGameSnapshot(room),
+          }),
+        );
+
+        this.broadcast(room, (targetId, targetRole) =>
+          createMessage(TYPES.ROOM_JOINED, room.roomCode, targetRole === 'player' ? targetId : '', {
+            roomCode: room.roomCode,
+            role: targetRole === 'spectator' ? 'spectator' : 'player',
+            players: getSeatAssignments(room),
+            spectators: getSpectatorAssignments(room),
+            gameStarted: !room.waitingForStart,
+          }),
+        );
+
+        this.pruneRooms();
+        await this.persist();
         return;
       }
 
@@ -771,7 +905,9 @@ export class GameHub extends DurableObject {
         connectionId,
         createMessage(TYPES.ROOM_JOINED, room.roomCode, connection.playerId, {
           roomCode: room.roomCode,
+          role: 'player',
           players: getSeatAssignments(room),
+          spectators: getSpectatorAssignments(room),
           gameStarted: !room.waitingForStart,
         }),
       );
@@ -792,10 +928,12 @@ export class GameHub extends DurableObject {
         }),
       );
 
-      this.broadcast(room, (targetId) =>
-        createMessage(TYPES.ROOM_JOINED, room.roomCode, targetId, {
+      this.broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.ROOM_JOINED, room.roomCode, targetRole === 'player' ? targetId : '', {
           roomCode: room.roomCode,
+          role: targetRole === 'spectator' ? 'spectator' : 'player',
           players: getSeatAssignments(room),
+          spectators: getSpectatorAssignments(room),
           gameStarted: !room.waitingForStart,
         }),
       );
@@ -808,6 +946,23 @@ export class GameHub extends DurableObject {
     const room = connection.roomCode ? this.ensureRoom(connection.roomCode) : null;
     if (!room) {
       this.sendErrorToConnection(connectionId, envelope.roomCode || '', connection.playerId || '', ERROR_CODES.UNKNOWN_ROOM, 'Room does not exist.');
+      return;
+    }
+
+    if (connection.role === 'spectator') {
+      touchRoom(room);
+      if (type === TYPES.GAME_STATE) {
+        this.sendToConnection(
+          connectionId,
+          createMessage(TYPES.GAME_STATE, room.roomCode, '', {
+            game: createGameSnapshot(room),
+          }),
+        );
+        await this.persist();
+        return;
+      }
+
+      this.sendErrorToConnection(connectionId, room.roomCode, '', ERROR_CODES.WRONG_COLOR, 'Spectators cannot perform that action.');
       return;
     }
 
@@ -838,8 +993,8 @@ export class GameHub extends DurableObject {
 
       const reset = createResetRoom(room);
       this.rooms.set(room.roomCode, reset);
-      this.broadcast(reset, (targetId) =>
-        createMessage(TYPES.GAME_STATE, reset.roomCode, targetId, {
+      this.broadcast(reset, (targetId, targetRole) =>
+        createMessage(TYPES.GAME_STATE, reset.roomCode, targetRole === 'player' ? targetId : '', {
           game: createGameSnapshot(reset),
         }),
       );
@@ -856,8 +1011,8 @@ export class GameHub extends DurableObject {
 
       room.hardMode = Boolean(payload.enabled);
       addEvent(room, `Hard mode ${room.hardMode ? 'enabled' : 'disabled'} by White.`);
-      this.broadcast(room, (targetId) =>
-        createMessage(TYPES.GAME_STATE, room.roomCode, targetId, {
+      this.broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.GAME_STATE, room.roomCode, targetRole === 'player' ? targetId : '', {
           game: createGameSnapshot(room),
         }),
       );
@@ -879,8 +1034,8 @@ export class GameHub extends DurableObject {
         return;
       }
 
-      this.broadcast(room, (targetId) =>
-        createMessage(TYPES.DRAW_RESULT, room.roomCode, targetId, {
+      this.broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.DRAW_RESULT, room.roomCode, targetRole === 'player' ? targetId : '', {
           reason: result.reason,
           winner: null,
           game: createGameSnapshot(room),
@@ -904,8 +1059,8 @@ export class GameHub extends DurableObject {
         return;
       }
 
-      this.broadcast(room, (targetId) =>
-        createMessage(TYPES.RESIGN_RESULT, room.roomCode, targetId, {
+      this.broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.RESIGN_RESULT, room.roomCode, targetRole === 'player' ? targetId : '', {
           winner: result.winner,
           game: createGameSnapshot(room),
         }),
@@ -939,29 +1094,22 @@ export class GameHub extends DurableObject {
           }),
         );
         if (result.forfeited) {
-          for (const targetId of room.playerOrder) {
-            if (targetId === connection.playerId) {
-              continue;
+          this.broadcast(room, (targetId, targetRole) => {
+            if (targetRole === 'player' && targetId === connection.playerId) {
+              return null;
             }
-            const targetPlayer = room.players[targetId];
-            if (!targetPlayer || !targetPlayer.connected) {
-              continue;
-            }
-            this.sendToPlayer(
-              targetId,
-              createMessage(TYPES.GAME_STATE, room.roomCode, targetId, {
-                game: createGameSnapshot(room),
-              }),
-            );
-          }
+            return createMessage(TYPES.GAME_STATE, room.roomCode, targetRole === 'player' ? targetId : '', {
+              game: createGameSnapshot(room),
+            });
+          });
           this.pruneRooms();
           await this.persist();
         }
         return;
       }
 
-      this.broadcast(room, (targetId) =>
-        createMessage(TYPES.MOVE_APPLIED, room.roomCode, targetId, {
+      this.broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.MOVE_APPLIED, room.roomCode, targetRole === 'player' ? targetId : '', {
           move: result.move,
           san: result.san,
           nextTurn: result.nextTurn,
@@ -988,14 +1136,25 @@ export class GameHub extends DurableObject {
 
     if (connection.roomCode) {
       const room = this.ensureRoom(connection.roomCode);
-      if (room && connection.playerId && room.players[connection.playerId]) {
-        room.players[connection.playerId].connected = false;
-        room.waitingForStart = !isRoomReady(room);
+      if (room) {
+        if (connection.role === 'spectator') {
+          const spectator = room.spectators?.[connection.id];
+          if (spectator) {
+            spectator.connected = false;
+          }
+          room.spectatorOrder = (room.spectatorOrder || []).filter((id) => id !== connection.id);
+          delete room.spectators?.[connection.id];
+        } else if (connection.playerId && room.players[connection.playerId]) {
+          room.players[connection.playerId].connected = false;
+          room.waitingForStart = !isRoomReady(room);
+        }
         touchRoom(room);
-        this.broadcast(room, (targetId) =>
-          createMessage(TYPES.ROOM_JOINED, room.roomCode, targetId, {
+        this.broadcast(room, (targetId, targetRole) =>
+          createMessage(TYPES.ROOM_JOINED, room.roomCode, targetRole === 'player' ? targetId : '', {
             roomCode: room.roomCode,
+            role: targetRole === 'spectator' ? 'spectator' : 'player',
             players: getSeatAssignments(room),
+            spectators: getSpectatorAssignments(room),
             gameStarted: !room.waitingForStart,
           }),
         );
@@ -1027,6 +1186,7 @@ export class GameHub extends DurableObject {
       ws: server,
       roomCode: '',
       playerId: '',
+      role: 'player',
       color: null,
     });
 

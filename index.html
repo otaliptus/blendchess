@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-ui-theme="classic" data-board-theme="wood">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -15,16 +15,46 @@
   <body>
     <main class="page">
       <header class="header">
-        <h1>Blind Chess</h1>
-        <p>Local pass-and-play, blind mode by default.</p>
+        <div class="header-left">
+          <h1><span class="logo-icon">&#9822;</span> Blind Chess</h1>
+          <p class="subtitle">Local pass-and-play, blind mode by default.</p>
+        </div>
+        <div class="header-right">
+          <div class="theme-group">
+            <label class="theme-label" for="uiTheme">UI Theme</label>
+            <select id="uiTheme" class="theme-select">
+              <option value="classic">Classic</option>
+              <option value="modern">Modern</option>
+              <option value="dark">Dark</option>
+              <option value="midnight">Midnight</option>
+            </select>
+          </div>
+          <div class="theme-group">
+            <label class="theme-label" for="boardTheme">Board</label>
+            <select id="boardTheme" class="theme-select">
+              <option value="wood">Wood</option>
+              <option value="green">Tournament Green</option>
+              <option value="blue">Ice Blue</option>
+              <option value="brown">Classic Brown</option>
+              <option value="purple">Royal Purple</option>
+            </select>
+          </div>
+        </div>
       </header>
+
       <section class="toolbar toolbar-main">
-        <label class="checkbox">
-          <input id="hardMode" type="checkbox" />
-          <span>Hard mode (illegal moves lose turn)</span>
-        </label>
-        <button id="newGame">New game</button>
+        <div class="toolbar-left">
+          <label class="toggle-label">
+            <input id="hardMode" type="checkbox" class="toggle-input" />
+            <span class="toggle-switch"></span>
+            <span class="toggle-text">Hard mode (illegal moves lose turn)</span>
+          </label>
+        </div>
+        <div class="toolbar-right">
+          <button id="newGame" class="btn btn-primary"><span class="btn-icon">+</span> New game</button>
+        </div>
       </section>
+
       <section class="toolbar toolbar-multiplayer">
         <label class="labeled-control" for="playMode">Mode</label>
         <select id="playMode">
@@ -34,26 +64,33 @@
 
         <label class="labeled-control" for="serverUrl">Server WS URL</label>
         <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
-        <button id="connectServer">Connect</button>
-        <button id="createRoom">Create room</button>
+        <button id="connectServer" class="btn btn-secondary">Connect</button>
+        <button id="createRoom" class="btn btn-secondary">Create room</button>
 
         <input id="joinRoomCode" placeholder="Room code" />
-        <button id="joinRoom">Join room</button>
-        <button id="copyRoomCode">Copy invite</button>
-        <button id="claimDraw">Claim draw</button>
-        <button id="resign">Resign</button>
-        <button id="leaveRoom">Leave room</button>
+        <button id="joinRoom" class="btn btn-secondary">Join room</button>
+        <button id="spectateRoom" class="btn btn-secondary">Spectate</button>
+        <button id="copyRoomCode" class="btn btn-secondary">Copy invite</button>
+        <button id="claimDraw" class="btn btn-secondary">Claim draw</button>
+        <button id="resign" class="btn btn-danger">Resign</button>
+        <button id="leaveRoom" class="btn btn-danger">Leave room</button>
       </section>
+
       <div class="status" id="status"></div>
       <div class="status status-info" id="multiplayerStatus"></div>
       <div id="flashBanner" class="flash-banner" aria-live="polite"></div>
+      <div id="illegalOverlay" class="illegal-overlay" aria-live="assertive" hidden>
+        <span class="illegal-icon">&#10007;</span>
+        <span class="illegal-text"></span>
+      </div>
+
       <div class="layout">
         <section class="board-shell">
           <div class="replay-toolbar">
             <div class="replay-controls">
-              <button id="replayPrev" type="button">Prev</button>
-              <button id="replayNext" type="button">Next</button>
-              <button id="replayFinal" type="button">Final</button>
+              <button id="replayPrev" type="button" class="btn btn-sm">&#9664; Prev</button>
+              <button id="replayNext" type="button" class="btn btn-sm">Next &#9654;</button>
+              <button id="replayFinal" type="button" class="btn btn-sm">Final &#9654;&#9654;</button>
             </div>
             <div id="checkAlert" class="check-alert" aria-live="polite" hidden>CHECK</div>
             <p id="replayBanner" class="replay-banner">Replay becomes available when the game ends.</p>
@@ -110,7 +147,7 @@
         </section>
         <aside class="side-panel">
           <div class="panel-card">
-            <h2>Game info</h2>
+            <h2><span class="card-icon">&#9881;</span> Game info</h2>
             <p id="modeText">Mode: strict (illegal moves are rejected)</p>
             <p id="captures">White pieces lost: 0, Black pieces lost: 0</p>
             <p id="multiplayerInfo">You are playing locally.</p>
@@ -118,12 +155,17 @@
             <p id="playerRoster"></p>
           </div>
           <div class="panel-card">
-            <h2>Events</h2>
+            <h2><span class="card-icon">&#9889;</span> Events</h2>
             <ul id="events" class="events"></ul>
           </div>
           <div class="panel-card">
-            <h2>Move log</h2>
-            <button id="exportPgn" type="button">Export PGN</button>
+            <h2><span class="card-icon">&#9776;</span> Move log</h2>
+            <button id="exportPgn" type="button" class="btn btn-sm">Export PGN</button>
+            <div class="history-controls">
+              <select id="historyGames"></select>
+              <button id="loadHistoryGame" type="button" class="btn btn-sm">Load game</button>
+              <button id="clearHistoryGames" type="button" class="btn btn-sm">Clear</button>
+            </div>
             <table id="moveLog" class="log-table">
               <thead>
                 <tr><th>#</th><th>White</th><th>Black</th></tr>
