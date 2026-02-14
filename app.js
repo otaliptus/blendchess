@@ -762,11 +762,49 @@
     return JSON.parse(JSON.stringify(source || {}));
   }
 
+  function isValidHistoryPiece(piece) {
+    if (!piece || typeof piece !== 'object') {
+      return false;
+    }
+    if ((piece.color !== 'w' && piece.color !== 'b') || typeof piece.type !== 'string') {
+      return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(PIECE_SYMBOLS[piece.color], piece.type)) {
+      return false;
+    }
+    return typeof piece.hasMoved === 'boolean';
+  }
+
+  function isValidHistoryBoard(board) {
+    if (!Array.isArray(board) || board.length !== 8) {
+      return false;
+    }
+    return board.every((row) => (
+      Array.isArray(row)
+      && row.length === 8
+      && row.every((piece) => piece === null || isValidHistoryPiece(piece))
+    ));
+  }
+
+  function normalizeHistorySnapshot(rawSnapshot) {
+    if (!rawSnapshot || typeof rawSnapshot !== 'object') {
+      return null;
+    }
+    if (!isValidHistoryBoard(rawSnapshot.board)) {
+      return null;
+    }
+    return {
+      ...rawSnapshot,
+      board: cloneBoard(rawSnapshot.board),
+    };
+  }
+
   function normalizeHistoryEntry(raw) {
     if (!raw || typeof raw !== 'object') {
       return null;
     }
-    if (!raw.snapshot || typeof raw.snapshot !== 'object') {
+    const snapshot = normalizeHistorySnapshot(raw.snapshot);
+    if (!snapshot) {
       return null;
     }
     const finishedAt = Number.isFinite(raw.finishedAt) ? Number(raw.finishedAt) : Date.now();
@@ -784,7 +822,7 @@
       mode: raw.mode === 'online' ? 'online' : 'local',
       winner: raw.winner || null,
       result: raw.result || null,
-      snapshot: raw.snapshot,
+      snapshot,
       replayHistory: Array.isArray(raw.replayHistory) ? raw.replayHistory : [],
       illegalAttemptsByPly: raw.illegalAttemptsByPly || {},
       captureMarkersByPly: raw.captureMarkersByPly || {},
@@ -941,7 +979,10 @@
     savePlayMode('local');
     setMode('local');
 
-    const snapshot = entry.snapshot || {};
+    const snapshot = normalizeHistorySnapshot(entry.snapshot);
+    if (!snapshot) {
+      return false;
+    }
     const base = newGameState();
     state = {
       ...base,
@@ -1812,7 +1853,7 @@
     const currentVersion = Number.isInteger(state.boardVersion) ? state.boardVersion : null;
 
     if (Number.isInteger(incomingVersion) && Number.isInteger(currentVersion)) {
-      if (!isOnlineMode() && incomingVersion < currentVersion) {
+      if (incomingVersion < currentVersion) {
         return false;
       }
 

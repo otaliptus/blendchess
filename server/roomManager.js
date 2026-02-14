@@ -243,12 +243,12 @@ export class Room {
       };
     }
 
+    const color = this.isColorConnected('w') ? 'b' : 'w';
+    this.cleanupDisconnectedColor(color);
+
     if (this.isFull()) {
       return { ok: false, reason: ERROR_CODES.ROOM_FULL };
     }
-
-    const color = this.isColorConnected('w') ? 'b' : 'w';
-    this.cleanupDisconnectedColor(color);
 
     const player = {
       id: playerId,
