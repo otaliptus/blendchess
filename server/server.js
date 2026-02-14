@@ -18,6 +18,7 @@ const RATE_LIMIT_WINDOW_MS = 1_000;
 const RATE_LIMIT_MAX_MESSAGES = 40;
 const rooms = new Map();
 const playerConnections = new Map();
+const ROOM_CODE_MAX_LENGTH = 6;
 
 const makeRoomCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 const makePlayerId = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 12);
@@ -41,15 +42,18 @@ function createRoom() {
   return room;
 }
 
+function normalizeRoomCode(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, ROOM_CODE_MAX_LENGTH);
+}
+
 function maybePruneRooms() {
   const now = Date.now();
   for (const [code, room] of rooms.entries()) {
-    const hasConnectedPlayers = room.state.playerOrder.some((id) => {
-      const player = room.getPlayer(id);
-      return player && player.connected;
-    });
-
-    if (!hasConnectedPlayers && now - room.state.lastActivity > ROOM_TTL_MS) {
+    if (!room.hasConnectedMembers() && now - room.state.lastActivity > ROOM_TTL_MS) {
       rooms.delete(code);
     }
   }
@@ -57,16 +61,59 @@ function maybePruneRooms() {
 
 function broadcast(room, messageFactory) {
   for (const playerId of room.state.playerOrder) {
-    const conn = playerConnections.get(playerId);
+    const player = room.getPlayer(playerId);
+    if (!player || !player.connected) {
+      continue;
+    }
+
+    const conn = getConnectionForTargetId(playerId);
     if (!conn || conn.ws.readyState !== 1) {
       continue;
     }
-    conn.ws.send(JSON.stringify(messageFactory(playerId)));
+
+    const message = messageFactory(playerId, 'player');
+    if (!message) {
+      continue;
+    }
+    conn.ws.send(JSON.stringify(message));
+  }
+
+  for (const spectatorId of room.state.spectatorOrder) {
+    const spectator = room.state.spectators[spectatorId];
+    if (!spectator || !spectator.connected) {
+      continue;
+    }
+
+    const conn = getConnectionForTargetId(spectatorId);
+    if (!conn || conn.ws.readyState !== 1) {
+      continue;
+    }
+
+    const message = messageFactory(spectatorId, 'spectator');
+    if (!message) {
+      continue;
+    }
+    conn.ws.send(JSON.stringify(message));
   }
 }
 
+function getConnectionForTargetId(targetId) {
+  const direct = playerConnections.get(targetId);
+  if (direct) {
+    return direct;
+  }
+
+  for (const conn of playerConnections.values()) {
+    if (conn.seatId && conn.seatId === targetId) {
+      return conn;
+    }
+  }
+
+  return null;
+}
+
 function sendTo(playerId, message) {
-  const conn = playerConnections.get(playerId);
+  const conn = getConnectionForTargetId(playerId);
   if (!conn || conn.ws.readyState !== 1) {
     return;
   }
@@ -101,6 +148,61 @@ function parsePayload(message) {
   }
 
   return parsed;
+}
+
+function getActivePlayerId(connectionMeta, fallbackPlayerId) {
+  return connectionMeta && connectionMeta.seatId ? connectionMeta.seatId : fallbackPlayerId;
+}
+
+function findConnectionBySeatId(seatId) {
+  if (!seatId) {
+    return null;
+  }
+  if (playerConnections.has(seatId)) {
+    return playerConnections.get(seatId);
+  }
+  for (const conn of playerConnections.values()) {
+    if (conn.seatId === seatId) {
+      return conn;
+    }
+  }
+  return null;
+}
+
+function leaveCurrentRoom(connectionMeta) {
+  if (!connectionMeta || !connectionMeta.roomCode) {
+    return false;
+  }
+
+  const room = getRoom(connectionMeta.roomCode);
+  if (!room) {
+    connectionMeta.roomCode = null;
+    connectionMeta.role = null;
+    connectionMeta.seatId = connectionMeta.playerId;
+    return false;
+  }
+
+  const activePlayerId = getActivePlayerId(connectionMeta, connectionMeta.playerId);
+  if (connectionMeta.role === 'spectator') {
+    room.removeSpectator(activePlayerId);
+  } else {
+    room.removePlayer(activePlayerId);
+  }
+
+  broadcast(room, (targetId, targetRole) =>
+    createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetRole === 'spectator' ? '' : targetId, {
+      roomCode: room.state.roomCode,
+      role: targetRole === 'spectator' ? 'spectator' : 'player',
+      players: room.getSeatAssignments(),
+      spectators: room.getSpectatorAssignments(),
+      gameStarted: !room.state.waitingForStart,
+    }),
+  );
+
+  connectionMeta.roomCode = null;
+  connectionMeta.role = null;
+  connectionMeta.seatId = connectionMeta.playerId;
+  return true;
 }
 
 function getMessageByteLength(rawData) {
@@ -144,6 +246,8 @@ wss.on('connection', (ws) => {
     ws,
     roomCode: null,
     playerId,
+    seatId: playerId,
+    role: null,
     recentMessages: [],
   });
 
@@ -175,12 +279,20 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    const roomCode = envelope.roomCode;
+    const roomCode = normalizeRoomCode(envelope.roomCode);
     const payload = envelope.payload || {};
     const type = envelope.type;
 
     if (type === TYPES.CREATE_ROOM) {
       const room = createRoom();
+      const connectionMeta = playerConnections.get(playerId);
+      if (connectionMeta?.roomCode) {
+        leaveCurrentRoom(connectionMeta);
+      }
+      if (typeof payload.hardMode !== 'undefined') {
+        room.state.hardMode = Boolean(payload.hardMode);
+      }
+
       const assigned = room.assignPlayer(playerId, payload.nickname);
       if (!assigned.ok) {
         sendError(playerId, room.state.roomCode, assigned.reason, 'Could not join created room.');
@@ -189,29 +301,37 @@ wss.on('connection', (ws) => {
 
       const connectionMeta = playerConnections.get(playerId);
       connectionMeta.roomCode = room.state.roomCode;
+      connectionMeta.role = 'player';
+      connectionMeta.seatId = assigned.player.id;
       rooms.set(room.state.roomCode, room);
 
       sendTo(
         playerId,
-        createMessage(TYPES.ROOM_CREATED, room.state.roomCode, playerId, {
+        createMessage(TYPES.ROOM_CREATED, room.state.roomCode, connectionMeta.seatId, {
           roomCode: room.state.roomCode,
+          role: 'player',
           playerColor: assigned.player.color,
-          playerId,
+          playerId: connectionMeta.seatId,
+          resumeToken: assigned.player.resumeToken,
           players: room.getSeatAssignments(),
+          spectators: room.getSpectatorAssignments(),
           gameStarted: !room.state.waitingForStart,
           game: room.createGameSnapshot(),
         }),
       );
-      sendTo(playerId, createMessage(TYPES.PLAYER_ASSIGNED, room.state.roomCode, playerId, {
-        playerId,
+      sendTo(playerId, createMessage(TYPES.PLAYER_ASSIGNED, room.state.roomCode, connectionMeta.seatId, {
+        playerId: connectionMeta.seatId,
         color: assigned.player.color,
         nickname: assigned.player.nickname,
+        resumeToken: assigned.player.resumeToken,
       }));
-      sendTo(playerId, buildJoinSnapshot(room, playerId));
-      broadcast(room, (targetId) =>
-        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetId, {
+      sendTo(playerId, buildJoinSnapshot(room, connectionMeta.seatId));
+      broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetRole === 'spectator' ? '' : targetId, {
           roomCode: room.state.roomCode,
+          role: targetRole === 'spectator' ? 'spectator' : 'player',
           players: room.getSeatAssignments(),
+          spectators: room.getSpectatorAssignments(),
           gameStarted: !room.state.waitingForStart,
         }),
       );
@@ -225,37 +345,134 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      const assigned = room.assignPlayer(playerId, payload.nickname);
+      const connectionMeta = playerConnections.get(playerId);
+      if (connectionMeta?.roomCode && connectionMeta.roomCode !== room.state.roomCode) {
+        leaveCurrentRoom(connectionMeta);
+      }
+
+      const requestedPlayerId = typeof envelope.playerId === 'string' ? envelope.playerId.trim() : '';
+      const wantsResume = Boolean(payload && payload.resume);
+      const resumeToken = typeof payload.resumeToken === 'string' ? payload.resumeToken.trim() : '';
+
+      if (payload.spectator) {
+        if (room.getPlayer(connectionMeta?.seatId || '')) {
+          sendError(
+            playerId,
+            room.state.roomCode,
+            ERROR_CODES.WRONG_COLOR,
+            'Already joined as player in this room. Leave first to spectate.',
+          );
+          return;
+        }
+
+        connectionMeta.roomCode = room.state.roomCode;
+        connectionMeta.role = 'spectator';
+        const assigned = room.assignSpectator(playerId, payload.nickname);
+        if (!assigned.ok) {
+          sendError(playerId, room.state.roomCode, assigned.reason || ERROR_CODES.ROOM_NOT_READY, 'Could not join room.');
+          return;
+        }
+        connectionMeta.seatId = assigned.spectator.id;
+
+        sendTo(
+          playerId,
+          createMessage(TYPES.ROOM_JOINED, room.state.roomCode, '', {
+            roomCode: room.state.roomCode,
+            role: 'spectator',
+            spectatorId: assigned.spectator.id,
+            players: room.getSeatAssignments(),
+            spectators: room.getSpectatorAssignments(),
+            gameStarted: !room.state.waitingForStart,
+          }),
+        );
+        sendTo(
+          playerId,
+          createMessage(TYPES.GAME_STATE, room.state.roomCode, '', {
+            game: room.createGameSnapshot(),
+          }),
+        );
+        broadcast(room, (targetId, targetRole) =>
+          createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetRole === 'spectator' ? '' : targetId, {
+            roomCode: room.state.roomCode,
+            role: targetRole === 'spectator' ? 'spectator' : 'player',
+            players: room.getSeatAssignments(),
+            spectators: room.getSpectatorAssignments(),
+            gameStarted: !room.state.waitingForStart,
+          }),
+        );
+        return;
+      }
+
+      const selectedPlayerId = wantsResume && requestedPlayerId ? requestedPlayerId : playerId;
+      if (wantsResume && requestedPlayerId) {
+        if (!resumeToken || !room.isResumeTokenValid(requestedPlayerId, resumeToken)) {
+          sendError(
+            playerId,
+            room.state.roomCode,
+            ERROR_CODES.PLAYER_NOT_FOUND,
+            'Saved player seat not found in this room.',
+          );
+          return;
+        }
+
+        const existingConnection = findConnectionBySeatId(requestedPlayerId);
+        if (existingConnection && existingConnection !== playerConnections.get(playerId)) {
+          try {
+            existingConnection.ws.close(1000, 'Session resumed from another connection.');
+          } catch {
+            // no-op
+          }
+          if (existingConnection.playerId && existingConnection.playerId !== playerId) {
+            playerConnections.delete(existingConnection.playerId);
+          }
+        }
+      } else if (wantsResume) {
+        sendError(
+          playerId,
+          room.state.roomCode,
+          ERROR_CODES.PLAYER_NOT_FOUND,
+          'Resume request requires playerId and resumeToken.',
+        );
+        return;
+      }
+
+      const assigned = room.assignPlayer(selectedPlayerId, payload.nickname);
       if (!assigned.ok) {
         sendError(playerId, roomCode, assigned.reason, 'Could not join room.');
         return;
       }
 
-      const connectionMeta = playerConnections.get(playerId);
       connectionMeta.roomCode = room.state.roomCode;
+      connectionMeta.role = 'player';
+      connectionMeta.seatId = assigned.player.id;
 
       const seatAssignments = room.getSeatAssignments();
       sendTo(
         playerId,
-        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, playerId, {
+        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, connectionMeta.seatId, {
           roomCode: room.state.roomCode,
+          role: 'player',
           players: seatAssignments,
+          spectators: room.getSpectatorAssignments(),
           gameStarted: !room.state.waitingForStart,
         }),
       );
       sendTo(
         playerId,
-        createMessage(TYPES.PLAYER_ASSIGNED, room.state.roomCode, playerId, {
-          playerId,
+        createMessage(TYPES.PLAYER_ASSIGNED, room.state.roomCode, connectionMeta.seatId, {
+          playerId: connectionMeta.seatId,
           color: assigned.player.color,
           nickname: assigned.player.nickname,
+          resumeToken: assigned.player.resumeToken,
         }),
       );
-      sendTo(playerId, buildJoinSnapshot(room, playerId));
-      broadcast(room, (targetId) =>
-        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetId, {
+      sendTo(playerId, buildJoinSnapshot(room, connectionMeta.seatId));
+      broadcast(room, (targetId, targetRole) =>
+        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetRole === 'spectator' ? '' : targetId, {
           roomCode: room.state.roomCode,
-          players: seatAssignments,
+          role: targetRole === 'spectator' ? 'spectator' : 'player',
+          players: room.getSeatAssignments(),
+          spectators: room.getSpectatorAssignments(),
           gameStarted: !room.state.waitingForStart,
         }),
       );
@@ -273,35 +490,65 @@ wss.on('connection', (ws) => {
       sendError(playerId, roomCode, ERROR_CODES.WRONG_COLOR, 'No active membership in this room.');
       return;
     }
+    const activePlayerId = getActivePlayerId(connectionMeta, playerId);
 
     if (type === TYPES.PING) {
-      sendTo(playerId, createMessage(TYPES.PONG, room.state.roomCode, playerId, payload));
+      const replyRecipientId = connectionMeta.role === 'spectator' ? '' : activePlayerId;
+      sendTo(playerId, createMessage(TYPES.PONG, room.state.roomCode, replyRecipientId, payload));
       return;
     }
 
     if (type === TYPES.GAME_STATE) {
-      sendTo(playerId, buildJoinSnapshot(room, playerId));
+      const replyRecipientId = connectionMeta.role === 'spectator' ? '' : activePlayerId;
+      sendTo(playerId, buildJoinSnapshot(room, replyRecipientId));
+      return;
+    }
+
+    if (connectionMeta.role === 'spectator') {
+      sendError(
+        playerId,
+        room.state.roomCode,
+        ERROR_CODES.WRONG_COLOR,
+        'Spectators cannot perform that action.',
+      );
       return;
     }
 
     if (type === TYPES.NEW_GAME) {
-      if (room.getPlayer(playerId)?.color !== 'w') {
+      if (room.getPlayer(activePlayerId)?.color !== 'w') {
         sendError(playerId, room.state.roomCode, ERROR_CODES.WRONG_COLOR, 'Only White may request new game.');
         return;
       }
 
       room.resetGame(true);
-      broadcast(room, (targetId) => buildJoinSnapshot(room, targetId));
-      sendTo(playerId, buildJoinSnapshot(room, playerId));
+      broadcast(room, (targetId, targetRole) => buildJoinSnapshot(room, targetRole === 'spectator' ? '' : targetId));
+      sendTo(activePlayerId, buildJoinSnapshot(room, activePlayerId));
+      return;
+    }
+
+    if (type === TYPES.SET_HARD_MODE) {
+      const player = room.getPlayer(activePlayerId);
+      if (!player || player.color !== 'w') {
+        sendError(playerId, room.state.roomCode, ERROR_CODES.WRONG_COLOR, 'Only White may set hard mode.');
+        return;
+      }
+
+      room.setHardMode(Boolean(payload.enabled), player.color === 'w' ? 'White' : 'Black');
+      broadcast(
+        room,
+        (targetId, targetRole) => createMessage(TYPES.GAME_STATE, room.state.roomCode, targetRole === 'spectator' ? '' : targetId, {
+          game: room.createGameSnapshot(),
+        }),
+      );
       return;
     }
 
     if (type === TYPES.CLAIM_DRAW) {
-      const result = room.claimDraw(playerId, payload);
+      const result = room.claimDraw(activePlayerId, payload);
       if (!result.ok) {
         sendTo(
-          playerId,
-          createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, playerId, {
+          activePlayerId,
+          createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, activePlayerId, {
             reasonCode: result.reason,
             moveIntent: payload,
           }),
@@ -320,11 +567,11 @@ wss.on('connection', (ws) => {
     }
 
     if (type === TYPES.RESIGN) {
-      const result = room.resign(playerId);
+      const result = room.resign(activePlayerId);
       if (!result.ok) {
         sendTo(
-          playerId,
-          createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, playerId, {
+          activePlayerId,
+          createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, activePlayerId, {
             reasonCode: result.reason,
             moveIntent: payload,
           }),
@@ -342,15 +589,23 @@ wss.on('connection', (ws) => {
     }
 
     if (type === TYPES.MOVE_INTENT) {
-      const result = room.applyMove(playerId, payload);
+      const result = room.applyMove(activePlayerId, payload);
       if (!result.ok) {
-        sendTo(
-          playerId,
-          createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, playerId, {
-            reasonCode: result.reason,
-            moveIntent: payload,
-          }),
-        );
+        sendTo(activePlayerId, createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, activePlayerId, {
+          reasonCode: result.reason,
+          forfeited: Boolean(result.forfeited),
+          game: result.forfeited ? room.createGameSnapshot() : undefined,
+          moveIntent: payload,
+        }));
+        if (result.forfeited) {
+          broadcast(room, (targetId, targetRole) =>
+            targetRole === 'player' && targetId === activePlayerId
+              ? null
+              : createMessage(TYPES.GAME_STATE, room.state.roomCode, targetRole === 'spectator' ? '' : targetId, {
+                game: room.createGameSnapshot(),
+              }),
+          );
+        }
         return;
       }
 
@@ -380,14 +635,7 @@ wss.on('connection', (ws) => {
 
     const room = getRoom(meta.roomCode);
     if (room) {
-      room.removePlayer(playerId);
-      broadcast(room, (targetId) =>
-        createMessage(TYPES.ROOM_JOINED, room.state.roomCode, targetId, {
-          roomCode: room.state.roomCode,
-          players: room.getSeatAssignments(),
-          gameStarted: !room.state.waitingForStart,
-        }),
-      );
+      leaveCurrentRoom(meta);
     }
 
     playerConnections.delete(playerId);

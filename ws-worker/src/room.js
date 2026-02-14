@@ -29,6 +29,8 @@ const PROTOCOL_VERSION = '1.0.0';
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH = 6;
 const ROOM_TTL_MS = 1000 * 60 * 60;
+const RESUME_TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const RESUME_TOKEN_LENGTH = 24;
 
 const TYPES = {
   CREATE_ROOM: 'create_room',
@@ -139,6 +141,16 @@ function createRoomState(roomCode) {
     createdAt: Date.now(),
     lastActivity: Date.now(),
   };
+}
+
+function makeResumeToken() {
+  const randomValues = new Uint32Array(RESUME_TOKEN_LENGTH);
+  crypto.getRandomValues(randomValues);
+  let token = '';
+  for (const value of randomValues) {
+    token += RESUME_TOKEN_ALPHABET[value % RESUME_TOKEN_ALPHABET.length];
+  }
+  return token;
 }
 
 function touchRoom(room) {
@@ -346,6 +358,14 @@ function normalizeRoomState(room) {
   return room;
 }
 
+function isResumeTokenValid(room, playerId, resumeToken) {
+  const player = room.players[playerId];
+  if (!player || !player.resumeToken) {
+    return false;
+  }
+  return player.resumeToken === resumeToken;
+}
+
 export class GameHub extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -447,12 +467,13 @@ export class GameHub extends DurableObject {
     }
   }
 
-  assignPlayer(room, connection, nickname = 'Player') {
+  assignPlayer(room, connection, nickname = 'Player', resumeToken = '') {
     const currentPlayer = connection.playerId ? room.players[connection.playerId] : null;
     if (currentPlayer) {
       currentPlayer.connected = true;
       currentPlayer.nickname = nickname || currentPlayer.nickname;
       currentPlayer.connectionId = connection.id;
+      currentPlayer.resumeToken = resumeToken || makeResumeToken();
       connection.color = currentPlayer.color;
       connection.role = 'player';
       return { ok: true, player: currentPlayer };
@@ -472,6 +493,7 @@ export class GameHub extends DurableObject {
       nickname: nickname || 'Player',
       connected: true,
       connectionId: connection.id,
+      resumeToken: resumeToken || makeResumeToken(),
     };
 
     room.players[playerId] = player;
@@ -765,6 +787,7 @@ export class GameHub extends DurableObject {
           playerId: connection.playerId,
           players: getSeatAssignments(room),
           spectators: getSpectatorAssignments(room),
+          resumeToken: assigned.player.resumeToken,
           gameStarted: !room.waitingForStart,
           game: createGameSnapshot(room),
         }),
@@ -776,6 +799,7 @@ export class GameHub extends DurableObject {
           playerId: connection.playerId,
           color: assigned.player.color,
           nickname: assigned.player.nickname,
+          resumeToken: assigned.player.resumeToken,
         }),
       );
 
@@ -862,9 +886,10 @@ export class GameHub extends DurableObject {
         ? envelope.playerId.trim()
         : '';
       const wantsResume = Boolean(payload && payload.resume);
-      if (wantsResume && requestedPlayerId) {
-        const existingSeat = room.players[requestedPlayerId];
-        if (!existingSeat) {
+      const resumeToken = typeof payload.resumeToken === 'string' ? payload.resumeToken.trim() : '';
+
+      if (wantsResume) {
+        if (!requestedPlayerId || !resumeToken || !isResumeTokenValid(room, requestedPlayerId, resumeToken)) {
           this.sendErrorToConnection(
             connectionId,
             envelope.roomCode,

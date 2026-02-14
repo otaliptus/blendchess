@@ -10,6 +10,7 @@ export const TYPES = {
   MOVE_INTENT: 'move_intent',
   MOVE_APPLIED: 'move_applied',
   MOVE_REJECTED: 'move_rejected',
+  SET_HARD_MODE: 'set_hard_mode',
   CLAIM_DRAW: 'claim_draw',
   DRAW_RESULT: 'draw_result',
   RESIGN: 'resign',

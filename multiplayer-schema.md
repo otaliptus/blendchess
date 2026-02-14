@@ -22,7 +22,10 @@ All messages are JSON envelopes over WebSocket text frames:
 ```json
 {
   "type": "create_room",
-  "payload": { "nickname": "WhitePlayer" },
+  "payload": {
+    "nickname": "WhitePlayer",
+    "hardMode": false
+  },
   "version": "1.0.0"
 }
 ```
@@ -32,10 +35,15 @@ All messages are JSON envelopes over WebSocket text frames:
 {
   "type": "join_room",
   "roomCode": "ABCD12",
-  "payload": { "nickname": "BlackPlayer" },
+  "payload": {
+    "nickname": "BlackPlayer",
+    "resume": true,
+    "resumeToken": "optional-token"
+  },
   "version": "1.0.0"
 }
 ```
+When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the join payload to reclaim a specific disconnected seat.
 
 ### `move_intent`
 ```json
@@ -119,6 +127,7 @@ All messages are JSON envelopes over WebSocket text frames:
     "roomCode": "ABCD12",
     "playerColor": "w",
     "playerId": "player-id",
+    "resumeToken": "player-resume-token",
     "players": [
       { "playerId": "player-id", "color": "w", "nickname": "WhitePlayer", "connected": true }
     ],
@@ -153,7 +162,12 @@ All messages are JSON envelopes over WebSocket text frames:
   "type": "player_assigned",
   "roomCode": "ABCD12",
   "playerId": "player-id",
-  "payload": { "playerId": "player-id", "color": "b", "nickname": "BlackPlayer" },
+  "payload": {
+    "playerId": "player-id",
+    "color": "b",
+    "nickname": "BlackPlayer",
+    "resumeToken": "player-resume-token"
+  },
   "version": "1.0.0"
 }
 ```

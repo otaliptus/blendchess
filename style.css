@@ -1020,6 +1020,7 @@ input::placeholder {
 .replay-controls {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .replay-banner {
@@ -1165,6 +1166,7 @@ input::placeholder {
   grid-template-columns: 1fr auto auto;
   gap: 8px;
   margin-bottom: 8px;
+  align-items: stretch;
 }
 
 #historyGames {
@@ -1187,6 +1189,25 @@ input::placeholder {
     width: min(92vw, 560px);
   }
 
+  .replay-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .replay-controls .btn-sm {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .history-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .history-controls .btn-sm {
+    width: 100%;
+    justify-content: center;
+  }
+
   .header {
     flex-direction: column;
     align-items: flex-start;
@@ -1207,5 +1228,9 @@ input::placeholder {
   .header-right {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .replay-controls {
+    grid-template-columns: 1fr;
   }
 }

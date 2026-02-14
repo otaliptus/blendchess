@@ -53,6 +53,7 @@
   const capturesEl = document.getElementById('captures');
   const eventsEl = document.getElementById('events');
   const moveBody = document.getElementById('moveBody');
+  const replayFirstEl = document.getElementById('replayFirst');
   const replayPrevEl = document.getElementById('replayPrev');
   const replayNextEl = document.getElementById('replayNext');
   const replayFinalEl = document.getElementById('replayFinal');
@@ -143,6 +144,7 @@
     socketUrl: DEFAULT_SERVER_URL,
     roomCode: '',
     playerId: null,
+    resumeToken: null,
     color: null,
     role: 'player',
     spectatorId: null,
@@ -653,12 +655,13 @@
   }
 
   function updateReplayBannerAndControls() {
-    if (!replayPrevEl || !replayNextEl || !replayFinalEl || !replayBannerEl) {
+    if (!replayFirstEl || !replayPrevEl || !replayNextEl || !replayFinalEl || !replayBannerEl) {
       return;
     }
 
     const hasReplay = state.gameOver && replayHistory.length > 1;
     const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
+    replayFirstEl.disabled = !hasReplay || replay.ply <= 0;
     replayPrevEl.disabled = !hasReplay || replay.ply <= 0;
     replayNextEl.disabled = !hasReplay || replay.ply >= maxPly;
     replayFinalEl.disabled = !hasReplay || replay.ply === maxPly;
@@ -696,6 +699,12 @@
     const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
     replay.active = true;
     replay.ply = maxPly;
+    render();
+  }
+
+  function setReplayFirst() {
+    replay.active = true;
+    replay.ply = 0;
     render();
   }
 
@@ -994,16 +1003,18 @@
 
       const roomCode = normalizeRoomCode(parsed.roomCode);
       const playerId = typeof parsed.playerId === 'string' ? parsed.playerId.trim() : '';
+      const resumeToken = typeof parsed.resumeToken === 'string' ? parsed.resumeToken.trim() : '';
       const socketUrl = typeof parsed.socketUrl === 'string' ? parsed.socketUrl.trim() : '';
       const color = parsed.color === 'w' || parsed.color === 'b' ? parsed.color : null;
 
-      if (!roomCode || !playerId) {
+      if (!roomCode || !playerId || !resumeToken) {
         return null;
       }
 
       return {
         roomCode,
         playerId,
+        resumeToken,
         socketUrl: socketUrl || DEFAULT_SERVER_URL,
         color,
       };
@@ -1021,13 +1032,19 @@
   }
 
   function saveOnlineSession() {
-    if (multiplayer.role !== 'player' || !multiplayer.roomCode || !multiplayer.playerId) {
+    if (
+      multiplayer.role !== 'player'
+      || !multiplayer.roomCode
+      || !multiplayer.playerId
+      || !multiplayer.resumeToken
+    ) {
       return;
     }
 
     const session = {
       roomCode: normalizeRoomCode(multiplayer.roomCode),
       playerId: multiplayer.playerId,
+      resumeToken: multiplayer.resumeToken,
       color: multiplayer.color || null,
       socketUrl: (serverUrlEl.value.trim() || multiplayer.socketUrl || DEFAULT_SERVER_URL),
     };
@@ -1040,7 +1057,13 @@
   }
 
   function updateOnlineSessionPersistence() {
-    if (isOnlineMode() && multiplayer.role === 'player' && multiplayer.roomCode && multiplayer.playerId) {
+    if (
+      isOnlineMode()
+      && multiplayer.role === 'player'
+      && multiplayer.roomCode
+      && multiplayer.playerId
+      && multiplayer.resumeToken
+    ) {
       saveOnlineSession();
       return;
     }
@@ -1163,6 +1186,7 @@
 
     multiplayer.roomCode = saved.roomCode;
     multiplayer.playerId = saved.playerId;
+    multiplayer.resumeToken = saved.resumeToken;
     multiplayer.color = multiplayer.color || saved.color || null;
     multiplayer.role = 'player';
     multiplayer.spectatorId = null;
@@ -1185,7 +1209,7 @@
       await connectSocket();
       sendSocketMessage(
         WEBSOCKET_TYPES.JOIN_ROOM,
-        { nickname: 'Player', resume: true },
+        { nickname: 'Player', resume: true, resumeToken: multiplayer.resumeToken },
         saved.roomCode,
       );
     } catch (error) {
@@ -1209,6 +1233,7 @@
 
     multiplayer.roomCode = saved.roomCode;
     multiplayer.playerId = saved.playerId;
+    multiplayer.resumeToken = saved.resumeToken;
     multiplayer.color = saved.color || null;
     multiplayer.role = 'player';
     multiplayer.spectatorId = null;
@@ -1455,7 +1480,7 @@
       const connectedSpectators = multiplayer.spectators.filter((spectator) => spectator.connected !== false).length;
       multiplayerStatusEl.textContent = `Online mode · ${connectionText} · ${roomReady} · You are ${playerColor}.`;
       multiplayerInfoEl.textContent = `Players connected: ${connectedCount}/2 · Spectators: ${connectedSpectators}`;
-      if (multiplayer.roomCode && multiplayer.playerId) {
+      if (multiplayer.roomCode && multiplayer.playerId && multiplayer.resumeToken) {
         multiplayerInfoEl.textContent += ' · Refresh-safe session enabled.';
       }
       const playerRosterText = multiplayer.players
@@ -1497,13 +1522,14 @@
       || !multiplayer.connected
       || !multiplayer.color
       || multiplayer.color === 'w';
+    const inRoom = Boolean(multiplayer.roomCode);
     connectServerEl.disabled = !online || multiplayer.connected || multiplayer.resumeInFlight;
-    createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
-    joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
+    createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
+    joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
     if (spectateRoomEl) {
-      spectateRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
+      spectateRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
     }
-    joinRoomCodeEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight;
+    joinRoomCodeEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
     copyRoomCodeEl.disabled = !online || !multiplayer.roomCode;
     leaveRoomEl.disabled = !online;
     serverUrlEl.disabled = multiplayer.connected || multiplayer.resumeInFlight;
@@ -1545,6 +1571,7 @@
     multiplayer.connected = false;
     multiplayer.playerId = null;
     multiplayer.spectatorId = null;
+    multiplayer.resumeToken = null;
     multiplayer.color = null;
     multiplayer.role = 'player';
     multiplayer.roomCode = '';
@@ -1928,6 +1955,7 @@
       multiplayer.color = null;
       multiplayer.playerId = null;
       multiplayer.spectatorId = payload.spectatorId || null;
+      multiplayer.resumeToken = null;
     }
 
     const nextPlayerId = payload.role === 'spectator' ? '' : (message?.playerId || payload.playerId);
@@ -1939,6 +1967,10 @@
       multiplayer.color = payload.color;
       multiplayer.role = 'player';
       multiplayer.spectatorId = null;
+    }
+
+    if (payload.resumeToken) {
+      multiplayer.resumeToken = payload.resumeToken;
     }
 
     const roster = payload?.players || payload?.game?.players;
@@ -2404,9 +2436,7 @@
       syncFromRoomPayload(message);
       saveOnlineSession();
       addEvent(`Room ${multiplayer.roomCode} created. Share this code with your friend.`);
-      if (!joinRoomCodeEl.value || !joinRoomCodeEl.value.trim()) {
-        joinRoomCodeEl.value = multiplayer.roomCode;
-      }
+      joinRoomCodeEl.value = multiplayer.roomCode;
       render();
       return;
     }
@@ -2611,6 +2641,7 @@
       await connectSocket();
       setMode('online');
       multiplayer.role = 'player';
+      multiplayer.resumeToken = null;
       multiplayer.spectatorId = null;
       if (!sendSocketMessage(WEBSOCKET_TYPES.CREATE_ROOM, {
         nickname: 'Player',
@@ -2639,6 +2670,7 @@
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
+      multiplayer.resumeToken = null;
       if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, { nickname: 'Player' }, roomCode)) {
         return;
       }
@@ -2666,6 +2698,7 @@
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
+      multiplayer.resumeToken = null;
       if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, {
         nickname: 'Spectator',
         spectator: true,
@@ -2821,6 +2854,12 @@
   if (clearHistoryGamesEl) {
     clearHistoryGamesEl.addEventListener('click', () => {
       clearHistoryGames();
+    });
+  }
+
+  if (replayFirstEl) {
+    replayFirstEl.addEventListener('click', () => {
+      setReplayFirst();
     });
   }
 
