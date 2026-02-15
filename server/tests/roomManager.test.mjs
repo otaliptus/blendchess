@@ -10,6 +10,10 @@ function createReadyRoom() {
   return room;
 }
 
+function createEmptyBoard() {
+  return Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => null));
+}
+
 test('claimDraw accepts normalized reason aliases', () => {
   const room = createReadyRoom();
   room.state.halfMoveClock = 100;
@@ -64,6 +68,29 @@ test('hard mode forfeits illegal moves and advances turn', () => {
   assert.equal(result.forfeited, true);
   assert.equal(room.state.turn, 'b');
   assert.equal(room.state.boardVersion, 1);
+});
+
+test('hard mode rejects illegal move without forfeit when mover is in check', () => {
+  const room = createReadyRoom();
+  room.state.hardMode = true;
+  room.state.turn = 'w';
+  room.state.boardVersion = 0;
+  room.state.board = createEmptyBoard();
+  room.state.board[7][4] = { type: 'K', color: 'w', hasMoved: true };
+  room.state.board[0][4] = { type: 'K', color: 'b', hasMoved: true };
+  room.state.board[6][4] = { type: 'R', color: 'b', hasMoved: true };
+
+  const result = room.applyMove('white-player', {
+    from: { r: 5, c: 0 },
+    to: { r: 4, c: 0 },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, ERROR_CODES.ILLEGAL_MOVE);
+  assert.equal(result.forfeited, undefined);
+  assert.equal(room.state.turn, 'w');
+  assert.equal(room.state.gameOver, false);
+  assert.equal(room.state.boardVersion, 0);
 });
 
 test('soft mode keeps illegal moves for current player', () => {

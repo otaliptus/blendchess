@@ -429,7 +429,7 @@ Notes:
 - Illegal move attempts never mutate authoritative position.
 - Offending player receives `move_rejected`.
 - On illegal attempt, non-offending peers receive a fresh `game_state`.
-- In hard mode, illegal move while in check can end game with `result = "illegalForfeit"`.
+- In hard mode, illegal moves usually forfeit turn, except when the mover is in check; those in-check illegal attempts are rejected without forfeit.
 - Spectators are read-only and receive room/game updates.
 
 ## Error codes

@@ -22,3 +22,9 @@ Original prompt: Do the smoke pass test please
 - Ran smoke render pass with:
   `node --experimental-default-type=module $WEB_GAME_CLIENT --url http://127.0.0.1:8080 --actions-file $WEB_GAME_ACTIONS --iterations 1 --pause-ms 250 --screenshot-dir /tmp/blendchess-check-leak`
 - Verified screenshot artifact exists (`/tmp/blendchess-check-leak/shot-0.png`) and basic board/UI render remains intact; no Playwright-captured console error artifact was generated.
+- Changed hard-mode rule: illegal move while in check no longer forfeits game/turn; move is rejected and defender keeps turn.
+- Updated local client hard-mode copy and local illegal-move handling in `app.js`.
+- Updated Node backend (`server/roomManager.js`) and Worker backend (`ws-worker/src/room.js`) for authoritative parity.
+- Updated behavior docs (`GAMEPLAY_EXPECTATIONS.md`, `ARCHITECTURE.md`, `server/README.md`, `ws-worker/README.md`, `multiplayer-schema.md`).
+- Added Node backend test: `hard mode rejects illegal move without forfeit when mover is in check`.
+- Verification: `node --check app.js`, `node --check server/roomManager.js`, `node --check ws-worker/src/room.js`, `npm test` in `server/`, plus Playwright smoke screenshot `/tmp/blendchess-hardmode-check/shot-0.png`.

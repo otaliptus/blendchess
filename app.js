@@ -1705,7 +1705,7 @@
         return;
       }
       if (state.hardMode) {
-        modeText.textContent = 'Online hard mode: illegal moves forfeit turn; illegal while in check forfeits the game.';
+        modeText.textContent = 'Online hard mode: illegal moves forfeit turn; while in check, illegal moves are rejected.';
       } else {
         modeText.textContent = 'Online strict mode: illegal moves are rejected by server.';
       }
@@ -1713,7 +1713,7 @@
     }
 
     if (state.hardMode) {
-      modeText.textContent = 'Hard mode: illegal moves lose turn; illegal while in check forfeits the game.';
+      modeText.textContent = 'Hard mode: illegal moves lose turn; while in check, illegal moves are rejected.';
     } else {
       modeText.textContent = 'Strict mode: illegal moves are rejected.';
     }
@@ -2487,17 +2487,10 @@
       if (state.hardMode) {
         state.selected = null;
         if (isInCheck(state.board, illegalColor)) {
-          const winnerColor = otherColor(illegalColor);
-          state.gameOver = true;
-          state.winner = colorName(winnerColor);
-          state.result = 'illegalForfeit';
-          addEvent(
-            `${message}; ${reason} Illegal move while in check. ${state.winner} wins by forfeit.`,
-            {
-              color: illegalColor,
-              move: illegalPly,
-            },
-          );
+          addEvent(`${message}; ${reason} You are in check. Choose a legal move.`, {
+            color: illegalColor,
+            move: illegalPly,
+          });
           showIllegalMoveBanner(from, { r, c }, reason);
         } else {
           addEvent(`${message}; ${reason} Turn forfeited.`, {
@@ -2800,8 +2793,11 @@
     }
 
     if (type === WEBSOCKET_TYPES.MOVE_REJECTED) {
-      const reason = ERROR_TEXT[payload.reasonCode] || payload.reasonCode || 'Move rejected by server.';
       const pendingColor = pendingServerAttempt?.color || state.turn;
+      const offenderInCheck = pendingColor && isInCheck(state.board, pendingColor);
+      const reason = payload.reasonCode === ERROR_CODES.ILLEGAL_MOVE && offenderInCheck
+        ? 'You are in check. Choose a legal move.'
+        : (ERROR_TEXT[payload.reasonCode] || payload.reasonCode || 'Move rejected by server.');
       const pendingPly = Number.isInteger(pendingServerAttempt?.ply) ? pendingServerAttempt.ply : (getCurrentPly() + 1);
       const attemptedFrom = pendingServerAttempt?.from || payload?.moveIntent?.from || null;
       const attemptedTo = pendingServerAttempt?.to || payload?.moveIntent?.to || null;

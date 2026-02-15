@@ -5,7 +5,7 @@
 - Standard chess legality is enforced by shared rules logic.
 - Online mode is authoritative: backend is source of truth for room/game state.
 - Illegal moves are rejected and do not mutate board state.
-- Hard mode can forfeit turn when illegal move is made while in check.
+- Hard mode forfeits turn for illegal moves, except when the mover is in check (those moves are rejected without forfeit).
 - Stale snapshots are ignored via monotonic version checks.
 - Saved history entries are validated before restore.
 - Spectators are read-only.

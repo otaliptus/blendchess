@@ -63,7 +63,7 @@ Important safety rules:
 Hard mode behavior:
 
 - Illegal move attempts are rejected.
-- If player is in check and submits illegal move, turn can be forfeited (`illegalForfeit`).
+- In hard mode, illegal move attempts forfeit turn unless the mover is in check; in-check illegal attempts are rejected with no forfeit.
 
 ## 6) Session and room model
 

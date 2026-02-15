@@ -481,19 +481,20 @@ export class Room {
     if (!outcome.ok) {
       if (outcome.reason === ERROR_CODES.ILLEGAL_MOVE && this.state.hardMode) {
         const offenderInCheck = core.isInCheck(this.state.board, player.color);
-        this.state.boardVersion += 1;
 
         if (offenderInCheck) {
-          this.state.gameOver = true;
-          this.state.result = 'illegalForfeit';
-          this.state.winner = core.colorName(core.otherColor(player.color));
           addEvent(
             this.state,
             `${core.colorName(player.color)} attempted illegal move ${squareText(payload.from)} to ${squareText(
               payload.to,
-            )} while in check. ${this.state.winner} wins by forfeit.`,
+            )} while in check. Move rejected.`,
           );
+          return {
+            ok: false,
+            reason: ERROR_CODES.ILLEGAL_MOVE,
+          };
         } else {
+          this.state.boardVersion += 1;
           this.state.turn = core.otherColor(player.color);
           addEvent(
             this.state,

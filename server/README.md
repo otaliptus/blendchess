@@ -35,7 +35,7 @@ npm test
 ## Behavior highlights
 
 - Illegal move attempts are rejected without mutating board state.
-- Hard mode can forfeit turn for illegal move while in check.
+- Hard mode forfeits turn on illegal moves, except when the mover is currently in check (that illegal move is rejected without forfeit).
 - Opponent illegal attempts are masked in the player timeline.
 - Spectators receive authoritative state updates and can observe illegal-attempt events.
 

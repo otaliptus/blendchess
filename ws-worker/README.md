@@ -35,7 +35,7 @@ WebSocket URL format:
 
 - Authoritative move validation and room lifecycle.
 - Illegal moves are rejected without board mutation.
-- Hard mode supports illegal-in-check turn forfeits.
+- Hard mode forfeits turn for illegal moves, except when the mover is in check (those illegal moves are rejected without forfeit).
 - Spectators are read-only and receive authoritative game-state updates.
 
 ## Topology note
