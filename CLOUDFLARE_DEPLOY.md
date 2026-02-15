@@ -1,8 +1,8 @@
 # Cloudflare Deploy (Pages + Worker Durable Object)
 
-This project deploys as:
-- Frontend: Cloudflare Pages (static files from repo root)
-- Multiplayer backend: Cloudflare Worker + Durable Object (`ws-worker/`)
+Deployment split:
+- Frontend: Cloudflare Pages (static site from repo root).
+- Multiplayer backend: Cloudflare Worker + Durable Object (`ws-worker/`).
 
 ## 1) Deploy Worker backend
 
@@ -12,15 +12,15 @@ npx wrangler login
 npx wrangler deploy
 ```
 
-Configuration source: `ws-worker/wrangler.jsonc`
+Config source: `ws-worker/wrangler.jsonc`
 
-Take deployed host from output, for example:
+Example output host:
 - `https://blendchess-ws.<subdomain>.workers.dev`
 
-Use websocket form in app:
+Use websocket form in client:
 - `wss://blendchess-ws.<subdomain>.workers.dev`
 
-## 2) Deploy static app to Pages
+## 2) Deploy frontend to Pages
 
 From repo root:
 
@@ -29,24 +29,27 @@ npx wrangler pages project create blendchess
 npx wrangler pages deploy . --project-name=blendchess
 ```
 
-Pages URL will look like:
+Example Pages URL:
 - `https://blendchess.pages.dev`
 
-## 3) Play online
+## 3) Connect game clients
 
 1. Open Pages URL.
 2. Set mode to `Online Friend`.
-3. Enter worker websocket URL (`wss://...`) if needed.
-4. Click `Connect`.
-5. Click `Create room` and share code/invite.
-6. Friend opens same Pages URL and joins with same room code.
+3. Set server URL to deployed worker `wss://...` when needed.
+4. Connect, create room, and share code/link.
 
 ## Optional default WS URL
 
-To prefill your backend URL, define this global before loading `app.js`:
+Define before loading `app.js`:
 
 ```html
 <script>
   window.BLENDCHESS_SERVER_URL = 'wss://blendchess-ws.<subdomain>.workers.dev';
 </script>
 ```
+
+## Current scaling note
+
+Worker currently routes all rooms through one Durable Object (`global-hub`).
+It works for small to moderate traffic, but room-sharded Durable Objects are recommended for larger scale.

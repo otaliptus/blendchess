@@ -596,7 +596,7 @@ wss.on('connection', (ws) => {
           game: result.forfeited ? room.createGameSnapshot() : undefined,
           moveIntent: payload,
         }));
-        if (result.forfeited) {
+        if (result.forfeited || result.reason === ERROR_CODES.ILLEGAL_MOVE) {
           broadcast(room, (targetId, targetRole) =>
             targetRole === 'player' && targetId === activePlayerId
               ? null

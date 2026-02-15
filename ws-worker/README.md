@@ -5,7 +5,7 @@ Cloudflare Worker + Durable Object backend for online games.
 ## Files
 
 - Entry: `src/index.js`
-- Durable Object: `src/room.js`
+- Durable Object authority: `src/room.js`
 - Wrangler config: `wrangler.jsonc`
 
 ## Run locally
@@ -24,14 +24,21 @@ npx wrangler login
 npx wrangler deploy
 ```
 
-Use the deployed host in websocket form:
+WebSocket URL format:
 - `https://<worker>.workers.dev` -> `wss://<worker>.workers.dev`
 
 ## Health endpoint
 
 - `GET /health`
 
-## Current topology note
+## Behavior parity with Node backend
 
-Current code routes all websocket sessions to one Durable Object name (`global-hub`).
-This is simple and works, but it is a scale bottleneck compared to room-sharded DO routing.
+- Authoritative move validation and room lifecycle.
+- Illegal moves are rejected without board mutation.
+- Hard mode supports illegal-in-check turn forfeits.
+- Spectators are read-only and receive authoritative game-state updates.
+
+## Topology note
+
+Current code routes all websocket sessions to a single Durable Object (`global-hub`).
+This is simple but can become a hotspot; room-sharded Durable Objects are the next scaling step.

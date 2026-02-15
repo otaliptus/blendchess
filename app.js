@@ -1587,18 +1587,13 @@
           return `${player.nickname || 'Player'} (${player.color === 'w' ? 'White' : 'Black'}, ${connectionState})`;
         })
         .join('  |  ');
-      const spectatorRosterText = multiplayer.spectators
-        .map((spectator) => {
-          const connectionState = spectator.connected === false ? 'disconnected' : 'connected';
-          return `${spectator.nickname || 'Spectator'} (${connectionState})`;
-        })
-        .join('  |  ');
-      if (playerRosterText && spectatorRosterText) {
-        playerRoster.textContent = `${playerRosterText}  ||  Spectators: ${spectatorRosterText}`;
+
+      if (playerRosterText && connectedSpectators > 0) {
+        playerRoster.textContent = `${playerRosterText}  ||  Spectators: ${connectedSpectators}`;
       } else if (playerRosterText) {
         playerRoster.textContent = playerRosterText;
-      } else if (spectatorRosterText) {
-        playerRoster.textContent = `Spectators: ${spectatorRosterText}`;
+      } else if (connectedSpectators > 0) {
+        playerRoster.textContent = `Spectators: ${connectedSpectators}`;
       } else {
         playerRoster.textContent = 'No players yet.';
       }

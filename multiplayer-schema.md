@@ -1,26 +1,33 @@
-# Multiplayer Protocol Schema
+# Blendchess Multiplayer Protocol Schema
 
-Version: `1.0.0`
+Version: `1.0.0`  
 Transport: WebSocket JSON envelopes.
+
+## Canonical envelope
 
 ```json
 {
   "type": "<TYPE>",
   "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty-for-spectator",
+  "playerId": "player-id-or-empty-for-spectator-targets",
   "payload": {},
   "version": "1.0.0"
 }
 ```
 
-Notes:
-- `roomCode` is required for every message except `create_room`.
-- In spectator responses, `playerId` can be an empty string.
-- Server and client reject version mismatches with `VERSION_MISMATCH`.
+## Global rules
 
-## Client -> Server
+- `roomCode` is required for all messages except `create_room`.
+- `version` must equal `1.0.0`, otherwise `error.errorCode = VERSION_MISMATCH`.
+- Spectator-targeted server messages commonly use `playerId: ""`.
+- `create_room` is the only room-less request.
+- Node backend enforces payload size and per-connection message-rate limits.
+- Worker backend currently does not mirror Node rate-limit/message-size guards yet.
+
+## Client -> Server messages
 
 ### `create_room`
+
 ```json
 {
   "type": "create_room",
@@ -32,13 +39,19 @@ Notes:
 }
 ```
 
+Notes:
+- `nickname` is optional.
+- `hardMode` is optional and coerced to boolean.
+
 ### `join_room`
+
 Player join:
+
 ```json
 {
   "type": "join_room",
   "roomCode": "ABCD12",
-  "playerId": "existing-player-id-for-resume-optional",
+  "playerId": "existing-player-id-when-resuming",
   "payload": {
     "nickname": "BlackPlayer",
     "resume": false,
@@ -49,6 +62,7 @@ Player join:
 ```
 
 Spectator join:
+
 ```json
 {
   "type": "join_room",
@@ -61,23 +75,27 @@ Spectator join:
 }
 ```
 
-Resume requires all of:
+Resume requirements:
 - `payload.resume === true`
-- `playerId`
-- `payload.resumeToken`
+- `playerId` must be provided
+- `payload.resumeToken` must be valid for that seat
 
 ### `game_state`
+
 ```json
 {
   "type": "game_state",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty-for-spectator",
   "payload": {},
   "version": "1.0.0"
 }
 ```
 
+Requests a fresh authoritative snapshot.
+
 ### `move_intent`
+
 ```json
 {
   "type": "move_intent",
@@ -92,7 +110,12 @@ Resume requires all of:
 }
 ```
 
+Notes:
+- `from` and `to` must be board coordinates `0..7`.
+- `promotion` is optional and must be valid promotion piece when present.
+
 ### `set_hard_mode`
+
 ```json
 {
   "type": "set_hard_mode",
@@ -103,7 +126,10 @@ Resume requires all of:
 }
 ```
 
+Only White can toggle this.
+
 ### `claim_draw`
+
 ```json
 {
   "type": "claim_draw",
@@ -116,7 +142,10 @@ Resume requires all of:
 }
 ```
 
+`reason` is optional. Backend validates draw eligibility.
+
 ### `resign`
+
 ```json
 {
   "type": "resign",
@@ -128,6 +157,7 @@ Resume requires all of:
 ```
 
 ### `new_game`
+
 ```json
 {
   "type": "new_game",
@@ -138,20 +168,26 @@ Resume requires all of:
 }
 ```
 
+Only White can request this.
+
 ### `ping`
+
 ```json
 {
   "type": "ping",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty-for-spectator",
   "payload": { "ts": 1700000000000 },
   "version": "1.0.0"
 }
 ```
 
-## Server -> Client
+Payload is echoed in `pong`.
+
+## Server -> Client messages
 
 ### `room_created`
+
 ```json
 {
   "type": "room_created",
@@ -162,18 +198,20 @@ Resume requires all of:
     "role": "player",
     "playerColor": "w",
     "playerId": "player-id",
-    "resumeToken": "player-resume-token",
+    "resumeToken": "resume-token",
     "players": [],
     "spectators": [],
     "gameStarted": false,
-    "game": { "turn": "w", "boardVersion": 0 }
+    "game": {}
   },
   "version": "1.0.0"
 }
 ```
 
 ### `room_joined`
-Player form:
+
+Player recipient form:
+
 ```json
 {
   "type": "room_joined",
@@ -190,7 +228,8 @@ Player form:
 }
 ```
 
-Spectator form:
+Spectator recipient form:
+
 ```json
 {
   "type": "room_joined",
@@ -209,6 +248,7 @@ Spectator form:
 ```
 
 ### `player_assigned`
+
 ```json
 {
   "type": "player_assigned",
@@ -216,47 +256,35 @@ Spectator form:
   "playerId": "player-id",
   "payload": {
     "playerId": "player-id",
-    "color": "b",
-    "nickname": "BlackPlayer",
-    "resumeToken": "player-resume-token"
+    "color": "w|b",
+    "nickname": "Player",
+    "resumeToken": "resume-token-optional"
   },
   "version": "1.0.0"
 }
 ```
 
+Notes:
+- Node includes `resumeToken` on create and join assignment.
+- Worker includes `resumeToken` on create assignment.
+- Worker join assignment currently omits `resumeToken`.
+
 ### `game_state`
+
 ```json
 {
   "type": "game_state",
   "roomCode": "ABCD12",
   "playerId": "player-id-or-empty",
   "payload": {
-    "game": {
-      "roomCode": "ABCD12",
-      "turn": "w",
-      "board": [],
-      "enPassant": null,
-      "moveNumber": 1,
-      "movePairs": [],
-      "events": [],
-      "captured": { "w": 0, "b": 0 },
-      "winner": null,
-      "result": null,
-      "gameOver": false,
-      "boardVersion": 0,
-      "halfMoveClock": 0,
-      "positionCounts": {},
-      "waitingForStart": true,
-      "hardMode": false,
-      "players": [],
-      "spectators": []
-    }
+    "game": {}
   },
   "version": "1.0.0"
 }
 ```
 
 ### `move_applied`
+
 ```json
 {
   "type": "move_applied",
@@ -274,7 +302,7 @@ Spectator form:
     },
     "san": "e4",
     "nextTurn": "b",
-    "game": { "boardVersion": 1 },
+    "game": {},
     "moveNumber": 1,
     "boardVersion": 1,
     "repetitionCount": 1
@@ -284,6 +312,7 @@ Spectator form:
 ```
 
 ### `move_rejected`
+
 ```json
 {
   "type": "move_rejected",
@@ -292,42 +321,51 @@ Spectator form:
   "payload": {
     "reasonCode": "ILLEGAL_MOVE",
     "forfeited": false,
+    "game": {},
     "moveIntent": {}
   },
   "version": "1.0.0"
 }
 ```
 
+Notes:
+- `forfeited` is optional and set for hard-mode forfeits.
+- `game` is included for forfeits.
+- `moveIntent` echoes the submitted payload on rejections.
+
 ### `draw_result`
+
 ```json
 {
   "type": "draw_result",
   "roomCode": "ABCD12",
   "playerId": "player-id-or-empty",
   "payload": {
-    "reason": "threefold",
+    "reason": "threefold|fiftyMove|seventyFiveMove|fivefold|insufficientMaterial",
     "winner": null,
-    "game": { "result": "threefold", "gameOver": true }
+    "game": {}
   },
   "version": "1.0.0"
 }
 ```
 
 ### `resign_result`
+
 ```json
 {
   "type": "resign_result",
   "roomCode": "ABCD12",
   "playerId": "player-id-or-empty",
   "payload": {
-    "winner": "White",
-    "game": { "result": "resign", "gameOver": true }
+    "winner": "White|Black",
+    "game": {}
   },
   "version": "1.0.0"
 }
 ```
 
 ### `error`
+
 ```json
 {
   "type": "error",
@@ -342,6 +380,7 @@ Spectator form:
 ```
 
 ### `pong`
+
 ```json
 {
   "type": "pong",
@@ -351,6 +390,47 @@ Spectator form:
   "version": "1.0.0"
 }
 ```
+
+## `game` snapshot payload schema
+
+`game_state`, `room_created.game`, `move_applied.game`, `draw_result.game`, and `resign_result.game` use this shape:
+
+```json
+{
+  "roomCode": "ABCD12",
+  "turn": "w|b",
+  "board": [],
+  "enPassant": null,
+  "moveNumber": 1,
+  "movePairs": [],
+  "events": [],
+  "captured": { "w": 0, "b": 0 },
+  "winner": null,
+  "result": null,
+  "gameOver": false,
+  "boardVersion": 0,
+  "hardMode": false,
+  "halfMoveClock": 0,
+  "positionCounts": {},
+  "waitingForStart": true,
+  "players": [],
+  "spectators": [],
+  "spectatorCount": 0
+}
+```
+
+Notes:
+- `board` is 8x8 with `null` or piece objects `{ type, color, hasMoved }`.
+- `spectatorCount` is present in Worker snapshots.
+- `spectatorCount` is currently absent in Node snapshots.
+
+## Runtime behavioral semantics
+
+- Illegal move attempts never mutate authoritative position.
+- Offending player receives `move_rejected`.
+- On illegal attempt, non-offending peers receive a fresh `game_state`.
+- In hard mode, illegal move while in check can end game with `result = "illegalForfeit"`.
+- Spectators are read-only and receive room/game updates.
 
 ## Error codes
 
@@ -366,3 +446,9 @@ Spectator form:
 - `PLAYER_NOT_FOUND`
 - `INVALID_DRAW_CLAIM`
 - `VERSION_MISMATCH`
+
+## Implementation notes
+
+- Node protocol enum contains `game_over`, but it is currently not emitted.
+- Worker protocol enum does not include `game_over`.
+- Treat `game_over` as reserved/unused for now.

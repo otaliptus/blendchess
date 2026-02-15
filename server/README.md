@@ -1,6 +1,6 @@
 # Blendchess Multiplayer Node Server
 
-Authoritative websocket server for online games.
+Authoritative websocket backend for online games.
 
 ## Run
 
@@ -12,7 +12,7 @@ npm start
 
 Default URL: `ws://localhost:3000`
 
-Change port:
+Optional port override:
 
 ```bash
 PORT=5000 npm start
@@ -27,21 +27,24 @@ npm test
 ## Architecture
 
 - Transport: WebSocket (`ws`) with JSON protocol envelopes.
-- Authority: all move legality and room lifecycle decisions are server-owned.
-- Rules: shared `chess-core.js` + `chessEngineFacade.js`.
-- Room state: in-memory map with TTL pruning for inactive rooms.
-- Session model:
-  - create/join room,
-  - color seat assignment,
-  - spectator support,
-  - resume token reconnect.
+- Authority: all legality and room lifecycle logic is server-owned.
+- Rules engine: `chess-core.js` through `chessEngineFacade.js`.
+- Room state: in-memory room map with TTL pruning.
+- Session model: create/join room, player seat assignment, spectator join, reconnect via resume token.
+
+## Behavior highlights
+
+- Illegal move attempts are rejected without mutating board state.
+- Hard mode can forfeit turn for illegal move while in check.
+- Opponent illegal attempts are masked in the player timeline.
+- Spectators receive authoritative state updates and can observe illegal-attempt events.
 
 ## Safety controls
 
-- Maximum websocket message size (`MAX_MESSAGE_BYTES`).
-- Per-connection message rate limiting (`RATE_LIMIT_MAX_MESSAGES` / second).
-- Protocol version validation (`PROTOCOL_VERSION`).
+- Maximum message size (`MAX_MESSAGE_BYTES`).
+- Per-connection message rate limiting (`RATE_LIMIT_MAX_MESSAGES` per second).
+- Protocol version guard (`PROTOCOL_VERSION`).
 
 ## Protocol docs
 
-Message and error schema is documented in `../multiplayer-schema.md`.
+Message and error schema: `../multiplayer-schema.md`.

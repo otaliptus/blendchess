@@ -646,6 +646,10 @@ export class GameHub extends DurableObject {
           nextTurn: room.turn,
         };
       }
+      addEvent(
+        room,
+        `${colorName(player.color)} attempted illegal move ${squareName(normalized.from)} to ${squareName(normalized.to)}. Move rejected.`,
+      );
       return { ok: false, reason: ERROR_CODES.ILLEGAL_MOVE };
     }
 
@@ -1130,7 +1134,7 @@ export class GameHub extends DurableObject {
             moveIntent: payload,
           }),
         );
-        if (result.forfeited) {
+        if (result.forfeited || result.reason === ERROR_CODES.ILLEGAL_MOVE) {
           this.broadcast(room, (targetId, targetRole) => {
             if (targetRole === 'player' && targetId === connection.playerId) {
               return null;

@@ -521,6 +521,15 @@ export class Room {
           nextTurn: this.state.turn,
         };
       }
+
+      if (outcome.reason === ERROR_CODES.ILLEGAL_MOVE) {
+        addEvent(
+          this.state,
+          `${core.colorName(player.color)} attempted illegal move ${squareText(payload.from)} to ${squareText(
+            payload.to,
+          )}. Move rejected.`,
+        );
+      }
       return outcome;
     }
 
