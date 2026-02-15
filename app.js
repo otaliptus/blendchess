@@ -1382,6 +1382,28 @@
     return marker.moverColor === multiplayer.color;
   }
 
+  function shouldShowCheckSquareHighlight(turnForBoard) {
+    if (!turnForBoard) {
+      return false;
+    }
+    if (state.hardMode && !shouldRevealBoardAndHistory() && !replay.active) {
+      return false;
+    }
+    if (shouldRevealBoardAndHistory() || replay.active) {
+      return true;
+    }
+    if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
+      return true;
+    }
+    if (isSpectatorMode()) {
+      return true;
+    }
+    if (!multiplayer.color) {
+      return false;
+    }
+    return turnForBoard === multiplayer.color;
+  }
+
   function maskMoveText(text) {
     if (!text) {
       return '';
@@ -1741,8 +1763,8 @@
     const inCheckForBoard = turnForBoard
       ? isInCheck(boardState, turnForBoard) && (!state.gameOver || replay.active)
       : false;
-    const allowCheckSquareHighlight = !state.hardMode || shouldRevealBoardAndHistory() || replay.active;
-    const checkedKingSquare = inCheckForBoard && turnForBoard
+    const showCheckSquareHighlight = shouldShowCheckSquareHighlight(turnForBoard);
+    const checkedKingSquare = showCheckSquareHighlight && inCheckForBoard && turnForBoard
       ? findKingSquare(boardState, turnForBoard)
       : null;
     const canEmphasizeTurn = !state.gameOver
@@ -1807,12 +1829,7 @@
         ) {
           button.classList.add('last-move-to');
         }
-        if (
-          allowCheckSquareHighlight
-          && checkedKingSquare
-          && checkedKingSquare.r === r
-          && checkedKingSquare.c === c
-        ) {
+        if (checkedKingSquare && checkedKingSquare.r === r && checkedKingSquare.c === c) {
           button.classList.add('check-king');
         }
 

@@ -15,3 +15,10 @@ Original prompt: Do the smoke pass test please
   - `create_room` websocket intent is sent.
 - Artifact: `/tmp/blendchess-smoke/smoke-pass.png`.
 - Additional finding: local Node server currently fails startup with `Identifier 'connectionMeta' has already been declared` in `server/server.js`.
+
+- Investigated multiplayer visibility leak during check states.
+- Updated `app.js` check-square highlight gating: in online rooms, checked-king square now highlights only for the checked player (or spectator/replay/revealed states), preventing attacker-side position leakage.
+- Installed `playwright` under `~/.codex/skills/develop-web-game/` to run the mandated web-game Playwright client.
+- Ran smoke render pass with:
+  `node --experimental-default-type=module $WEB_GAME_CLIENT --url http://127.0.0.1:8080 --actions-file $WEB_GAME_ACTIONS --iterations 1 --pause-ms 250 --screenshot-dir /tmp/blendchess-check-leak`
+- Verified screenshot artifact exists (`/tmp/blendchess-check-leak/shot-0.png`) and basic board/UI render remains intact; no Playwright-captured console error artifact was generated.
