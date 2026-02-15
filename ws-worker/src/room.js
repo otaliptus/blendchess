@@ -611,19 +611,31 @@ export class GameHub extends DurableObject {
 
     if (!candidate) {
       if (room.hardMode) {
-        room.turn = otherColor(player.color);
+        const offenderInCheck = isInCheck(room.board, player.color);
         room.boardVersion += 1;
-        addEvent(
-          room,
-          `${colorName(player.color)} attempted illegal move ${squareName(normalized.from)} to ${squareName(normalized.to)}. Turn forfeited by hard mode.`,
-        );
-        const terminal = evaluateTerminalState(room);
-        if (terminal.isTerminal) {
+
+        if (offenderInCheck) {
           room.gameOver = true;
-          room.result = terminal.result;
-          room.winner = terminal.winner;
-          if (terminal.eventText) {
-            addEvent(room, terminal.eventText);
+          room.result = 'illegalForfeit';
+          room.winner = colorName(otherColor(player.color));
+          addEvent(
+            room,
+            `${colorName(player.color)} attempted illegal move ${squareName(normalized.from)} to ${squareName(normalized.to)} while in check. ${room.winner} wins by forfeit.`,
+          );
+        } else {
+          room.turn = otherColor(player.color);
+          addEvent(
+            room,
+            `${colorName(player.color)} attempted illegal move ${squareName(normalized.from)} to ${squareName(normalized.to)}. Turn forfeited by hard mode.`,
+          );
+          const terminal = evaluateTerminalState(room);
+          if (terminal.isTerminal) {
+            room.gameOver = true;
+            room.result = terminal.result;
+            room.winner = terminal.winner;
+            if (terminal.eventText) {
+              addEvent(room, terminal.eventText);
+            }
           }
         }
         return {

@@ -299,7 +299,6 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      const connectionMeta = playerConnections.get(playerId);
       connectionMeta.roomCode = room.state.roomCode;
       connectionMeta.role = 'player';
       connectionMeta.seatId = assigned.player.id;

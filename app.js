@@ -289,6 +289,28 @@
     });
   }
 
+  function playIllegalMoveSound() {
+    const ctx = getAudioContext();
+    if (!ctx) {
+      return;
+    }
+
+    unlockAudio();
+    scheduleTone(ctx, {
+      frequency: 250,
+      duration: 0.1,
+      gain: 0.06,
+      type: 'sawtooth',
+    });
+    scheduleTone(ctx, {
+      frequency: 170,
+      delay: 0.05,
+      duration: 0.12,
+      gain: 0.06,
+      type: 'square',
+    });
+  }
+
   function playMoveFeedback(options = {}) {
     const {
       capture = false,
@@ -481,6 +503,7 @@
       : '';
     showTransientBanner(`Illegal: ${squareName(from)} → ${squareName(to)} (${reason}).${nextTurnSuffix}`);
     showIllegalOverlay(reason, from, to);
+    playIllegalMoveSound();
   }
 
   function getPgnResult() {
@@ -1340,6 +1363,25 @@
     return moverColor === perspectiveColor;
   }
 
+  function shouldShowCaptureMarker(marker) {
+    if (!marker?.square) {
+      return false;
+    }
+    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
+      return true;
+    }
+    if (!isOnlineMode()) {
+      return true;
+    }
+    if (!shouldMaskOpponentMoves()) {
+      return true;
+    }
+    if (!multiplayer.color) {
+      return false;
+    }
+    return marker.moverColor === multiplayer.color;
+  }
+
   function maskMoveText(text) {
     if (!text) {
       return '';
@@ -1360,11 +1402,16 @@
     return color === multiplayer.color ? text : MASKED_MOVE_TEXT;
   }
 
-  function formatEventForViewer(entry) {
+  function maskBoardSquareText(text) {
+    return String(text || '').replace(/\b[a-h][1-8]\b/gi, MASKED_MOVE_TEXT);
+  }
+
+  function formatEventForViewer(entry, eventColor = null) {
     if (!shouldMaskOpponentMoves()) {
       return entry;
     }
     const body = entry;
+    const normalizedEventColor = normalizeEventColor(eventColor) || inferEventColor(body);
 
     if (/^You played\s+/i.test(body) || /^Opponent moved/i.test(body)) {
       return entry;
@@ -1382,6 +1429,19 @@
     const genericPlayed = body.match(/^Move played:\s+(.+)$/);
     if (genericPlayed) {
       return `Move played: ${maskMoveText(genericPlayed[1])}`;
+    }
+
+    const illegalAttemptByColor = body.match(/^(White|Black) attempted illegal move\s+([a-h][1-8])\s+to\s+([a-h][1-8])(.*)$/i);
+    if (illegalAttemptByColor) {
+      const moverColor = illegalAttemptByColor[1] === 'White' ? 'w' : 'b';
+      if (multiplayer.color && moverColor !== multiplayer.color) {
+        return `${illegalAttemptByColor[1]} attempted illegal move ${MASKED_MOVE_TEXT} to ${MASKED_MOVE_TEXT}${illegalAttemptByColor[4] || ''}`;
+      }
+      return entry;
+    }
+
+    if (multiplayer.color && normalizedEventColor && normalizedEventColor !== multiplayer.color) {
+      return maskBoardSquareText(body);
     }
 
     return entry;
@@ -1628,7 +1688,7 @@
         return;
       }
       if (state.hardMode) {
-        modeText.textContent = 'Online hard mode: illegal moves forfeit turn (server enforced).';
+        modeText.textContent = 'Online hard mode: illegal moves forfeit turn; illegal while in check forfeits the game.';
       } else {
         modeText.textContent = 'Online strict mode: illegal moves are rejected by server.';
       }
@@ -1636,7 +1696,7 @@
     }
 
     if (state.hardMode) {
-      modeText.textContent = 'Hard mode: illegal moves lose turn.';
+      modeText.textContent = 'Hard mode: illegal moves lose turn; illegal while in check forfeits the game.';
     } else {
       modeText.textContent = 'Strict mode: illegal moves are rejected.';
     }
@@ -1682,9 +1742,11 @@
     const moveHighlight = getMoveHighlightForPly(markerPly);
     const turnForBoard = replaySnapshot ? replaySnapshot.turn : state.turn;
     const showMoveMarkers = shouldShowMoveHighlightForPly(markerPly);
+    const showCaptureMarkers = shouldShowCaptureMarker(captureMarker);
     const inCheckForBoard = turnForBoard
       ? isInCheck(boardState, turnForBoard) && (!state.gameOver || replay.active)
       : false;
+    const allowCheckSquareHighlight = !state.hardMode || shouldRevealBoardAndHistory() || replay.active;
     const checkedKingSquare = inCheckForBoard && turnForBoard
       ? findKingSquare(boardState, turnForBoard)
       : null;
@@ -1726,7 +1788,7 @@
           button.classList.add('selected');
         }
         if (
-          showMoveMarkers
+          showCaptureMarkers
           && captureMarkerClass
           && captureMarker?.square
           && captureMarker.square.r === r
@@ -1751,7 +1813,8 @@
           button.classList.add('last-move-to');
         }
         if (
-          checkedKingSquare
+          allowCheckSquareHighlight
+          && checkedKingSquare
           && checkedKingSquare.r === r
           && checkedKingSquare.c === c
         ) {
@@ -1768,7 +1831,7 @@
     for (const entry of state.events) {
       const normalized = normalizeEventEntry(entry);
       const item = document.createElement('li');
-      const formattedText = formatEventForViewer(normalized.text);
+      const formattedText = formatEventForViewer(normalized.text, normalized.color);
       item.textContent = `[${normalized.time} | M${normalized.move}] ${formattedText}`;
       item.classList.add(`event-${normalized.color || 'neutral'}`);
       eventsEl.appendChild(item);
@@ -1835,6 +1898,12 @@
     if (state.gameOver) {
       if (state.result === 'resign') {
         status = `${state.winner} wins by resignation.`;
+      } else if (state.result === 'illegalForfeit') {
+        status = `${state.winner} wins by hard-mode forfeit.`;
+      } else if (state.result === 'kingCaptured') {
+        status = state.winner
+          ? `${state.winner} wins by king capture.`
+          : 'Game ended: king missing from board.';
       } else if (state.result === 'stalemate') {
         status = 'Game ended in stalemate.';
       } else if (state.result === 'seventyFiveMove') {
@@ -2404,14 +2473,29 @@
 
       recordIllegalAttempt(from, { r, c }, reason, illegalColor, illegalPly);
       if (state.hardMode) {
-        addEvent(`${message}; ${reason} Turn forfeited.`, {
-          color: illegalColor,
-          move: illegalPly,
-        });
         state.selected = null;
-        state.turn = otherColor(state.turn);
-        showIllegalMoveBanner(from, { r, c }, reason, state.turn);
-        evaluateAfterTurnChange();
+        if (isInCheck(state.board, illegalColor)) {
+          const winnerColor = otherColor(illegalColor);
+          state.gameOver = true;
+          state.winner = colorName(winnerColor);
+          state.result = 'illegalForfeit';
+          addEvent(
+            `${message}; ${reason} Illegal move while in check. ${state.winner} wins by forfeit.`,
+            {
+              color: illegalColor,
+              move: illegalPly,
+            },
+          );
+          showIllegalMoveBanner(from, { r, c }, reason);
+        } else {
+          addEvent(`${message}; ${reason} Turn forfeited.`, {
+            color: illegalColor,
+            move: illegalPly,
+          });
+          state.turn = otherColor(state.turn);
+          showIllegalMoveBanner(from, { r, c }, reason, state.turn);
+          evaluateAfterTurnChange();
+        }
         render();
       } else {
         showIllegalMoveBanner(from, { r, c }, reason);
@@ -2719,7 +2803,13 @@
         );
       }
       if (attemptedFrom && attemptedTo) {
-        showIllegalMoveBanner(attemptedFrom, attemptedTo, reason);
+        const forfeitedTurn = payload.forfeited
+          && payload.game
+          && !payload.game.gameOver
+          && (payload.game.turn === 'w' || payload.game.turn === 'b')
+          ? payload.game.turn
+          : null;
+        showIllegalMoveBanner(attemptedFrom, attemptedTo, reason, forfeitedTurn);
       } else {
         showTransientBanner(`Illegal move (${reason})`);
         showIllegalOverlay(reason);

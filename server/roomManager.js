@@ -480,22 +480,36 @@ export class Room {
     const outcome = evaluateMove(this.state, player.color, payload);
     if (!outcome.ok) {
       if (outcome.reason === ERROR_CODES.ILLEGAL_MOVE && this.state.hardMode) {
-        this.state.turn = core.otherColor(player.color);
+        const offenderInCheck = core.isInCheck(this.state.board, player.color);
         this.state.boardVersion += 1;
-        addEvent(
-          this.state,
-          `${core.colorName(player.color)} attempted illegal move ${squareText(payload.from)} to ${squareText(
-            payload.to,
-          )}. Turn forfeited by hard mode.`,
-        );
 
-        const terminal = core.evaluateTerminalState(this.state);
-        if (terminal.isTerminal) {
+        if (offenderInCheck) {
           this.state.gameOver = true;
-          this.state.result = terminal.result;
-          this.state.winner = terminal.winner;
-          if (terminal.eventText) {
-            addEvent(this.state, terminal.eventText);
+          this.state.result = 'illegalForfeit';
+          this.state.winner = core.colorName(core.otherColor(player.color));
+          addEvent(
+            this.state,
+            `${core.colorName(player.color)} attempted illegal move ${squareText(payload.from)} to ${squareText(
+              payload.to,
+            )} while in check. ${this.state.winner} wins by forfeit.`,
+          );
+        } else {
+          this.state.turn = core.otherColor(player.color);
+          addEvent(
+            this.state,
+            `${core.colorName(player.color)} attempted illegal move ${squareText(payload.from)} to ${squareText(
+              payload.to,
+            )}. Turn forfeited by hard mode.`,
+          );
+
+          const terminal = core.evaluateTerminalState(this.state);
+          if (terminal.isTerminal) {
+            this.state.gameOver = true;
+            this.state.result = terminal.result;
+            this.state.winner = terminal.winner;
+            if (terminal.eventText) {
+              addEvent(this.state, terminal.eventText);
+            }
           }
         }
 

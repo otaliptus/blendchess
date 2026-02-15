@@ -88,6 +88,10 @@
     };
   }
 
+  function isCapturableTarget(target, color) {
+    return Boolean(target && target.color !== color && target.type !== 'K');
+  }
+
   function findKing(board, color) {
     for (let r = 0; r < 8; r += 1) {
       for (let c = 0; c < 8; c += 1) {
@@ -280,7 +284,7 @@
         const tc = c + dc;
         if (!inBounds(oneRow, tc)) continue;
         const target = board[oneRow][tc];
-        if (target && target.color !== color) {
+        if (isCapturableTarget(target, color)) {
           if (oneRow === 0 || oneRow === 7) {
             for (const promotion of PROMOTION_OPTIONS) {
               moves.push(createMove({ r, c }, { r: oneRow, c: tc }, { capture: true, promotion }));
@@ -309,7 +313,7 @@
         const tc = c + dc;
         if (!inBounds(tr, tc)) continue;
         const target = board[tr][tc];
-        if (!target || target.color !== color) {
+        if (!target || isCapturableTarget(target, color)) {
           moves.push(createMove({ r, c }, { r: tr, c: tc }, { capture: Boolean(target) }));
         }
       }
@@ -329,7 +333,7 @@
           if (!target) {
             moves.push(createMove({ r, c }, { r: tr, c: tc }));
           } else {
-            if (target.color !== color) {
+            if (isCapturableTarget(target, color)) {
               moves.push(createMove({ r, c }, { r: tr, c: tc }, { capture: true }));
             }
             break;
@@ -346,7 +350,7 @@
           const tc = c + dc;
           if (!inBounds(tr, tc)) continue;
           const target = board[tr][tc];
-          if (!target || target.color !== color) {
+          if (!target || isCapturableTarget(target, color)) {
             moves.push(createMove({ r, c }, { r: tr, c: tc }, { capture: Boolean(target) }));
           }
         }
@@ -471,6 +475,33 @@
   }
 
   function evaluateTerminalState(state) {
+    const whiteKing = findKing(state.board, 'w');
+    const blackKing = findKing(state.board, 'b');
+    if (!whiteKing && blackKing) {
+      return {
+        isTerminal: true,
+        winner: 'Black',
+        result: 'kingCaptured',
+        eventText: 'White king was captured. Black wins.',
+      };
+    }
+    if (!blackKing && whiteKing) {
+      return {
+        isTerminal: true,
+        winner: 'White',
+        result: 'kingCaptured',
+        eventText: 'Black king was captured. White wins.',
+      };
+    }
+    if (!whiteKing && !blackKing) {
+      return {
+        isTerminal: true,
+        winner: null,
+        result: 'kingCaptured',
+        eventText: 'Both kings are missing. Game over.',
+      };
+    }
+
     if (isCheckmate(state.board, state.turn, state.enPassant)) {
       return {
         isTerminal: true,

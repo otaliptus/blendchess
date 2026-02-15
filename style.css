@@ -294,6 +294,19 @@ body {
   padding: 16px 20px;
 }
 
+.site-footer {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.footer-text {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-soft);
+  text-align: center;
+}
+
 /* =============================================
    HEADER
    ============================================= */
