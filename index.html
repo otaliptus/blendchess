@@ -55,25 +55,50 @@
         </div>
       </section>
 
-      <section class="toolbar toolbar-multiplayer">
-        <label class="labeled-control" for="playMode">Mode</label>
-        <select id="playMode">
-          <option value="local">Local</option>
-          <option value="online">Online Friend</option>
-        </select>
+      <section class="multiplayer-setup" aria-label="Online setup">
+        <div class="setup-header">
+          <h2 class="setup-title"><span class="card-icon">&#128279;</span> Online setup</h2>
+          <p id="setupHint" class="setup-hint">Step 1: Switch to Online Friend and connect.</p>
+        </div>
+        <div class="setup-grid">
+          <article class="setup-card">
+            <h3>1) Connect</h3>
+            <label class="labeled-control" for="playMode">Mode</label>
+            <select id="playMode">
+              <option value="local">Local</option>
+              <option value="online">Online Friend</option>
+            </select>
+            <button id="connectServer" class="btn btn-secondary">Connect</button>
+            <details class="advanced-server">
+              <summary>Advanced: Server WS URL</summary>
+              <label class="labeled-control" for="serverUrl">Server WS URL</label>
+              <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
+            </details>
+          </article>
 
-        <label class="labeled-control" for="serverUrl">Server WS URL</label>
-        <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
-        <button id="connectServer" class="btn btn-secondary">Connect</button>
-        <button id="createRoom" class="btn btn-secondary">Create room</button>
+          <article class="setup-card">
+            <h3>2) Create or Join</h3>
+            <div class="setup-actions">
+              <button id="createRoom" class="btn btn-secondary">Create room</button>
+              <button id="copyRoomCode" class="btn btn-secondary">Copy invite</button>
+            </div>
+            <label class="labeled-control" for="joinRoomCode">Room code</label>
+            <input id="joinRoomCode" placeholder="Paste room code" />
+            <div class="setup-actions">
+              <button id="joinRoom" class="btn btn-secondary">Join room</button>
+              <button id="spectateRoom" class="btn btn-secondary">Spectate</button>
+            </div>
+          </article>
 
-        <input id="joinRoomCode" placeholder="Room code" />
-        <button id="joinRoom" class="btn btn-secondary">Join room</button>
-        <button id="spectateRoom" class="btn btn-secondary">Spectate</button>
-        <button id="copyRoomCode" class="btn btn-secondary">Copy invite</button>
-        <button id="claimDraw" class="btn btn-secondary">Claim draw</button>
-        <button id="resign" class="btn btn-danger">Resign</button>
-        <button id="leaveRoom" class="btn btn-danger">Leave room</button>
+          <article class="setup-card">
+            <h3>3) In-game actions</h3>
+            <div class="setup-actions">
+              <button id="claimDraw" class="btn btn-secondary">Claim draw</button>
+              <button id="resign" class="btn btn-danger">Resign</button>
+              <button id="leaveRoom" class="btn btn-danger">Leave room</button>
+            </div>
+          </article>
+        </div>
       </section>
 
       <div class="status" id="status"></div>
@@ -178,6 +203,7 @@
       </div>
     </main>
     <script src="chess-core.js"></script>
+    <script src="client/stateGuards.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

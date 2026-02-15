@@ -1,6 +1,6 @@
-# Blendchess Multiplayer Server
+# Blendchess Multiplayer Node Server
 
-This folder is the multiplayer authority host.
+Authoritative websocket server for online games.
 
 ## Run
 
@@ -10,20 +10,38 @@ npm install
 npm start
 ```
 
+Default URL: `ws://localhost:3000`
+
+Change port:
+
+```bash
+PORT=5000 npm start
+```
+
 Run tests:
 
 ```bash
 npm test
 ```
 
-Set `PORT` to change listening port:
+## Architecture
 
-```bash
-PORT=5000 npm start
-```
+- Transport: WebSocket (`ws`) with JSON protocol envelopes.
+- Authority: all move legality and room lifecycle decisions are server-owned.
+- Rules: shared `chess-core.js` + `chessEngineFacade.js`.
+- Room state: in-memory map with TTL pruning for inactive rooms.
+- Session model:
+  - create/join room,
+  - color seat assignment,
+  - spectator support,
+  - resume token reconnect.
 
-## Connection model
+## Safety controls
 
-- WebSocket server only (no HTTP API currently).
-- Clients send and receive JSON envelopes described in `multiplayer-schema.md`.
-- Server is authoritative; all move legality checks happen here.
+- Maximum websocket message size (`MAX_MESSAGE_BYTES`).
+- Per-connection message rate limiting (`RATE_LIMIT_MAX_MESSAGES` / second).
+- Protocol version validation (`PROTOCOL_VERSION`).
+
+## Protocol docs
+
+Message and error schema is documented in `../multiplayer-schema.md`.

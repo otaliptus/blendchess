@@ -1,73 +1,42 @@
 # Multiplayer Implementation Checklist
 
-## Phase 0: Foundation
+## Foundation and core
 
-- [ ] Define room lifecycle and IDs.
-  - Add `/server/package.json` and install dependencies.
-  - Add `/server/server.js` and `/server/protocol.js`.
-- [ ] Add README for run instructions.
-- [ ] Add `client` and `server` folders.
+- [x] Shared chess rules extracted to `chess-core.js`.
+- [x] Browser app uses shared core and state guard helpers.
+- [x] Protocol constants and envelope validation defined.
 
-## Phase 1: Rules and Engine Unification
+## Node authoritative backend
 
-- [ ] Extract pure logic into `chess-core.js`.
-  - Keep existing behavior parity.
-  - Add unit-like assertion scripts (manual console smoke tests if no test framework).
-- [ ] Add `server/chessEngineFacade.js`.
-- [ ] Ensure all legal move checks include king safety, castling, en passant, promotion variants.
+- [x] Room create/join/leave implemented.
+- [x] Player seat assignment and reconnect resume tokens implemented.
+- [x] Spectator join/read-only behavior implemented.
+- [x] Move validation and authoritative apply path implemented.
+- [x] Draw claim, resign, and new game flows implemented.
+- [x] Hard mode server enforcement implemented.
+- [x] Rate limit and message size guards implemented.
 
-## Phase 2: Authoritative Match Room
+## Cloudflare backend
 
-- [ ] Implement `server/roomManager.js`.
-  - create/join/leave flow.
-  - board state per room.
-  - move history and counters.
-- [ ] Implement message handling in `server/server.js`.
-- [ ] Send snapshots on connect/rejoin.
+- [x] Worker entry and Durable Object authority implemented.
+- [x] Room lifecycle and move flow mirrored in DO implementation.
+- [x] Durable Object persistence implemented.
+- [ ] Migrate from single `global-hub` DO to room-sharded DO mapping.
+- [ ] Add stronger worker-level abuse controls and telemetry.
 
-## Phase 3: Client Transport
+## Client UX and correctness
 
-- [ ] Add `client/network.js` with reconnect + heartbeat.
-- [ ] Add `client/multiplayer.js` session controller.
-- [ ] Add lobby and status UI in `index.html` and `style.css`.
+- [x] Local and online mode switch implemented.
+- [x] Invite URL create/join flow implemented.
+- [x] Stale state hydration guard enforced.
+- [x] History snapshot validation hardened.
+- [ ] Simplify create/join onboarding flow further.
+- [ ] Improve waiting-room indicators and first-time guidance.
 
-## Phase 4: UI Refactor
+## Tests
 
-- [ ] Split render logic from game logic:
-  - Add `render-sync.js` for board/side panel sync.
-  - Add `move-log-sync.js` for SAN event list rendering from authoritative payloads.
-- [ ] Update `app.js`:
-  - remove direct move apply flow.
-  - forward legal intents through `client/network.js` only.
-  - preserve blind mode piece visibility model.
-
-## Phase 5: Game Flow
-
-- [ ] Add `claim_draw` and `resign` from client to server.
-- [ ] Add claim/result modal/status updates.
-- [ ] Enforce turn ownership and prevent invalid UI clicks.
-
-## Phase 6: Reliability and Feedback
-
-- [ ] Add `ping/pong` heartbeat and stale connection handling.
-- [ ] Add reconnect behavior with last-known board version.
-- [ ] Add visible error banners.
-
-## Phase 7: Playtest & hardening
-
-- [ ] Two-device smoke tests.
-- [ ] Test castling rights after rook/king movement.
-- [ ] Test en passant on both sides.
-- [ ] Test underpromotion.
-- [ ] Test threefold/50-move draw claim behavior.
-- [ ] Test disconnect/refresh mid-game and state resync.
-- [ ] Add final polish in `style.css` for lobby and status clarity.
-
-## Acceptance criteria
-
-- Two browser clients can create/join the same room and play a full game.
-- The server rejects illegal moves and reports reason.
-- Both clients always converge to identical board and move log.
-- Draw/checkmate/stalemate outcomes are consistent across both clients.
-- Current local single-player remains functional as fallback mode.
-
+- [x] Room manager unit tests for draw and hard mode behavior.
+- [x] Room manager test for stale-seat cleanup ordering.
+- [x] State guard tests for stale version and malformed snapshots.
+- [ ] Add integration tests for full websocket flow (create/join/move/reconnect).
+- [ ] Add worker-path tests for DO message handling and persistence behavior.

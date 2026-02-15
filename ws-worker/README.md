@@ -1,28 +1,37 @@
 # Blendchess Cloudflare WebSocket Worker
 
-This Worker hosts multiplayer room state using a Durable Object.
+Cloudflare Worker + Durable Object backend for online games.
+
+## Files
+
+- Entry: `src/index.js`
+- Durable Object: `src/room.js`
+- Wrangler config: `wrangler.jsonc`
+
+## Run locally
+
+```bash
+cd ws-worker
+npm install
+npm run dev
+```
 
 ## Deploy
 
 ```bash
 cd ws-worker
 npx wrangler login
-npx wrangler whoami
 npx wrangler deploy
 ```
 
-After deploy, copy the Worker URL:
+Use the deployed host in websocket form:
+- `https://<worker>.workers.dev` -> `wss://<worker>.workers.dev`
 
-- `https://<worker-name>.<subdomain>.workers.dev`
-- WebSocket URL in game UI is: `wss://<worker-name>.<subdomain>.workers.dev`
-
-## Local worker dev
-
-```bash
-cd ws-worker
-npx wrangler dev
-```
-
-Health endpoint:
+## Health endpoint
 
 - `GET /health`
+
+## Current topology note
+
+Current code routes all websocket sessions to one Durable Object name (`global-hub`).
+This is simple and works, but it is a scale bottleneck compared to room-sharded DO routing.

@@ -1,55 +1,52 @@
-# Cloudflare Deploy (Pages + Durable Object Worker)
+# Cloudflare Deploy (Pages + Worker Durable Object)
 
-This repo now deploys as:
-
+This project deploys as:
 - Frontend: Cloudflare Pages (static files from repo root)
 - Multiplayer backend: Cloudflare Worker + Durable Object (`ws-worker/`)
 
-## 1) Deploy multiplayer Worker
+## 1) Deploy Worker backend
 
 ```bash
 cd ws-worker
 npx wrangler login
-npx wrangler whoami
 npx wrangler deploy
 ```
 
-Copy deployed Worker host from output:
+Configuration source: `ws-worker/wrangler.jsonc`
 
-- Example: `https://blendchess-ws.account-subdomain.workers.dev`
-- In app use WebSocket form: `wss://blendchess-ws.account-subdomain.workers.dev`
+Take deployed host from output, for example:
+- `https://blendchess-ws.<subdomain>.workers.dev`
+
+Use websocket form in app:
+- `wss://blendchess-ws.<subdomain>.workers.dev`
 
 ## 2) Deploy static app to Pages
 
 From repo root:
 
 ```bash
-cd /Users/talip/Desktop/blendchess
 npx wrangler pages project create blendchess
 npx wrangler pages deploy . --project-name=blendchess
 ```
 
-Pages URL will be like:
-
+Pages URL will look like:
 - `https://blendchess.pages.dev`
 
-## 3) Play with a friend
+## 3) Play online
 
-1. Open your Pages URL.
-2. Set Mode to `Online Friend`.
-3. In `Server WS URL`, paste your Worker URL in `wss://...` form.
+1. Open Pages URL.
+2. Set mode to `Online Friend`.
+3. Enter worker websocket URL (`wss://...`) if needed.
 4. Click `Connect`.
-5. Click `Create room` and share the room code.
-6. Friend opens same Pages URL, pastes same `wss://...` Worker URL, connects, joins with room code.
+5. Click `Create room` and share code/invite.
+6. Friend opens same Pages URL and joins with same room code.
 
-## Optional default Worker URL
+## Optional default WS URL
 
-If you want the app to auto-fill your deployed Worker URL, set this global before loading `app.js`:
+To prefill your backend URL, define this global before loading `app.js`:
 
 ```html
 <script>
-  window.BLENDCHESS_SERVER_URL = 'wss://blendchess-ws.account-subdomain.workers.dev';
+  window.BLENDCHESS_SERVER_URL = 'wss://blendchess-ws.<subdomain>.workers.dev';
 </script>
 ```
-
-Then no manual Server URL paste is needed.

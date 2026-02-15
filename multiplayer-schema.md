@@ -1,20 +1,22 @@
 # Multiplayer Protocol Schema
 
 Version: `1.0.0`
-
-All messages are JSON envelopes over WebSocket text frames:
+Transport: WebSocket JSON envelopes.
 
 ```json
 {
   "type": "<TYPE>",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty-for-spectator",
   "payload": {},
   "version": "1.0.0"
 }
 ```
 
-`roomCode` is required for all messages except `create_room`.
+Notes:
+- `roomCode` is required for every message except `create_room`.
+- In spectator responses, `playerId` can be an empty string.
+- Server and client reject version mismatches with `VERSION_MISMATCH`.
 
 ## Client -> Server
 
@@ -31,19 +33,49 @@ All messages are JSON envelopes over WebSocket text frames:
 ```
 
 ### `join_room`
+Player join:
+```json
+{
+  "type": "join_room",
+  "roomCode": "ABCD12",
+  "playerId": "existing-player-id-for-resume-optional",
+  "payload": {
+    "nickname": "BlackPlayer",
+    "resume": false,
+    "resumeToken": "optional"
+  },
+  "version": "1.0.0"
+}
+```
+
+Spectator join:
 ```json
 {
   "type": "join_room",
   "roomCode": "ABCD12",
   "payload": {
-    "nickname": "BlackPlayer",
-    "resume": true,
-    "resumeToken": "optional-token"
+    "nickname": "Spectator",
+    "spectator": true
   },
   "version": "1.0.0"
 }
 ```
-When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the join payload to reclaim a specific disconnected seat.
+
+Resume requires all of:
+- `payload.resume === true`
+- `playerId`
+- `payload.resumeToken`
+
+### `game_state`
+```json
+{
+  "type": "game_state",
+  "roomCode": "ABCD12",
+  "playerId": "player-id",
+  "payload": {},
+  "version": "1.0.0"
+}
+```
 
 ### `move_intent`
 ```json
@@ -60,13 +92,26 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 }
 ```
 
+### `set_hard_mode`
+```json
+{
+  "type": "set_hard_mode",
+  "roomCode": "ABCD12",
+  "playerId": "white-player-id",
+  "payload": { "enabled": true },
+  "version": "1.0.0"
+}
+```
+
 ### `claim_draw`
 ```json
 {
   "type": "claim_draw",
   "roomCode": "ABCD12",
   "playerId": "player-id",
-  "payload": { "reason": "threefold|fiftyMove|seventyFiveMove|fivefold|insufficientMaterial" },
+  "payload": {
+    "reason": "threefold|fiftyMove|seventyFiveMove|fivefold|insufficientMaterial"
+  },
   "version": "1.0.0"
 }
 ```
@@ -87,18 +132,7 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "new_game",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {},
-  "version": "1.0.0"
-}
-```
-
-### `game_state`
-```json
-{
-  "type": "game_state",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "white-player-id",
   "payload": {},
   "version": "1.0.0"
 }
@@ -125,20 +159,21 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
   "playerId": "player-id",
   "payload": {
     "roomCode": "ABCD12",
+    "role": "player",
     "playerColor": "w",
     "playerId": "player-id",
     "resumeToken": "player-resume-token",
-    "players": [
-      { "playerId": "player-id", "color": "w", "nickname": "WhitePlayer", "connected": true }
-    ],
+    "players": [],
+    "spectators": [],
     "gameStarted": false,
-    "game": { "turn": "w", "board": [], "boardVersion": 0 }
+    "game": { "turn": "w", "boardVersion": 0 }
   },
   "version": "1.0.0"
 }
 ```
 
 ### `room_joined`
+Player form:
 ```json
 {
   "type": "room_joined",
@@ -146,10 +181,27 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
   "playerId": "player-id",
   "payload": {
     "roomCode": "ABCD12",
-    "players": [
-      { "playerId": "uuid1", "color": "w", "nickname": "White", "connected": true },
-      { "playerId": "uuid2", "color": "b", "nickname": "Black", "connected": true }
-    ],
+    "role": "player",
+    "players": [],
+    "spectators": [],
+    "gameStarted": true
+  },
+  "version": "1.0.0"
+}
+```
+
+Spectator form:
+```json
+{
+  "type": "room_joined",
+  "roomCode": "ABCD12",
+  "playerId": "",
+  "payload": {
+    "roomCode": "ABCD12",
+    "role": "spectator",
+    "spectatorId": "spectator-id",
+    "players": [],
+    "spectators": [],
     "gameStarted": true
   },
   "version": "1.0.0"
@@ -177,25 +229,27 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "game_state",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty",
   "payload": {
     "game": {
       "roomCode": "ABCD12",
       "turn": "w",
-      "board": [[{"type":"R","color":"b","hasMoved":true}]],
+      "board": [],
       "enPassant": null,
-      "moveNumber": 9,
+      "moveNumber": 1,
       "movePairs": [],
       "events": [],
       "captured": { "w": 0, "b": 0 },
       "winner": null,
       "result": null,
       "gameOver": false,
-      "boardVersion": 18,
-      "halfMoveClock": 16,
+      "boardVersion": 0,
+      "halfMoveClock": 0,
       "positionCounts": {},
-      "waitingForStart": false,
-      "players": []
+      "waitingForStart": true,
+      "hardMode": false,
+      "players": [],
+      "spectators": []
     }
   },
   "version": "1.0.0"
@@ -207,7 +261,7 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "move_applied",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty",
   "payload": {
     "move": {
       "from": { "r": 6, "c": 4 },
@@ -220,9 +274,9 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
     },
     "san": "e4",
     "nextTurn": "b",
-    "game": { "turn": "b", "boardVersion": 19 },
+    "game": { "boardVersion": 1 },
     "moveNumber": 1,
-    "boardVersion": 19,
+    "boardVersion": 1,
     "repetitionCount": 1
   },
   "version": "1.0.0"
@@ -235,7 +289,11 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
   "type": "move_rejected",
   "roomCode": "ABCD12",
   "playerId": "player-id",
-  "payload": { "reasonCode": "ILLEGAL_MOVE", "moveIntent": {} },
+  "payload": {
+    "reasonCode": "ILLEGAL_MOVE",
+    "forfeited": false,
+    "moveIntent": {}
+  },
   "version": "1.0.0"
 }
 ```
@@ -245,11 +303,11 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "draw_result",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty",
   "payload": {
     "reason": "threefold",
-    "game": { "result": "threefold", "gameOver": true },
-    "winner": null
+    "winner": null,
+    "game": { "result": "threefold", "gameOver": true }
   },
   "version": "1.0.0"
 }
@@ -260,7 +318,7 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "resign_result",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty",
   "payload": {
     "winner": "White",
     "game": { "result": "resign", "gameOver": true }
@@ -274,8 +332,11 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "error",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": { "errorCode": "ROOM_FULL", "message": "Room is already full" },
+  "playerId": "player-id-or-empty",
+  "payload": {
+    "errorCode": "ROOM_FULL",
+    "message": "Room is already full"
+  },
   "version": "1.0.0"
 }
 ```
@@ -285,13 +346,13 @@ When `resume` is `true`, both `playerId` and `resumeToken` must be sent in the j
 {
   "type": "pong",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
+  "playerId": "player-id-or-empty",
   "payload": { "ts": 1700000000000 },
   "version": "1.0.0"
 }
 ```
 
-## Error Codes
+## Error codes
 
 - `INVALID_PAYLOAD`
 - `UNKNOWN_ROOM`

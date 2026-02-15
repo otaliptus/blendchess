@@ -8,6 +8,14 @@
     w: { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙' },
     b: { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' },
   };
+  const stateGuards = window.BlendChessStateGuards;
+  if (!stateGuards) {
+    throw new Error('State guards are required. Load client/stateGuards.js before app.js.');
+  }
+  const {
+    normalizeHistorySnapshot: normalizeStateHistorySnapshot,
+    shouldHydrateSnapshotVersion,
+  } = stateGuards;
 
   const WEBSOCKET_TYPES = {
     CREATE_ROOM: 'create_room',
@@ -67,6 +75,7 @@
   const multiplayerInfoEl = document.getElementById('multiplayerInfo');
   const roomCodeBadge = document.getElementById('roomCodeBadge');
   const playerRoster = document.getElementById('playerRoster');
+  const setupHintEl = document.getElementById('setupHint');
   const playModeEl = document.getElementById('playMode');
   const serverUrlEl = document.getElementById('serverUrl');
   const fileLabelsTop = Array.from(document.querySelectorAll('.file-labels-top span'));
@@ -466,8 +475,11 @@
 
   let illegalOverlayTimer = null;
 
-  function showIllegalMoveBanner(from, to, reason) {
-    showTransientBanner(`Illegal: ${squareName(from)} → ${squareName(to)} (${reason})`);
+  function showIllegalMoveBanner(from, to, reason, nextTurnColor = null) {
+    const nextTurnSuffix = nextTurnColor
+      ? ` Turn forfeited. ${colorName(nextTurnColor)} to move.`
+      : '';
+    showTransientBanner(`Illegal: ${squareName(from)} → ${squareName(to)} (${reason}).${nextTurnSuffix}`);
     showIllegalOverlay(reason, from, to);
   }
 
@@ -513,6 +525,11 @@
   }
 
   async function handleExportPgn() {
+    if (!state.gameOver) {
+      showTransientBanner('PGN export is available after the game ends.');
+      return;
+    }
+
     const pgnText = buildPgnText();
     const filename = `blendchess-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.pgn`;
     try {
@@ -762,48 +779,11 @@
     return JSON.parse(JSON.stringify(source || {}));
   }
 
-  function isValidHistoryPiece(piece) {
-    if (!piece || typeof piece !== 'object') {
-      return false;
-    }
-    if ((piece.color !== 'w' && piece.color !== 'b') || typeof piece.type !== 'string') {
-      return false;
-    }
-    if (!Object.prototype.hasOwnProperty.call(PIECE_SYMBOLS[piece.color], piece.type)) {
-      return false;
-    }
-    return typeof piece.hasMoved === 'boolean';
-  }
-
-  function isValidHistoryBoard(board) {
-    if (!Array.isArray(board) || board.length !== 8) {
-      return false;
-    }
-    return board.every((row) => (
-      Array.isArray(row)
-      && row.length === 8
-      && row.every((piece) => piece === null || isValidHistoryPiece(piece))
-    ));
-  }
-
-  function normalizeHistorySnapshot(rawSnapshot) {
-    if (!rawSnapshot || typeof rawSnapshot !== 'object') {
-      return null;
-    }
-    if (!isValidHistoryBoard(rawSnapshot.board)) {
-      return null;
-    }
-    return {
-      ...rawSnapshot,
-      board: cloneBoard(rawSnapshot.board),
-    };
-  }
-
   function normalizeHistoryEntry(raw) {
     if (!raw || typeof raw !== 'object') {
       return null;
     }
-    const snapshot = normalizeHistorySnapshot(raw.snapshot);
+    const snapshot = normalizeStateHistorySnapshot(raw.snapshot, cloneBoard, PIECE_SYMBOLS);
     if (!snapshot) {
       return null;
     }
@@ -979,7 +959,7 @@
     savePlayMode('local');
     setMode('local');
 
-    const snapshot = normalizeHistorySnapshot(entry.snapshot);
+    const snapshot = normalizeStateHistorySnapshot(entry.snapshot, cloneBoard, PIECE_SYMBOLS);
     if (!snapshot) {
       return false;
     }
@@ -1333,14 +1313,31 @@
   }
 
   function shouldShowMoveHighlightForPly(ply) {
-    if (!shouldMaskOpponentMoves()) {
-      return true;
-    }
-    const moverColor = moveColorFromPly(ply);
-    if (!moverColor || !multiplayer.color) {
+    if (state.hardMode && !shouldRevealBoardAndHistory() && !replay.active) {
       return false;
     }
-    return moverColor === multiplayer.color;
+
+    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
+      return true;
+    }
+
+    const moverColor = moveColorFromPly(ply);
+    if (!moverColor) {
+      return false;
+    }
+
+    if (isOnlineMode()) {
+      if (!multiplayer.color) {
+        return false;
+      }
+      return moverColor === multiplayer.color;
+    }
+
+    const perspectiveColor = getPerspectiveColor();
+    if (!perspectiveColor) {
+      return false;
+    }
+    return moverColor === perspectiveColor;
   }
 
   function maskMoveText(text) {
@@ -1554,6 +1551,51 @@
       roomCodeBadge.textContent = 'Room: not active';
       playerRoster.textContent = '';
     }
+    updateSetupHint();
+  }
+
+  function updateSetupHint() {
+    if (!setupHintEl) {
+      return;
+    }
+
+    if (!isOnlineMode()) {
+      setupHintEl.textContent = 'Local mode active. Switch to Online Friend to create or join a room.';
+      return;
+    }
+
+    if (!multiplayer.connected) {
+      setupHintEl.textContent = 'Step 1: Click Connect.';
+      return;
+    }
+
+    if (!multiplayer.roomCode) {
+      setupHintEl.textContent = 'Step 2: Create a room or paste a room code to join.';
+      return;
+    }
+
+    if (isSpectatorMode()) {
+      setupHintEl.textContent = `Spectating room ${multiplayer.roomCode}.`;
+      return;
+    }
+
+    const connectedPlayers = multiplayer.players.filter((player) => player.connected !== false).length;
+    if (connectedPlayers < 2) {
+      setupHintEl.textContent = `Room ${multiplayer.roomCode} is ready. Share invite and wait (${connectedPlayers}/2 connected).`;
+      return;
+    }
+
+    if (state.gameOver) {
+      setupHintEl.textContent = `Game ended in room ${multiplayer.roomCode}. Start a new game or leave room.`;
+      return;
+    }
+
+    if (isMyTurn()) {
+      setupHintEl.textContent = `Your turn as ${colorName(multiplayer.color || state.turn)}.`;
+      return;
+    }
+
+    setupHintEl.textContent = `Waiting for opponent move in room ${multiplayer.roomCode}.`;
   }
 
   function syncMultiplayerControlState() {
@@ -1639,9 +1681,26 @@
     const captureMarkerClass = resolveCaptureMarkerClass(captureMarker, perspectiveColor);
     const moveHighlight = getMoveHighlightForPly(markerPly);
     const turnForBoard = replaySnapshot ? replaySnapshot.turn : state.turn;
+    const showMoveMarkers = shouldShowMoveHighlightForPly(markerPly);
+    const inCheckForBoard = turnForBoard
+      ? isInCheck(boardState, turnForBoard) && (!state.gameOver || replay.active)
+      : false;
+    const checkedKingSquare = inCheckForBoard && turnForBoard
+      ? findKingSquare(boardState, turnForBoard)
+      : null;
+    const canEmphasizeTurn = !state.gameOver
+      && !replay.active
+      && !isSpectatorMode()
+      && (
+        !isOnlineMode()
+        || (multiplayer.connected && Boolean(multiplayer.roomCode) && Boolean(multiplayer.color))
+      );
+    const showTurnEmphasis = canEmphasizeTurn && isMyTurn() && !inCheckForBoard;
 
     updateBoardFrameLabels(flipped);
     boardEl.classList.toggle('revealed', revealAll);
+    boardEl.classList.toggle('turn-emphasis', showTurnEmphasis);
+    boardEl.classList.toggle('check-emphasis', inCheckForBoard);
 
     for (let displayR = 0; displayR < 8; displayR += 1) {
       for (let displayC = 0; displayC < 8; displayC += 1) {
@@ -1667,7 +1726,8 @@
           button.classList.add('selected');
         }
         if (
-          captureMarkerClass
+          showMoveMarkers
+          && captureMarkerClass
           && captureMarker?.square
           && captureMarker.square.r === r
           && captureMarker.square.c === c
@@ -1675,7 +1735,7 @@
           button.classList.add(captureMarkerClass);
         }
         if (
-          shouldShowMoveHighlightForPly(markerPly)
+          showMoveMarkers
           && moveHighlight?.from
           && moveHighlight.from.r === r
           && moveHighlight.from.c === c
@@ -1683,12 +1743,19 @@
           button.classList.add('last-move-from');
         }
         if (
-          shouldShowMoveHighlightForPly(markerPly)
+          showMoveMarkers
           && moveHighlight?.to
           && moveHighlight.to.r === r
           && moveHighlight.to.c === c
         ) {
           button.classList.add('last-move-to');
+        }
+        if (
+          checkedKingSquare
+          && checkedKingSquare.r === r
+          && checkedKingSquare.c === c
+        ) {
+          button.classList.add('check-king');
         }
 
         boardEl.appendChild(button);
@@ -1751,7 +1818,7 @@
       moveBody.appendChild(row);
     }
     if (exportPgnEl) {
-      exportPgnEl.disabled = getCurrentPly() === 0;
+      exportPgnEl.disabled = !state.gameOver;
     }
     updateReplayBannerAndControls();
   }
@@ -1790,6 +1857,8 @@
     } else if (isOnlineMode()) {
       if (isSpectatorMode()) {
         status = 'Spectating live game.';
+      } else if (inCheckNow && multiplayer.color && boardTurn === multiplayer.color) {
+        status = `CHECK. Your ${colorName(boardTurn)} king is under attack.`;
       } else if (isMyTurn()) {
         status = `${toMoveColorFromState()} to move.`;
       } else if (multiplayer.color) {
@@ -1797,16 +1866,37 @@
       } else {
         status = 'Waiting for seat assignment.';
       }
-    } else if (isInCheck(state.board, state.turn)) {
+    } else if (inCheckNow) {
       status = `${toMoveColorFromState()} is in check.`;
     } else {
       status = `${toMoveColorFromState()} to move.`;
     }
     statusEl.textContent = status;
+    statusEl.classList.remove('status-check', 'status-turn', 'status-waiting');
+    const canShowTurnStatus = !state.gameOver
+      && !replay.active
+      && !isSpectatorMode()
+      && (
+        !isOnlineMode()
+        || (multiplayer.connected && Boolean(multiplayer.roomCode) && Boolean(multiplayer.color))
+      );
+    if (inCheckNow) {
+      statusEl.classList.add('status-check');
+    } else if (canShowTurnStatus && isMyTurn()) {
+      statusEl.classList.add('status-turn');
+    } else if (isOnlineMode() && !state.gameOver && !isSpectatorMode()) {
+      statusEl.classList.add('status-waiting');
+    }
+
     if (checkAlertEl) {
+      checkAlertEl.classList.remove('turn-alert');
       if (inCheckNow) {
         checkAlertEl.hidden = false;
         checkAlertEl.textContent = `CHECK: ${colorName(boardTurn)}`;
+      } else if (canShowTurnStatus && isMyTurn()) {
+        checkAlertEl.hidden = false;
+        checkAlertEl.classList.add('turn-alert');
+        checkAlertEl.textContent = `YOUR TURN: ${colorName(boardTurn)}`;
       } else {
         checkAlertEl.hidden = true;
         checkAlertEl.textContent = 'CHECK';
@@ -1852,11 +1942,11 @@
     const incomingVersion = Number.isInteger(snapshot.boardVersion) ? snapshot.boardVersion : null;
     const currentVersion = Number.isInteger(state.boardVersion) ? state.boardVersion : null;
 
-    if (Number.isInteger(incomingVersion) && Number.isInteger(currentVersion)) {
-      if (incomingVersion < currentVersion) {
-        return false;
-      }
+    if (!shouldHydrateSnapshotVersion(incomingVersion, currentVersion)) {
+      return false;
+    }
 
+    if (Number.isInteger(incomingVersion) && Number.isInteger(currentVersion)) {
       if (incomingVersion > currentVersion + 1 && isOnlineMode()) {
         addEvent('Detected missed updates; applied latest server snapshot.');
       }
@@ -2313,7 +2403,6 @@
       }
 
       recordIllegalAttempt(from, { r, c }, reason, illegalColor, illegalPly);
-      showIllegalMoveBanner(from, { r, c }, reason);
       if (state.hardMode) {
         addEvent(`${message}; ${reason} Turn forfeited.`, {
           color: illegalColor,
@@ -2321,9 +2410,11 @@
         });
         state.selected = null;
         state.turn = otherColor(state.turn);
+        showIllegalMoveBanner(from, { r, c }, reason, state.turn);
         evaluateAfterTurnChange();
         render();
       } else {
+        showIllegalMoveBanner(from, { r, c }, reason);
         addEvent(`${message}. ${reason}`, {
           color: illegalColor,
           move: illegalPly,
@@ -2478,6 +2569,7 @@
       saveOnlineSession();
       addEvent(`Room ${multiplayer.roomCode} created. Share this code with your friend.`);
       joinRoomCodeEl.value = multiplayer.roomCode;
+      copyInviteLinkSilently(multiplayer.roomCode);
       render();
       return;
     }
@@ -2776,6 +2868,21 @@
       addEvent('Could not copy invite link. Copy room code manually.');
     }
     render();
+  }
+
+  function copyInviteLinkSilently(roomCode) {
+    if (!roomCode || !navigator?.clipboard?.writeText) {
+      return;
+    }
+
+    const inviteUrl = buildInviteUrl(roomCode);
+    navigator.clipboard.writeText(inviteUrl)
+      .then(() => {
+        showTransientBanner('Room created. Invite link copied.');
+      })
+      .catch(() => {
+        showTransientBanner(`Room ${roomCode} created.`);
+      });
   }
 
   function handleLeaveRoom() {

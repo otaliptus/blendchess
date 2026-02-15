@@ -82,3 +82,51 @@ test('soft mode keeps illegal moves for current player', () => {
   assert.equal(room.state.turn, 'w');
   assert.equal(room.state.boardVersion, 0);
 });
+
+test('assignPlayer cleans stale seat before capacity check', () => {
+  const room = new Room('ABC123');
+  room.assignPlayer('white-player', 'White');
+  room.assignPlayer('black-stale', 'Black');
+  room.removePlayer('black-stale');
+
+  const callOrder = [];
+  const originalCleanupDisconnectedColor = room.cleanupDisconnectedColor.bind(room);
+  const originalIsFull = room.isFull.bind(room);
+  room.cleanupDisconnectedColor = (color) => {
+    callOrder.push(`cleanup:${color}`);
+    return originalCleanupDisconnectedColor(color);
+  };
+  room.isFull = () => {
+    callOrder.push('isFull');
+    return originalIsFull();
+  };
+
+  const result = room.assignPlayer('black-player', 'Black');
+  assert.equal(result.ok, true);
+  assert.equal(result.player.color, 'b');
+  assert.equal(room.getPlayer('black-stale'), null);
+  assert.equal(callOrder[0], 'cleanup:b');
+  assert.equal(callOrder[1], 'isFull');
+});
+
+test('assignPlayer rejects additional connected player when room is full', () => {
+  const room = createReadyRoom();
+
+  const result = room.assignPlayer('third-player', 'Third');
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, ERROR_CODES.ROOM_FULL);
+});
+
+test('assignPlayer reconnect keeps color and marks player connected', () => {
+  const room = new Room('ABC123');
+  const first = room.assignPlayer('player-1', 'First', 'token-1');
+  assert.equal(first.ok, true);
+  const firstColor = first.player.color;
+
+  room.removePlayer('player-1');
+  const reconnect = room.assignPlayer('player-1', 'First Again', 'token-2');
+  assert.equal(reconnect.ok, true);
+  assert.equal(reconnect.player.color, firstColor);
+  assert.equal(reconnect.player.connected, true);
+  assert.equal(reconnect.player.resumeToken, 'token-2');
+});

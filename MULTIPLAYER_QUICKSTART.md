@@ -1,18 +1,18 @@
 # Multiplayer Quickstart
 
-## 1) Start the game files
+## Option A: Run local static app + local Node multiplayer server
 
-From the repo root:
+### 1) Start static files
+From repo root:
 
 ```bash
 python3 -m http.server 8080
 ```
 
-Open `http://localhost:8080` in your browser.
+Open `http://localhost:8080`.
 
-## 2) Start the multiplayer server
-
-In a separate terminal:
+### 2) Start multiplayer server
+In a second terminal:
 
 ```bash
 cd server
@@ -20,49 +20,29 @@ npm install
 npm start
 ```
 
-Server default is `ws://localhost:3000`.
+Default WebSocket URL is `ws://localhost:3000`.
 
-## 3) Play with a friend on the same machine
+### 3) Play on two tabs/devices
+1. Open app and set `Mode` to `Online Friend`.
+2. Click `Connect`.
+3. Click `Create room`.
+4. Share room code or invite link.
+5. Second player connects and joins with the same code.
 
-1. On the first tab:
-   - Change **Mode** to `Online Friend`.
-   - Click **Connect**.
-   - Click **Create room**.
-   - Copy the invite link with **Copy invite**.
-2. On the second tab (same machine, same local page):
-   - Change **Mode** to `Online Friend`.
-   - Click **Connect**.
-   - Paste room code in **Room code** input.
-   - Click **Join room**.
-3. You should see:
-   - Host assigned White.
-   - Joiner assigned Black.
-   - The board updates after each valid move.
+## Option B: Use Cloudflare Worker backend
 
-## 4) Local mode (single-browser)
+1. Deploy Worker from `ws-worker/`.
+2. Convert worker URL to websocket form (`https://...` -> `wss://...`).
+3. In app, paste that URL into `Server WS URL` and connect.
+4. Create room and share code.
 
-Set **Mode** to `Local` and play immediately as before.
+## Local mode fallback
 
-## 5) Quick checks
+Set `Mode` to `Local` and play pass-and-play with no backend.
 
-- If a move fails in online mode, check the Events list for a server message.
-- If friend cannot move, verify seat colors and whose turn are shown in the status bar.
+## Quick troubleshooting
 
-## 6) Cloudflare hosted mode (Pages + Worker)
-
-Use this when playing with a friend over the internet without running your local Node server.
-
-1. Deploy multiplayer Worker:
-   - `cd ws-worker`
-   - `npx wrangler login`
-   - `npx wrangler deploy`
-   - Copy Worker URL, convert to WebSocket URL (`https://...` -> `wss://...`).
-2. Deploy static app to Pages:
-   - `cd /Users/talip/Desktop/blendchess`
-   - `npx wrangler pages project create blendchess`
-   - `npx wrangler pages deploy . --project-name=blendchess`
-3. Play:
-   - Open Pages URL.
-   - Set mode to `Online Friend`.
-   - Paste Worker `wss://...` URL in `Server WS URL`.
-   - Connect, create room, share room code.
+- `Room does not exist`: verify exact room code and backend URL.
+- `Room full`: two players are already seated.
+- `Not your turn`: move ownership is enforced server-side.
+- `Version mismatch`: refresh both clients so protocol versions match.

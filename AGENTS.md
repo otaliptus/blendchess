@@ -1,20 +1,27 @@
-Build/Lint/Test: no build system; open `index.html` directly or run `python3 -m http.server`.
-Build/Lint/Test: no automated lint/test commands are defined; single-test runs are not applicable.
-Architecture: static browser app with three files: `index.html` (markup), `style.css` (styles), `app.js` (logic).
-Architecture: `app.js` is an IIFE managing game state, rules, DOM rendering, and events.
-Architecture: no backend services, databases, or external APIs.
-Important DOM IDs: `board`, `status`, `modeText`, `captures`, `events`, `moveBody`, `hardMode`, `newGame`.
+Build/Lint/Test: frontend has no build step; open `index.html` directly or run `python3 -m http.server 8080`.
+Build/Lint/Test: frontend has no automated lint/test commands.
+Build/Lint/Test: Node multiplayer server lives in `server/`; run `npm start`, tests via `npm test`.
+Build/Lint/Test: Cloudflare worker lives in `ws-worker/`; run `npm run dev` or `npm run deploy`.
+Architecture: browser client is static (`index.html`, `style.css`, `app.js`) and uses `chess-core.js` for rules.
+Architecture: `app.js` is an IIFE that manages UI state, rendering, local mode, and online websocket session flow.
+Architecture: shared rule engine is `chess-core.js` (board creation, move generation, legality, SAN, terminal checks).
+Architecture: client-side state validation helpers are in `client/stateGuards.js`.
+Architecture: two multiplayer backends exist: Node server (`server/server.js`) and Cloudflare Worker+DO (`ws-worker/src/*`).
+Architecture: Worker currently routes all sessions to one Durable Object hub (`global-hub`).
+Important DOM IDs: `board`, `status`, `modeText`, `captures`, `events`, `moveBody`, `checkAlert`, `flashBanner`, `illegalOverlay`, `exportPgn`, `hardMode`, `newGame`, `playMode`, `serverUrl`, `connectServer`, `createRoom`, `joinRoomCode`, `joinRoom`, `spectateRoom`, `copyRoomCode`, `leaveRoom`, `claimDraw`, `resign`.
 Game data: board is 8x8 array of piece objects `{ type, color, hasMoved }`.
-Moves: `generatePseudoMoves`, `generateLegalMoves`, and `applyMove` are core rules helpers.
-Rendering: `renderBoard`, `renderEvents`, `renderMoves`, `renderStatus` update the UI.
-Rules handling: keep `isInCheck`, `isCheckmate`, `isStalemate` consistent with move generation.
-Code style: vanilla ES2015+, no frameworks or build tools.
+Moves: `generateLegalMoves`, `applyMove`, `moveToSAN`, `evaluateTerminalState` are core move/rules helpers.
+Rendering: `renderBoard`, `renderEvents`, `renderMoves`, `renderStatus` update UI from canonical `state`.
+Online hydration: stale snapshot versions are rejected via `shouldHydrateSnapshotVersion`.
+History safety: saved snapshots are validated/cloned via `normalizeHistorySnapshot`.
+Protocol: message types and error codes are in `server/protocol.js` and mirrored in client/worker.
+Code style: vanilla ES2015+, no frameworks, no bundler.
 Code style: use `const` by default, `let` only when reassigned.
-Code style: prefer pure helper functions and small utilities over inline logic.
+Code style: prefer small pure helpers over inline branching.
 Code style: camelCase for variables/functions, UPPER_SNAKE for constants.
-Formatting: 2-space indentation, semicolons, trailing commas in multiline literals.
-DOM: query once at top-level and reuse cached elements.
-State: update `state` immutably when possible; clone board before analysis.
-Error handling: guard invalid states early; return `null`/`false` rather than throwing.
-Comments: add only when rules logic is non-obvious.
+Formatting: 2-space indentation, semicolons, trailing commas for multiline literals.
+DOM: query once at top-level and reuse cached references.
+State: clone board before analysis and before snapshot export; avoid mutating shared references.
+Error handling: guard invalid states early; return `null`/`false` or protocol errors instead of throwing.
+Comments: add only when chess rules or protocol behavior is non-obvious.
 External rules: none found (.cursor, CLAUDE, Windsurf, Cline, Goose, Copilot).
