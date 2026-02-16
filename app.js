@@ -2901,14 +2901,51 @@
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
-      multiplayer.resumeToken = null;
-      if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, { nickname: 'Player' }, roomCode)) {
+      const currentRoomCode = normalizeRoomCode(multiplayer.roomCode || '');
+      const saved = readSavedOnlineSession();
+      const hasLiveResume = currentRoomCode === roomCode
+        && Boolean(multiplayer.playerId)
+        && Boolean(multiplayer.resumeToken);
+      const hasSavedResume = Boolean(saved)
+        && saved.roomCode === roomCode
+        && Boolean(saved.playerId)
+        && Boolean(saved.resumeToken);
+      const resumeIdentity = hasLiveResume
+        ? {
+          playerId: multiplayer.playerId,
+          resumeToken: multiplayer.resumeToken,
+          color: multiplayer.color || null,
+        }
+        : hasSavedResume
+          ? {
+            playerId: saved.playerId,
+            resumeToken: saved.resumeToken,
+            color: saved.color || null,
+          }
+          : null;
+      const joinPayload = resumeIdentity
+        ? { nickname: 'Player', resume: true, resumeToken: resumeIdentity.resumeToken }
+        : { nickname: 'Player' };
+
+      if (resumeIdentity) {
+        multiplayer.playerId = resumeIdentity.playerId;
+        multiplayer.resumeToken = resumeIdentity.resumeToken;
+        multiplayer.color = resumeIdentity.color;
+      } else {
+        multiplayer.playerId = null;
+        multiplayer.resumeToken = null;
+        multiplayer.color = null;
+      }
+
+      if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, joinPayload, roomCode)) {
         return;
       }
       multiplayer.role = 'player';
       multiplayer.spectatorId = null;
       multiplayer.roomCode = roomCode;
-      addEvent(`Joining room ${roomCode}...`);
+      addEvent(resumeIdentity
+        ? `Rejoining saved seat in room ${roomCode}...`
+        : `Joining room ${roomCode}...`);
       syncMultiplayerPanel();
       syncMultiplayerControlState();
     } catch (error) {

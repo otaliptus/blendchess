@@ -430,6 +430,7 @@ Notes:
 - Offending player receives `move_rejected`.
 - On illegal attempt, non-offending peers receive a fresh `game_state`.
 - In hard mode, illegal moves usually forfeit turn, except when the mover is in check; those in-check illegal attempts are rejected without forfeit.
+- If an active game has a disconnected player seat, non-resume `join_room` is rejected (`PLAYER_NOT_FOUND`) and the seat stays reserved for resume token reclaim.
 - Spectators are read-only and receive room/game updates.
 
 ## Error codes

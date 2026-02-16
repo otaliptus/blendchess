@@ -352,6 +352,12 @@ wss.on('connection', (ws) => {
       const requestedPlayerId = typeof envelope.playerId === 'string' ? envelope.playerId.trim() : '';
       const wantsResume = Boolean(payload && payload.resume);
       const resumeToken = typeof payload.resumeToken === 'string' ? payload.resumeToken.trim() : '';
+      const hasDisconnectedSeat = room.state.playerOrder.some((seatId) => {
+        const seatPlayer = room.getPlayer(seatId);
+        return seatPlayer && seatPlayer.connected === false;
+      });
+      const gameInProgress = !room.state.gameOver
+        && (room.state.movePairs.length > 0 || room.state.boardVersion > 0);
 
       if (payload.spectator) {
         if (room.getPlayer(connectionMeta?.seatId || '')) {
@@ -398,6 +404,16 @@ wss.on('connection', (ws) => {
             spectators: room.getSpectatorAssignments(),
             gameStarted: !room.state.waitingForStart,
           }),
+        );
+        return;
+      }
+
+      if (!wantsResume && hasDisconnectedSeat && gameInProgress) {
+        sendError(
+          playerId,
+          room.state.roomCode,
+          ERROR_CODES.PLAYER_NOT_FOUND,
+          'A player seat is reserved for reconnect. Resume your previous session to rejoin this game.',
         );
         return;
       }

@@ -9,6 +9,7 @@
 - Stale snapshots are ignored via monotonic version checks.
 - Saved history entries are validated before restore.
 - Spectators are read-only.
+- If an active game has a disconnected player seat, that seat is reserved for token-based resume (plain join is rejected).
 - Spectator header shows count (`Spectators: N`) instead of spectator names.
 - PGN export is available only after game over.
 

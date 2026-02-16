@@ -904,6 +904,12 @@ export class GameHub extends DurableObject {
         : '';
       const wantsResume = Boolean(payload && payload.resume);
       const resumeToken = typeof payload.resumeToken === 'string' ? payload.resumeToken.trim() : '';
+      const hasDisconnectedSeat = room.playerOrder.some((seatId) => {
+        const seatPlayer = room.players[seatId];
+        return seatPlayer && seatPlayer.connected === false;
+      });
+      const gameInProgress = !room.gameOver
+        && (room.movePairs.length > 0 || room.boardVersion > 0);
 
       if (wantsResume) {
         if (!requestedPlayerId || !resumeToken || !isResumeTokenValid(room, requestedPlayerId, resumeToken)) {
@@ -931,6 +937,17 @@ export class GameHub extends DurableObject {
         }
 
         connection.playerId = requestedPlayerId;
+      }
+
+      if (!wantsResume && hasDisconnectedSeat && gameInProgress) {
+        this.sendErrorToConnection(
+          connectionId,
+          envelope.roomCode,
+          connection.playerId || '',
+          ERROR_CODES.PLAYER_NOT_FOUND,
+          'A player seat is reserved for reconnect. Resume your previous session to rejoin this game.',
+        );
+        return;
       }
 
       connection.roomCode = envelope.roomCode;

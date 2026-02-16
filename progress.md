@@ -28,3 +28,10 @@ Original prompt: Do the smoke pass test please
 - Updated behavior docs (`GAMEPLAY_EXPECTATIONS.md`, `ARCHITECTURE.md`, `server/README.md`, `ws-worker/README.md`, `multiplayer-schema.md`).
 - Added Node backend test: `hard mode rejects illegal move without forfeit when mover is in check`.
 - Verification: `node --check app.js`, `node --check server/roomManager.js`, `node --check ws-worker/src/room.js`, `npm test` in `server/`, plus Playwright smoke screenshot `/tmp/blendchess-hardmode-check/shot-0.png`.
+- Investigated reconnect seat hijack: manual `Join room` path did not attempt resume and could re-enter as a fresh seat.
+- Client fix: `handleJoinRoom()` now prefers same-room resume identity (live or saved `playerId` + `resumeToken`) and sends `join_room` with `{ resume: true, resumeToken }` when available.
+- Server guard fix (Node + Worker): when a game has already started and a player seat is disconnected, plain non-resume join is rejected with `PLAYER_NOT_FOUND` so disconnected seats remain reserved for rightful resume.
+- Validation: syntax checks for `app.js`, `server/server.js`, `ws-worker/src/room.js`; `npm test` in `server/` passes.
+- Targeted Node websocket simulation confirms behavior:
+  - plain join after disconnect in active game -> `PLAYER_NOT_FOUND` (reserved seat)
+  - token resume -> same seat/color restored.
