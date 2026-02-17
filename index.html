@@ -17,6 +17,7 @@
     <!-- ===== GAME LOBBY MODAL ===== -->
     <div id="gameLobbyOverlay" class="lobby-overlay">
       <div class="lobby-modal">
+        <button id="lobbyClose" class="lobby-close-btn" type="button" aria-label="Close">&#10005;</button>
         <!-- Step 1: Choose mode -->
         <div id="lobbyStep1" class="lobby-step active">
           <div class="lobby-header">
@@ -137,7 +138,7 @@
     <main class="page">
       <header class="header">
         <div class="header-left">
-          <h1><span class="logo-icon">&#9822;</span> BlendChess</h1>
+          <h1><a id="headerLogo" href="./" class="logo-link"><span class="logo-icon">&#9822;</span> BlendChess</a></h1>
         </div>
         <div class="header-right">
           <div class="header-controls">

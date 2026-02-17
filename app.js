@@ -153,6 +153,7 @@
   const lobbyLocalBtn = document.getElementById('lobbyLocal');
   const lobbyOnlineBtn = document.getElementById('lobbyOnline');
   const lobbyBackBtn = document.getElementById('lobbyBack');
+  const lobbyCloseBtn = document.getElementById('lobbyClose');
   const lobbyHardModeEl = document.getElementById('lobbyHardMode');
   const openLobbyBtn = document.getElementById('openLobby');
   const lobbyResumeSectionEl = document.getElementById('lobbyResumeSection');
@@ -3765,6 +3766,7 @@
   }
   if (openLobbyBtn) {
     openLobbyBtn.addEventListener('click', showLobby);
+  if (lobbyCloseBtn) lobbyCloseBtn.addEventListener('click', hideLobby);
   }
   if (lobbyResumeBtnEl) {
     lobbyResumeBtnEl.addEventListener('click', handleLobbyResume);

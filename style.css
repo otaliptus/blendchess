@@ -426,6 +426,7 @@ body {
 }
 
 .lobby-modal {
+  position: relative;
   background: var(--lobby-bg);
   border-radius: 20px;
   padding: 36px 40px;
@@ -433,6 +434,35 @@ body {
   width: 92%;
   box-shadow: 0 24px 80px var(--lobby-shadow);
   animation: lobbyFadeIn 0.4s ease;
+}
+
+.lobby-close-btn {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.lobby-close-btn:hover {
+  color: var(--text, #222);
+  background: var(--btn-ghost-hover-bg, rgba(0,0,0,0.08));
+}
+
+.logo-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.logo-link:hover {
+  opacity: 0.8;
 }
 
 @keyframes lobbyFadeIn {
