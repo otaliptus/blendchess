@@ -8,6 +8,40 @@
     w: { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙' },
     b: { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' },
   };
+
+  // SVG piece set (Cburnett/Wikipedia style) — inline for zero dependencies
+  const PIECE_SVG = {
+    wK: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 11.63V6M20 8h5" stroke-linejoin="miter"/><path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5" fill="#fff" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-6.5-13.5-3.5-16 4V27v-3.5c-3.5-7.5-13-10.5-16-4-3 6 5 10 5 10V37z" fill="#fff"/><path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0"/></g></svg>`,
+    wQ: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linejoin="round"><circle cx="6" cy="12" r="2"/><circle cx="14" cy="9" r="2"/><circle cx="22.5" cy="8" r="2"/><circle cx="31" cy="9" r="2"/><circle cx="39" cy="12" r="2"/><path d="M9 26c8.5-1.5 21-1.5 27 0l2.5-12.5L31 25l-.3-14.1-5.2 13.6-3-14.5-3 14.5-5.2-13.6L14 25 6.5 13.5 9 26z" stroke-linecap="butt"/><path d="M9 26c0 2 1.5 2 2.5 4 1 1.5 1 1 .5 3.5-1.5 1-1.5 2.5-1.5 2.5-1.5 1.5.5 2.5.5 2.5 6.5 1 16.5 1 23 0 0 0 1.5-1 0-2.5 0 0 .5-1.5-1-2.5-.5-2.5-.5-2 .5-3.5 1-2 2.5-2 2.5-4-8.5-1.5-18.5-1.5-27 0z" stroke-linecap="butt"/><path d="M11.5 30c3.5-1 18.5-1 22 0M12 33.5c6-1 15-1 21 0" fill="none"/></g></svg>`,
+    wR: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 39h27v-3H9v3zm3-3v-4h21v4H12zm-1-22V9h4v2h5V9h5v2h5V9h4v5" stroke-linecap="butt"/><path d="M34 14l-3 3H14l-3-3"/><path d="M15 17v7h15v-7" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M14 29.5v2.5h17v-2.5" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M14 29.5L11 14h23l-3 15.5H14z" stroke-linecap="butt"/><path d="M14 17v-3h17v3H14z" fill="none" stroke-linejoin="miter"/></g></svg>`,
+    wB: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#fff" stroke-linecap="butt"><path d="M9 36c3.39-.97 10.11.43 13.5-2 3.39 2.43 10.11 1.03 13.5 2 0 0 1.65.54 3 2-.68.97-1.65.99-3 .5-3.39-.97-10.11.46-13.5-1-3.39 1.46-10.11.03-13.5 1-1.354.49-2.323.47-3-.5 1.354-1.94 3-2 3-2z"/><path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/><path d="M25 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0z"/></g><path d="M17.5 26h10M15 30h15m-7.5-14.5v5M20 18h5" stroke-linejoin="miter"/></g></svg>`,
+    wN: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21" fill="#fff"/><path d="M24 18c.38 2.91-5.55 7.37-8 9-3 2-2.82 4.34-5 4-1.042-.94 1.41-3.04 0-3-1 0 .19 1.23-1 2-1 0-4.003 1-4-4 0-2 6-12 6-12s1.89-1.9 2-3.5c-.73-.994-.5-2-.5-3 1-1 3 2.5 3 2.5h2s.78-1.992 2.5-3c1 0 1 3 1 3" fill="#fff"/><path d="M9.5 25.5a.5.5 0 1 1-1 0 .5.5 0 1 1 1 0zm5.433-9.75a.5 1.5 30 1 1-.866-.5.5 1.5 30 1 1 .866.5z" fill="#000"/></g></svg>`,
+    wP: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03C15.41 27.09 11 31.58 11 39.5H34c0-7.92-4.41-12.41-7.41-13.47C28.06 24.84 29 23.03 29 21c0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z" fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+    bK: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 11.63V6" stroke-linejoin="miter"/><path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5" fill="#000" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-6.5-13.5-3.5-16 4V27v-3.5c-3.5-7.5-13-10.5-16-4-3 6 5 10 5 10V37z" fill="#000"/><path d="M20 8h5" stroke-linejoin="miter"/><path d="M32 29.5s8.5-4 6.03-9.65C34.15 14 25 18 22.5 24.5l.01 2.1-.01-2.1C20 18 9.906 14 6.997 19.85 4.5 25.5 11.85 29.5 11.85 29.5" fill="none" stroke="#fff"/><path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0" stroke="#fff"/></g></svg>`,
+    bQ: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#000" stroke="none"><circle cx="6" cy="12" r="2.75"/><circle cx="14" cy="9" r="2.75"/><circle cx="22.5" cy="8" r="2.75"/><circle cx="31" cy="9" r="2.75"/><circle cx="39" cy="12" r="2.75"/></g><path d="M9 26c8.5-1.5 21-1.5 27 0l2.5-12.5L31 25l-.3-14.1-5.2 13.6-3-14.5-3 14.5-5.2-13.6L14 25 6.5 13.5 9 26z" fill="#000" stroke-linecap="butt"/><path d="M9 26c0 2 1.5 2 2.5 4 1 1.5 1 1 .5 3.5-1.5 1-1.5 2.5-1.5 2.5-1.5 1.5.5 2.5.5 2.5 6.5 1 16.5 1 23 0 0 0 1.5-1 0-2.5 0 0 .5-1.5-1-2.5-.5-2.5-.5-2 .5-3.5 1-2 2.5-2 2.5-4-8.5-1.5-18.5-1.5-27 0z" fill="#000" stroke-linecap="butt"/><path d="M11 38.5a35 35 1 0 0 23 0" fill="none" stroke-linecap="butt"/><path d="M11 29a35 35 1 0 1 23 0m-21.5 2.5h20m-21 3h21" fill="none" stroke="#fff"/></g></svg>`,
+    bR: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 39h27v-3H9v3zm3.5-7l1.5-2.5h17l1.5 2.5h-20zm-.5 4v-4h21v4H12z" stroke-linecap="butt"/><path d="M14 29.5v-13h17v13H14z" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M14 16.5L11 14h23l-3 2.5H14zM11 14V9h4v2h5V9h5v2h5V9h4v5H11z" stroke-linecap="butt"/><path d="M12 35.5h21m-20-4h19m-18-2h17m-17-13h17M11 14h23" fill="none" stroke="#fff" stroke-width="1" stroke-linejoin="miter"/></g></svg>`,
+    bB: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#000" stroke-linecap="butt"><path d="M9 36c3.39-.97 10.11.43 13.5-2 3.39 2.43 10.11 1.03 13.5 2 0 0 1.65.54 3 2-.68.97-1.65.99-3 .5-3.39-.97-10.11.46-13.5-1-3.39 1.46-10.11.03-13.5 1-1.354.49-2.323.47-3-.5 1.354-1.94 3-2 3-2z"/><path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/><path d="M25 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0z"/></g><path d="M17.5 26h10M15 30h15m-7.5-14.5v5M20 18h5" stroke="#fff" stroke-linejoin="miter"/></g></svg>`,
+    bN: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21" fill="#000"/><path d="M24 18c.38 2.91-5.55 7.37-8 9-3 2-2.82 4.34-5 4-1.042-.94 1.41-3.04 0-3-1 0 .19 1.23-1 2-1 0-4.003 1-4-4 0-2 6-12 6-12s1.89-1.9 2-3.5c-.73-.994-.5-2-.5-3 1-1 3 2.5 3 2.5h2s.78-1.992 2.5-3c1 0 1 3 1 3" fill="#000"/><path d="M9.5 25.5a.5.5 0 1 1-1 0 .5.5 0 1 1 1 0z" fill="#fff" stroke="#fff"/><circle cx="14.5" cy="15.5" r="1" fill="#fff" stroke="none"/><path d="M24.55 10.4l-.45 1.45.5.15c3.15 1 5.65 2.49 7.9 6.75M24.55 10.4z" fill="none" stroke="#fff" stroke-width=".75"/></g></svg>`,
+    bP: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03C15.41 27.09 11 31.58 11 39.5H34c0-7.92-4.41-12.41-7.41-13.47C28.06 24.84 29 23.03 29 21c0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z" fill="#000" stroke="#000" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+  };
+
+  function getPieceSvgKey(color, type) {
+    return `${color}${type}`;
+  }
+
+  function createPieceSvgElement(color, type) {
+    const key = getPieceSvgKey(color, type);
+    const svgStr = PIECE_SVG[key];
+    if (!svgStr) return null;
+    const wrapper = document.createElement('span');
+    wrapper.innerHTML = svgStr;
+    const svg = wrapper.firstChild;
+    if (svg) {
+      svg.classList.add('piece-svg');
+      svg.setAttribute('aria-label', `${color === 'w' ? 'White' : 'Black'} ${type}`);
+    }
+    return svg;
+  }
   const stateGuards = window.BlendChessStateGuards;
   if (!stateGuards) {
     throw new Error('State guards are required. Load client/stateGuards.js before app.js.');
@@ -60,7 +94,8 @@
   const modeText = document.getElementById('modeText');
   const capturesEl = document.getElementById('captures');
   const eventsEl = document.getElementById('events');
-  const moveBody = document.getElementById('moveBody');
+  const moveListInlineEl = document.getElementById('moveListInline');
+  const moveBody = moveListInlineEl; // backward compat alias
   const replayFirstEl = document.getElementById('replayFirst');
   const replayPrevEl = document.getElementById('replayPrev');
   const replayNextEl = document.getElementById('replayNext');
@@ -78,10 +113,6 @@
   const setupHintEl = document.getElementById('setupHint');
   const playModeEl = document.getElementById('playMode');
   const serverUrlEl = document.getElementById('serverUrl');
-  const fileLabelsTop = Array.from(document.querySelectorAll('.file-labels-top span'));
-  const fileLabelsBottom = Array.from(document.querySelectorAll('.file-labels-bottom span'));
-  const rankLabelsLeft = Array.from(document.querySelectorAll('.rank-labels-left span'));
-  const rankLabelsRight = Array.from(document.querySelectorAll('.rank-labels-right span'));
   const connectServerEl = document.getElementById('connectServer');
   const createRoomEl = document.getElementById('createRoom');
   const joinRoomCodeEl = document.getElementById('joinRoomCode');
@@ -97,6 +128,30 @@
   const uiThemeEl = document.getElementById('uiTheme');
   const boardThemeEl = document.getElementById('boardTheme');
   const illegalOverlayEl = document.getElementById('illegalOverlay');
+
+  // New UI elements
+  const gameLobbyOverlay = document.getElementById('gameLobbyOverlay');
+  const lobbyStep1 = document.getElementById('lobbyStep1');
+  const lobbyStep2 = document.getElementById('lobbyStep2');
+  const lobbyLocalBtn = document.getElementById('lobbyLocal');
+  const lobbyOnlineBtn = document.getElementById('lobbyOnline');
+  const lobbyBackBtn = document.getElementById('lobbyBack');
+  const lobbyHardModeEl = document.getElementById('lobbyHardMode');
+  const openLobbyBtn = document.getElementById('openLobby');
+  const ingameToolbar = document.getElementById('ingameToolbar');
+  const promotionPickerEl = document.getElementById('promotionPicker');
+  const promotionPiecesEl = document.getElementById('promotionPieces');
+  const topPlayerNameEl = document.getElementById('topPlayerName');
+  const topPlayerMaterialEl = document.getElementById('topPlayerMaterial');
+  const topPlayerCapturesEl = document.getElementById('topPlayerCaptures');
+  const bottomPlayerNameEl = document.getElementById('bottomPlayerName');
+  const bottomPlayerMaterialEl = document.getElementById('bottomPlayerMaterial');
+  const bottomPlayerCapturesEl = document.getElementById('bottomPlayerCaptures');
+  const uiThemeHeaderEl = document.getElementById('uiThemeHeader');
+  const boardThemeHeaderEl = document.getElementById('boardThemeHeader');
+
+  // Drag-and-drop state
+  let dragState = null;
 
   const {
     createInitialState,
@@ -1160,11 +1215,27 @@
     return invite.toString();
   }
 
+  function syncAllThemeSelectors(uiTheme, boardTheme) {
+    const allUiSelects = [uiThemeEl, uiThemeHeaderEl];
+    const allBoardSelects = [boardThemeEl, boardThemeHeaderEl];
+    for (const sel of allUiSelects) {
+      if (sel && [...sel.options].some((o) => o.value === uiTheme)) {
+        sel.value = uiTheme;
+      }
+    }
+    for (const sel of allBoardSelects) {
+      if (sel && [...sel.options].some((o) => o.value === boardTheme)) {
+        sel.value = boardTheme;
+      }
+    }
+  }
+
   function applyThemes() {
-    const uiTheme = (uiThemeEl && uiThemeEl.value) || 'classic';
-    const boardTheme = (boardThemeEl && boardThemeEl.value) || 'wood';
+    const uiTheme = (uiThemeEl && uiThemeEl.value) || (uiThemeHeaderEl && uiThemeHeaderEl.value) || 'classic';
+    const boardTheme = (boardThemeEl && boardThemeEl.value) || (boardThemeHeaderEl && boardThemeHeaderEl.value) || 'chesscom';
     document.documentElement.setAttribute('data-ui-theme', uiTheme);
     document.documentElement.setAttribute('data-board-theme', boardTheme);
+    syncAllThemeSelectors(uiTheme, boardTheme);
     try {
       window.localStorage.setItem(UI_THEME_STORAGE_KEY, uiTheme);
       window.localStorage.setItem(BOARD_THEME_STORAGE_KEY, boardTheme);
@@ -1175,11 +1246,15 @@
     try {
       const savedUi = window.localStorage.getItem(UI_THEME_STORAGE_KEY);
       const savedBoard = window.localStorage.getItem(BOARD_THEME_STORAGE_KEY);
-      if (savedUi && uiThemeEl && [...uiThemeEl.options].some((o) => o.value === savedUi)) {
-        uiThemeEl.value = savedUi;
+      if (savedUi) {
+        syncAllThemeSelectors(savedUi, null);
+        if (uiThemeEl) uiThemeEl.value = savedUi;
+        if (uiThemeHeaderEl) uiThemeHeaderEl.value = savedUi;
       }
-      if (savedBoard && boardThemeEl && [...boardThemeEl.options].some((o) => o.value === savedBoard)) {
-        boardThemeEl.value = savedBoard;
+      if (savedBoard) {
+        syncAllThemeSelectors(null, savedBoard);
+        if (boardThemeEl) boardThemeEl.value = savedBoard;
+        if (boardThemeHeaderEl) boardThemeHeaderEl.value = savedBoard;
       }
     } catch {}
     applyThemes();
@@ -1469,29 +1544,9 @@
     return entry;
   }
 
-  function updateBoardFrameLabels(flipped) {
-    const files = flipped
-      ? ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a']
-      : ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-    const ranks = flipped
-      ? ['1', '2', '3', '4', '5', '6', '7', '8']
-      : ['8', '7', '6', '5', '4', '3', '2', '1'];
-
-    for (let i = 0; i < 8; i += 1) {
-      if (fileLabelsTop[i + 1]) {
-        fileLabelsTop[i + 1].textContent = files[i];
-      }
-      if (fileLabelsBottom[i + 1]) {
-        fileLabelsBottom[i + 1].textContent = files[i];
-      }
-      if (rankLabelsLeft[i]) {
-        rankLabelsLeft[i].textContent = ranks[i];
-      }
-      if (rankLabelsRight[i]) {
-        rankLabelsRight[i].textContent = ranks[i];
-      }
-    }
-  }
+  // Board frame labels are now integrated as coordinate labels inside edge squares.
+  // This function is kept as a no-op for backward compatibility.
+  function updateBoardFrameLabels() {}
 
   function toMoveColorFromState() {
     return colorName(state.turn);
@@ -1776,7 +1831,13 @@
       );
     const showTurnEmphasis = canEmphasizeTurn && isMyTurn() && !inCheckForBoard;
 
-    updateBoardFrameLabels(flipped);
+    const files = flipped
+      ? ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a']
+      : ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const ranks = flipped
+      ? ['1', '2', '3', '4', '5', '6', '7', '8']
+      : ['8', '7', '6', '5', '4', '3', '2', '1'];
+
     boardEl.classList.toggle('revealed', revealAll);
     boardEl.classList.toggle('turn-emphasis', showTurnEmphasis);
     boardEl.classList.toggle('check-emphasis', inCheckForBoard);
@@ -1788,15 +1849,38 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'square';
-        button.classList.add((displayR + displayC) % 2 === 0 ? 'light' : 'dark');
+        const isLight = (displayR + displayC) % 2 === 0;
+        button.classList.add(isLight ? 'light' : 'dark');
         button.dataset.r = String(r);
         button.dataset.c = String(c);
-        button.addEventListener('click', () => handleSquareClick(r, c));
+
+        // Integrated coordinate labels
+        if (displayR === 7) {
+          const fileLabel = document.createElement('span');
+          fileLabel.className = 'coord-label coord-file';
+          fileLabel.textContent = files[displayC];
+          button.appendChild(fileLabel);
+        }
+        if (displayC === 0) {
+          const rankLabel = document.createElement('span');
+          rankLabel.className = 'coord-label coord-rank';
+          rankLabel.textContent = ranks[displayR];
+          button.appendChild(rankLabel);
+        }
 
         const piece = boardState[r][c];
+        let hasPiece = false;
         if (piece && (showAllPieces || piece.color === visibleColor)) {
-          button.classList.add('visible', 'piece', piece.color === 'w' ? 'white' : 'black');
-          button.textContent = PIECE_SYMBOLS[piece.color][piece.type];
+          hasPiece = true;
+          button.classList.add('visible');
+          const svgEl = createPieceSvgElement(piece.color, piece.type);
+          if (svgEl) {
+            button.appendChild(svgEl);
+          } else {
+            // Fallback to text
+            button.classList.add('piece', piece.color === 'w' ? 'white' : 'black');
+            button.textContent = PIECE_SYMBOLS[piece.color][piece.type];
+          }
         } else {
           button.classList.add('hidden');
         }
@@ -1804,6 +1888,7 @@
         if (!replay.active && state.selected && state.selected.r === r && state.selected.c === c) {
           button.classList.add('selected');
         }
+
         if (
           showCaptureMarkers
           && captureMarkerClass
@@ -1833,9 +1918,135 @@
           button.classList.add('check-king');
         }
 
+        // Click handler (also used by drag-and-drop end)
+        button.addEventListener('click', () => handleSquareClick(r, c));
+
+        // Drag-and-drop: start drag on pointerdown for pieces
+        if (hasPiece && !replay.active && !state.gameOver) {
+          button.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            startDrag(e, r, c, piece);
+          });
+        }
+
         boardEl.appendChild(button);
       }
     }
+
+    renderPlayerBars(boardState, perspectiveColor);
+  }
+
+  // Drag-and-drop implementation
+  function startDrag(e, r, c, piece) {
+    const activeColor = getActiveColor();
+    if (!activeColor || piece.color !== activeColor) return;
+    if (isOnlineMode() && !isMyTurn()) return;
+
+    // Select the piece
+    state.selected = { r, c };
+    renderBoard();
+
+    const svgHtml = PIECE_SVG[getPieceSvgKey(piece.color, piece.type)];
+    if (!svgHtml) return;
+
+    const ghost = document.createElement('div');
+    ghost.className = 'drag-ghost';
+    ghost.innerHTML = svgHtml;
+    document.body.appendChild(ghost);
+
+    const boardRect = boardEl.getBoundingClientRect();
+    const sqSize = boardRect.width / 8;
+    ghost.style.width = sqSize + 'px';
+    ghost.style.height = sqSize + 'px';
+    ghost.style.left = (e.clientX - sqSize / 2) + 'px';
+    ghost.style.top = (e.clientY - sqSize / 2) + 'px';
+
+    // Mark source square
+    const srcSquare = boardEl.querySelector(`[data-r="${r}"][data-c="${c}"]`);
+    if (srcSquare) srcSquare.classList.add('drag-source');
+
+    dragState = { fromR: r, fromC: c, ghost, sqSize };
+
+    const onPointerMove = (ev) => {
+      ghost.style.left = (ev.clientX - sqSize / 2) + 'px';
+      ghost.style.top = (ev.clientY - sqSize / 2) + 'px';
+    };
+
+    const onPointerUp = (ev) => {
+      document.removeEventListener('pointermove', onPointerMove);
+      document.removeEventListener('pointerup', onPointerUp);
+      ghost.remove();
+
+      // Determine target square from pointer position
+      const targetBoardRect = boardEl.getBoundingClientRect();
+      const col = Math.floor((ev.clientX - targetBoardRect.left) / (targetBoardRect.width / 8));
+      const row = Math.floor((ev.clientY - targetBoardRect.top) / (targetBoardRect.height / 8));
+
+      if (col >= 0 && col < 8 && row >= 0 && row < 8) {
+        const perspectiveColor = getPerspectiveColor();
+        const flipped = perspectiveColor === 'b';
+        const targetR = flipped ? 7 - row : row;
+        const targetC = flipped ? 7 - col : col;
+
+        if (targetR !== r || targetC !== c) {
+          handleSquareClick(targetR, targetC);
+        }
+      }
+
+      dragState = null;
+    };
+
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+  }
+
+  // Player bars rendering
+  function renderPlayerBars(boardState, perspectiveColor) {
+    const flipped = perspectiveColor === 'b';
+    const topColor = flipped ? 'w' : 'b';
+    const bottomColor = flipped ? 'b' : 'w';
+
+    // Names
+    const getPlayerName = (color) => {
+      if (isOnlineMode()) {
+        const player = multiplayer.players.find((p) => p.color === color);
+        if (player) return player.nickname || (color === 'w' ? 'White' : 'Black');
+      }
+      return color === 'w' ? 'White' : 'Black';
+    };
+
+    topPlayerNameEl.textContent = getPlayerName(topColor);
+    bottomPlayerNameEl.textContent = getPlayerName(bottomColor);
+
+    // Material count
+    const PIECE_VALUES = { P: 1, N: 3, B: 3, R: 5, Q: 9, K: 0 };
+    let whiteMaterial = 0;
+    let blackMaterial = 0;
+    const capturedByWhite = []; // pieces black lost (white captured)
+    const capturedByBlack = []; // pieces white lost (black captured)
+
+    // Count material on board
+    for (let rr = 0; rr < 8; rr++) {
+      for (let cc = 0; cc < 8; cc++) {
+        const p = boardState[rr][cc];
+        if (p) {
+          if (p.color === 'w') whiteMaterial += PIECE_VALUES[p.type] || 0;
+          else blackMaterial += PIECE_VALUES[p.type] || 0;
+        }
+      }
+    }
+
+    const diff = whiteMaterial - blackMaterial;
+    topPlayerMaterialEl.textContent = (topColor === 'w' && diff > 0) || (topColor === 'b' && diff < 0)
+      ? `+${Math.abs(diff)}`
+      : '';
+    bottomPlayerMaterialEl.textContent = (bottomColor === 'w' && diff > 0) || (bottomColor === 'b' && diff < 0)
+      ? `+${Math.abs(diff)}`
+      : '';
+
+    // Clear capture displays
+    topPlayerCapturesEl.replaceChildren();
+    bottomPlayerCapturesEl.replaceChildren();
   }
 
   function renderEvents() {
@@ -1851,47 +2062,58 @@
   }
 
   function renderMoves() {
-    moveBody.replaceChildren();
+    moveListInlineEl.replaceChildren();
     const activePly = replay.active ? replay.ply : getCurrentPly();
     for (const move of state.movePairs) {
-      const row = document.createElement('tr');
-      const num = document.createElement('td');
-      const white = document.createElement('td');
-      const black = document.createElement('td');
       const whitePly = ((move.num - 1) * 2) + 1;
       const blackPly = whitePly + 1;
-      num.textContent = String(move.num);
-      white.textContent = formatMoveForViewer(move.white || '', 'w');
-      black.textContent = formatMoveForViewer(move.black || '', 'b');
-      if (white.textContent === MASKED_MOVE_TEXT) {
-        white.classList.add('masked');
-      }
-      if (black.textContent === MASKED_MOVE_TEXT) {
-        black.classList.add('masked');
-      }
-      if (move.white && state.gameOver) {
-        white.classList.add('move-cell');
-        white.addEventListener('click', () => {
-          setReplayPly(whitePly);
-        });
+
+      // Move number
+      const numSpan = document.createElement('span');
+      numSpan.className = 'move-number';
+      numSpan.textContent = `${move.num}.`;
+      moveListInlineEl.appendChild(numSpan);
+
+      // White move
+      if (move.white) {
+        const whiteSpan = document.createElement('span');
+        whiteSpan.className = 'move-cell';
+        whiteSpan.textContent = formatMoveForViewer(move.white, 'w');
+        if (whiteSpan.textContent === MASKED_MOVE_TEXT) {
+          whiteSpan.classList.add('masked');
+        }
+        if (state.gameOver) {
+          whiteSpan.classList.add('clickable');
+          whiteSpan.addEventListener('click', () => setReplayPly(whitePly));
+        }
         if (activePly === whitePly) {
-          white.classList.add('active');
+          whiteSpan.classList.add('active');
         }
+        moveListInlineEl.appendChild(whiteSpan);
       }
-      if (move.black && state.gameOver) {
-        black.classList.add('move-cell');
-        black.addEventListener('click', () => {
-          setReplayPly(blackPly);
-        });
+
+      // Black move
+      if (move.black) {
+        const blackSpan = document.createElement('span');
+        blackSpan.className = 'move-cell';
+        blackSpan.textContent = formatMoveForViewer(move.black, 'b');
+        if (blackSpan.textContent === MASKED_MOVE_TEXT) {
+          blackSpan.classList.add('masked');
+        }
+        if (state.gameOver) {
+          blackSpan.classList.add('clickable');
+          blackSpan.addEventListener('click', () => setReplayPly(blackPly));
+        }
         if (activePly === blackPly) {
-          black.classList.add('active');
+          blackSpan.classList.add('active');
         }
+        moveListInlineEl.appendChild(blackSpan);
       }
-      row.appendChild(num);
-      row.appendChild(white);
-      row.appendChild(black);
-      moveBody.appendChild(row);
     }
+
+    // Auto-scroll to bottom
+    moveListInlineEl.scrollTop = moveListInlineEl.scrollHeight;
+
     if (exportPgnEl) {
       exportPgnEl.disabled = !state.gameOver;
     }
@@ -2201,17 +2423,48 @@
   }
 
   function pickPromotionFromOptions(promotionMoves) {
-    const options = [...new Set(promotionMoves.map((move) => move.promotion).filter(Boolean))];
-    const defaultValue = options.includes('Q') ? 'Q' : options[0];
-    while (true) {
-      const response = window.prompt(`Choose promotion: ${options.join('/')}`, defaultValue);
-      if (response === null) return null;
+    return new Promise((resolve) => {
+      const options = [...new Set(promotionMoves.map((move) => move.promotion).filter(Boolean))];
+      const color = promotionMoves[0]?.piece?.color || state.turn;
 
-      const normalized = response.trim().toUpperCase()[0];
-      if (options.includes(normalized)) {
-        return promotionMoves.find((move) => move.promotion === normalized);
+      promotionPiecesEl.replaceChildren();
+      for (const opt of options) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const svgEl = createPieceSvgElement(color, opt);
+        if (svgEl) {
+          svgEl.style.width = '52px';
+          svgEl.style.height = '52px';
+          btn.appendChild(svgEl);
+        } else {
+          btn.textContent = PIECE_SYMBOLS[color][opt];
+        }
+        btn.addEventListener('click', () => {
+          promotionPickerEl.hidden = true;
+          promotionPickerEl.classList.remove('visible');
+          const chosen = promotionMoves.find((move) => move.promotion === opt);
+          resolve(chosen || null);
+        });
+        promotionPiecesEl.appendChild(btn);
       }
-    }
+
+      // Position the picker near the promotion square
+      const toSquare = promotionMoves[0]?.to;
+      if (toSquare) {
+        const boardRect = boardEl.getBoundingClientRect();
+        const sqSize = boardRect.width / 8;
+        const perspectiveColor = getPerspectiveColor();
+        const flipped = perspectiveColor === 'b';
+        const displayC = flipped ? 7 - toSquare.c : toSquare.c;
+        const left = boardRect.left + displayC * sqSize;
+        const top = boardRect.top;
+        promotionPickerEl.style.left = left + 'px';
+        promotionPickerEl.style.top = top + 'px';
+      }
+
+      promotionPickerEl.hidden = false;
+      requestAnimationFrame(() => promotionPickerEl.classList.add('visible'));
+    });
   }
 
   function applyLocalMove(attempted) {
@@ -2399,7 +2652,7 @@
     sendSocketMessage(WEBSOCKET_TYPES.RESIGN, {}, multiplayer.roomCode);
   }
 
-  function handleSquareClick(r, c) {
+  async function handleSquareClick(r, c) {
     unlockAudio();
 
     if (state.gameOver) {
@@ -2452,7 +2705,12 @@
       (move) => move.from.r === from.r && move.from.c === from.c && move.to.r === r && move.to.c === c,
     );
     const promotionMoveSet = matchingMoves.filter((move) => move.promotion);
-    const attempted = promotionMoveSet.length ? pickPromotionFromOptions(promotionMoveSet) : matchingMoves[0];
+    let attempted;
+    if (promotionMoveSet.length) {
+      attempted = await pickPromotionFromOptions(promotionMoveSet);
+    } else {
+      attempted = matchingMoves[0];
+    }
     if (!attempted && promotionMoveSet.length) {
       state.selected = null;
       render();
@@ -3070,8 +3328,59 @@
     renderEvents();
     renderMoves();
     renderStatus();
+    syncIngameToolbar();
   }
 
+  // ===== LOBBY MODAL LOGIC =====
+  function showLobby() {
+    if (gameLobbyOverlay) {
+      gameLobbyOverlay.classList.remove('hidden');
+      lobbyStep1.classList.add('active');
+      lobbyStep2.classList.remove('active');
+      if (lobbyHardModeEl) lobbyHardModeEl.checked = hardModeEl.checked;
+    }
+  }
+
+  function hideLobby() {
+    if (gameLobbyOverlay) {
+      gameLobbyOverlay.classList.add('hidden');
+    }
+  }
+
+  function lobbyChooseLocal() {
+    if (lobbyHardModeEl) {
+      hardModeEl.checked = lobbyHardModeEl.checked;
+      state.hardMode = hardModeEl.checked;
+    }
+    playModeEl.value = 'local';
+    setMode('local');
+    hideLobby();
+  }
+
+  function lobbyChooseOnline() {
+    if (lobbyHardModeEl) {
+      hardModeEl.checked = lobbyHardModeEl.checked;
+      state.hardMode = hardModeEl.checked;
+    }
+    // Show step 2 (online setup)
+    lobbyStep1.classList.remove('active');
+    lobbyStep2.classList.add('active');
+  }
+
+  function lobbyGoBack() {
+    lobbyStep2.classList.remove('active');
+    lobbyStep1.classList.add('active');
+  }
+
+  // ===== INGAME TOOLBAR SYNC =====
+  function syncIngameToolbar() {
+    if (!ingameToolbar) return;
+    const online = isOnlineMode();
+    const inRoom = Boolean(multiplayer.roomCode);
+    ingameToolbar.hidden = !(online && inRoom);
+  }
+
+  // ===== EVENT HANDLERS =====
   hardModeEl.addEventListener('change', () => {
     const previousHardMode = state.hardMode;
     state.hardMode = hardModeEl.checked;
@@ -3094,21 +3403,27 @@
     setMode(event.target.value);
   });
 
-  connectServerEl.addEventListener('click', () => {
-    handleConnectClick();
-  });
+  if (connectServerEl) {
+    connectServerEl.addEventListener('click', () => {
+      handleConnectClick();
+    });
+  }
 
   createRoomEl.addEventListener('click', () => {
+    // If in lobby step 2, connect and create
     handleCreateRoom();
+    hideLobby();
   });
 
   joinRoomEl.addEventListener('click', () => {
     handleJoinRoom();
+    hideLobby();
   });
 
   if (spectateRoomEl) {
     spectateRoomEl.addEventListener('click', () => {
       handleSpectateRoom();
+      hideLobby();
     });
   }
 
@@ -3179,13 +3494,41 @@
   window.addEventListener('pointerdown', unlockAudio, { once: true });
   window.addEventListener('keydown', unlockAudio, { once: true });
 
+  // Theme selectors — lobby, header, and inline
   if (uiThemeEl) {
     uiThemeEl.addEventListener('change', applyThemes);
   }
   if (boardThemeEl) {
     boardThemeEl.addEventListener('change', applyThemes);
   }
+  if (uiThemeHeaderEl) {
+    uiThemeHeaderEl.addEventListener('change', () => {
+      if (uiThemeEl) uiThemeEl.value = uiThemeHeaderEl.value;
+      applyThemes();
+    });
+  }
+  if (boardThemeHeaderEl) {
+    boardThemeHeaderEl.addEventListener('change', () => {
+      if (boardThemeEl) boardThemeEl.value = boardThemeHeaderEl.value;
+      applyThemes();
+    });
+  }
 
+  // Lobby modal buttons
+  if (lobbyLocalBtn) {
+    lobbyLocalBtn.addEventListener('click', lobbyChooseLocal);
+  }
+  if (lobbyOnlineBtn) {
+    lobbyOnlineBtn.addEventListener('click', lobbyChooseOnline);
+  }
+  if (lobbyBackBtn) {
+    lobbyBackBtn.addEventListener('click', lobbyGoBack);
+  }
+  if (openLobbyBtn) {
+    openLobbyBtn.addEventListener('click', showLobby);
+  }
+
+  // Initialize
   loadSavedThemes();
   const initialMode = readSavedPlayMode();
   playModeEl.value = initialMode;
@@ -3194,5 +3537,14 @@
   loadHistoryCache();
   applyUrlPrefill();
   tryResumeOnlineSessionOnLoad();
+
+  // Show lobby on first load if no saved session
+  const savedSession = readSavedOnlineSession();
+  if (!savedSession && initialMode === 'local') {
+    showLobby();
+  } else {
+    hideLobby();
+  }
+
   render();
 })();

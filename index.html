@@ -1,28 +1,113 @@
 <!doctype html>
-<html lang="en" data-ui-theme="classic" data-board-theme="wood">
+<html lang="en" data-ui-theme="classic" data-board-theme="chesscom">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Blind Chess</title>
+    <title>BlendChess</title>
+    <meta name="description" content="Play chess online or locally with blind mode. Clean, modern interface inspired by the best chess platforms." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Space+Grotesk:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
     />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <!-- ===== GAME LOBBY MODAL ===== -->
+    <div id="gameLobbyOverlay" class="lobby-overlay">
+      <div class="lobby-modal">
+        <!-- Step 1: Choose mode -->
+        <div id="lobbyStep1" class="lobby-step active">
+          <div class="lobby-header">
+            <span class="lobby-logo">♞</span>
+            <h1>BlendChess</h1>
+          </div>
+          <p class="lobby-subtitle">Choose how to play</p>
+          <div class="lobby-choices">
+            <button id="lobbyLocal" class="lobby-choice-btn" type="button">
+              <span class="lobby-choice-icon">🏠</span>
+              <span class="lobby-choice-label">Local Play</span>
+              <span class="lobby-choice-desc">Pass-and-play on one device</span>
+            </button>
+            <button id="lobbyOnline" class="lobby-choice-btn" type="button">
+              <span class="lobby-choice-icon">🌐</span>
+              <span class="lobby-choice-label">Online Play</span>
+              <span class="lobby-choice-desc">Play with a friend over the internet</span>
+            </button>
+          </div>
+          <label class="lobby-toggle">
+            <input id="lobbyHardMode" type="checkbox" />
+            <span class="toggle-switch"></span>
+            <span>Hard mode (illegal moves lose turn)</span>
+          </label>
+          <div class="lobby-theme-row">
+            <div class="theme-group">
+              <label class="theme-label" for="uiTheme">Theme</label>
+              <select id="uiTheme" class="theme-select">
+                <option value="classic">Classic</option>
+                <option value="modern">Modern</option>
+                <option value="dark">Dark</option>
+                <option value="midnight">Midnight</option>
+              </select>
+            </div>
+            <div class="theme-group">
+              <label class="theme-label" for="boardTheme">Board</label>
+              <select id="boardTheme" class="theme-select">
+                <option value="chesscom">Chess.com Green</option>
+                <option value="lichess">Lichess Brown</option>
+                <option value="wood">Wood</option>
+                <option value="green">Tournament Green</option>
+                <option value="blue">Ice Blue</option>
+                <option value="brown">Classic Brown</option>
+                <option value="purple">Royal Purple</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: Online setup -->
+        <div id="lobbyStep2" class="lobby-step">
+          <button id="lobbyBack" class="lobby-back-btn" type="button">← Back</button>
+          <h2>Online Play</h2>
+          <div class="lobby-online-actions">
+            <button id="createRoom" class="btn btn-primary lobby-action-btn" type="button">Create Room</button>
+            <div class="lobby-divider"><span>or</span></div>
+            <div class="lobby-join-group">
+              <input id="joinRoomCode" placeholder="Paste room code" />
+              <div class="lobby-join-buttons">
+                <button id="joinRoom" class="btn btn-secondary" type="button">Join</button>
+                <button id="spectateRoom" class="btn btn-secondary" type="button">Spectate</button>
+              </div>
+            </div>
+          </div>
+          <details class="advanced-server">
+            <summary>Advanced: Server URL</summary>
+            <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PROMOTION PICKER ===== -->
+    <div id="promotionPicker" class="promotion-picker" hidden>
+      <div class="promotion-picker-pieces" id="promotionPieces"></div>
+    </div>
+
+    <!-- ===== MAIN PAGE ===== -->
     <main class="page">
       <header class="header">
         <div class="header-left">
-          <h1><span class="logo-icon">&#9822;</span> Blind Chess</h1>
-          <p class="subtitle">Local pass-and-play, blind mode by default.</p>
+          <h1><span class="logo-icon">&#9822;</span> BlendChess</h1>
         </div>
         <div class="header-right">
+          <div class="header-controls">
+            <button id="newGame" class="btn btn-primary btn-sm"><span class="btn-icon">+</span> New game</button>
+            <button id="openLobby" class="btn btn-secondary btn-sm">Play mode</button>
+          </div>
           <div class="theme-group">
-            <label class="theme-label" for="uiTheme">UI Theme</label>
-            <select id="uiTheme" class="theme-select">
+            <label class="theme-label" for="uiThemeHeader">Theme</label>
+            <select id="uiThemeHeader" class="theme-select">
               <option value="classic">Classic</option>
               <option value="modern">Modern</option>
               <option value="dark">Dark</option>
@@ -30,8 +115,10 @@
             </select>
           </div>
           <div class="theme-group">
-            <label class="theme-label" for="boardTheme">Board</label>
-            <select id="boardTheme" class="theme-select">
+            <label class="theme-label" for="boardThemeHeader">Board</label>
+            <select id="boardThemeHeader" class="theme-select">
+              <option value="chesscom">Chess.com Green</option>
+              <option value="lichess">Lichess Brown</option>
               <option value="wood">Wood</option>
               <option value="green">Tournament Green</option>
               <option value="blue">Ice Blue</option>
@@ -42,67 +129,20 @@
         </div>
       </header>
 
-      <section class="toolbar toolbar-main">
-        <div class="toolbar-left">
-          <label class="toggle-label">
-            <input id="hardMode" type="checkbox" class="toggle-input" />
-            <span class="toggle-switch"></span>
-            <span class="toggle-text">Hard mode (illegal moves lose turn)</span>
-          </label>
+      <!-- In-game toolbar (only visible during active online game) -->
+      <div id="ingameToolbar" class="ingame-toolbar" hidden>
+        <div class="ingame-toolbar-left">
+          <span id="multiplayerStatus" class="ingame-status"></span>
+          <span id="roomCodeBadge" class="room-badge"></span>
         </div>
-        <div class="toolbar-right">
-          <button id="newGame" class="btn btn-primary"><span class="btn-icon">+</span> New game</button>
+        <div class="ingame-toolbar-right">
+          <button id="copyRoomCode" class="btn btn-sm" type="button">📋 Copy invite</button>
+          <button id="claimDraw" class="btn btn-sm" type="button">½ Draw</button>
+          <button id="resign" class="btn btn-sm btn-danger-sm" type="button">🏳 Resign</button>
+          <button id="leaveRoom" class="btn btn-sm btn-danger-sm" type="button">Leave</button>
         </div>
-      </section>
+      </div>
 
-      <section class="multiplayer-setup" aria-label="Online setup">
-        <div class="setup-header">
-          <h2 class="setup-title"><span class="card-icon">&#128279;</span> Online setup</h2>
-          <p id="setupHint" class="setup-hint">Step 1: Switch to Online Friend and connect.</p>
-        </div>
-        <div class="setup-grid">
-          <article class="setup-card">
-            <h3>1) Connect</h3>
-            <label class="labeled-control" for="playMode">Mode</label>
-            <select id="playMode">
-              <option value="local">Local</option>
-              <option value="online">Online Friend</option>
-            </select>
-            <button id="connectServer" class="btn btn-secondary">Connect</button>
-            <details class="advanced-server">
-              <summary>Advanced: Server WS URL</summary>
-              <label class="labeled-control" for="serverUrl">Server WS URL</label>
-              <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
-            </details>
-          </article>
-
-          <article class="setup-card">
-            <h3>2) Create or Join</h3>
-            <div class="setup-actions">
-              <button id="createRoom" class="btn btn-secondary">Create room</button>
-              <button id="copyRoomCode" class="btn btn-secondary">Copy invite</button>
-            </div>
-            <label class="labeled-control" for="joinRoomCode">Room code</label>
-            <input id="joinRoomCode" placeholder="Paste room code" />
-            <div class="setup-actions">
-              <button id="joinRoom" class="btn btn-secondary">Join room</button>
-              <button id="spectateRoom" class="btn btn-secondary">Spectate</button>
-            </div>
-          </article>
-
-          <article class="setup-card">
-            <h3>3) In-game actions</h3>
-            <div class="setup-actions">
-              <button id="claimDraw" class="btn btn-secondary">Claim draw</button>
-              <button id="resign" class="btn btn-danger">Resign</button>
-              <button id="leaveRoom" class="btn btn-danger">Leave room</button>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <div class="status" id="status"></div>
-      <div class="status status-info" id="multiplayerStatus"></div>
       <div id="flashBanner" class="flash-banner" aria-live="polite"></div>
       <div id="illegalOverlay" class="illegal-overlay" aria-live="assertive" hidden>
         <span class="illegal-icon">&#10007;</span>
@@ -110,101 +150,85 @@
       </div>
 
       <div class="layout">
-        <section class="board-shell">
-          <div class="replay-toolbar">
-            <div class="replay-controls">
-              <button id="replayFirst" type="button" class="btn btn-sm">&#9664;&#9664; First</button>
-              <button id="replayPrev" type="button" class="btn btn-sm">&#9664; Prev</button>
-              <button id="replayNext" type="button" class="btn btn-sm">Next &#9654;</button>
-              <button id="replayFinal" type="button" class="btn btn-sm">Final &#9654;&#9654;</button>
-            </div>
-            <div id="checkAlert" class="check-alert" aria-live="polite" hidden>CHECK</div>
-            <p id="replayBanner" class="replay-banner">Replay becomes available when the game ends.</p>
-          </div>
-          <div class="board-wrap">
-            <div class="file-labels file-labels-top" aria-hidden="true">
-              <span></span>
-              <span>a</span>
-              <span>b</span>
-              <span>c</span>
-              <span>d</span>
-              <span>e</span>
-              <span>f</span>
-              <span>g</span>
-              <span>h</span>
-              <span></span>
-            </div>
-            <div class="board-row">
-              <div class="rank-labels rank-labels-left" aria-hidden="true">
-                <span>8</span>
-                <span>7</span>
-                <span>6</span>
-                <span>5</span>
-                <span>4</span>
-                <span>3</span>
-                <span>2</span>
-                <span>1</span>
+        <section class="board-section">
+          <div class="board-shell">
+            <!-- Player bar: opponent (top) -->
+            <div class="player-bar player-bar-top" id="playerBarTop">
+              <div class="player-bar-info">
+                <span class="player-bar-name" id="topPlayerName">Black</span>
+                <span class="player-bar-material" id="topPlayerMaterial"></span>
               </div>
-              <div id="board" class="board" aria-label="Blind chess board"></div>
-              <div class="rank-labels rank-labels-right" aria-hidden="true">
-                <span>8</span>
-                <span>7</span>
-                <span>6</span>
-                <span>5</span>
-                <span>4</span>
-                <span>3</span>
-                <span>2</span>
-                <span>1</span>
-              </div>
+              <div class="player-bar-captures" id="topPlayerCaptures"></div>
             </div>
-            <div class="file-labels file-labels-bottom" aria-hidden="true">
-              <span></span>
-              <span>a</span>
-              <span>b</span>
-              <span>c</span>
-              <span>d</span>
-              <span>e</span>
-              <span>f</span>
-              <span>g</span>
-              <span>h</span>
-              <span></span>
+
+            <div class="board-wrap">
+              <div id="board" class="board" aria-label="Chess board"></div>
+            </div>
+
+            <!-- Player bar: you (bottom) -->
+            <div class="player-bar player-bar-bottom" id="playerBarBottom">
+              <div class="player-bar-info">
+                <span class="player-bar-name" id="bottomPlayerName">White</span>
+                <span class="player-bar-material" id="bottomPlayerMaterial"></span>
+              </div>
+              <div class="player-bar-captures" id="bottomPlayerCaptures"></div>
             </div>
           </div>
+
+          <!-- Status bar below board -->
+          <div class="status" id="status"></div>
         </section>
+
         <aside class="side-panel">
-          <div class="panel-card">
-            <h2><span class="card-icon">&#9881;</span> Game info</h2>
-            <p id="modeText">Mode: strict (illegal moves are rejected)</p>
-            <p id="captures">White pieces lost: 0, Black pieces lost: 0</p>
-            <p id="multiplayerInfo">You are playing locally.</p>
-            <p id="roomCodeBadge">Room: not active</p>
-            <p id="playerRoster"></p>
-          </div>
           <div class="panel-card">
             <h2><span class="card-icon">&#9889;</span> Events</h2>
             <ul id="events" class="events"></ul>
           </div>
           <div class="panel-card">
-            <h2><span class="card-icon">&#9776;</span> Move log</h2>
-            <button id="exportPgn" type="button" class="btn btn-sm">Export PGN</button>
-            <div class="history-controls">
-              <select id="historyGames"></select>
-              <button id="loadHistoryGame" type="button" class="btn btn-sm">Load game</button>
-              <button id="clearHistoryGames" type="button" class="btn btn-sm">Clear</button>
+            <h2><span class="card-icon">&#9776;</span> Moves</h2>
+            <div class="replay-toolbar">
+              <div class="replay-controls">
+                <button id="replayFirst" type="button" class="btn btn-sm">⏮</button>
+                <button id="replayPrev" type="button" class="btn btn-sm">◀</button>
+                <button id="replayNext" type="button" class="btn btn-sm">▶</button>
+                <button id="replayFinal" type="button" class="btn btn-sm">⏭</button>
+              </div>
+              <div id="checkAlert" class="check-alert" aria-live="polite" hidden>CHECK</div>
             </div>
-            <table id="moveLog" class="log-table">
-              <thead>
-                <tr><th>#</th><th>White</th><th>Black</th></tr>
-              </thead>
-              <tbody id="moveBody"></tbody>
-            </table>
+            <div id="moveListInline" class="move-list-inline"></div>
+            <p id="replayBanner" class="replay-banner">Replay available when the game ends.</p>
+            <div class="move-list-footer">
+              <button id="exportPgn" type="button" class="btn btn-sm">Export PGN</button>
+              <div class="history-controls">
+                <select id="historyGames"></select>
+                <button id="loadHistoryGame" type="button" class="btn btn-sm">Load</button>
+                <button id="clearHistoryGames" type="button" class="btn btn-sm">Clear</button>
+              </div>
+            </div>
+          </div>
+          <div class="panel-card panel-card-info">
+            <h2><span class="card-icon">&#9881;</span> Game info</h2>
+            <p id="modeText">Strict mode: illegal moves are rejected.</p>
+            <p id="multiplayerInfo">Playing locally.</p>
+            <p id="playerRoster"></p>
+            <label class="toggle-label toggle-label-sm">
+              <input id="hardMode" type="checkbox" class="toggle-input" />
+              <span class="toggle-switch"></span>
+              <span class="toggle-text">Hard mode</span>
+            </label>
           </div>
         </aside>
       </div>
-      <footer class="site-footer">
-        <p class="footer-text">BlendChess · Local and online blind chess.</p>
-      </footer>
     </main>
+
+    <!-- Hidden elements for backward compat with app.js references -->
+    <select id="playMode" hidden>
+      <option value="local">Local</option>
+      <option value="online">Online Friend</option>
+    </select>
+    <button id="connectServer" hidden></button>
+    <div id="captures" hidden></div>
+
     <script src="chess-core.js"></script>
     <script src="client/stateGuards.js"></script>
     <script src="app.js"></script>
