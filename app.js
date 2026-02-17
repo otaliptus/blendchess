@@ -3539,6 +3539,13 @@
     });
   }
 
+  if (lobbyHardModeEl) {
+    lobbyHardModeEl.addEventListener('change', () => {
+      // Sync to main switch just in case
+      if (hardModeEl) hardModeEl.checked = lobbyHardModeEl.checked;
+    });
+  }
+
   // Lobby modal buttons
   if (lobbyLocalBtn) {
     lobbyLocalBtn.addEventListener('click', lobbyChooseLocal);
