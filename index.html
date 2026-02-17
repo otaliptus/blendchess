@@ -70,17 +70,37 @@
         <div id="lobbyStep2" class="lobby-step">
           <button id="lobbyBack" class="lobby-back-btn" type="button">← Back</button>
           <h2>Online Play</h2>
-          <div class="lobby-online-actions">
-            <button id="createRoom" class="btn btn-primary lobby-action-btn" type="button">Create Room</button>
-            <div class="lobby-divider"><span>or</span></div>
-            <div class="lobby-join-group">
-              <input id="joinRoomCode" placeholder="Paste room code" />
-              <div class="lobby-join-buttons">
-                <button id="joinRoom" class="btn btn-secondary" type="button">Join</button>
-                <button id="spectateRoom" class="btn btn-secondary" type="button">Spectate</button>
+          
+          <div class="lobby-online-split">
+            <!-- CREATE SECTION -->
+            <div class="lobby-action-card">
+              <div class="action-icon">✨</div>
+              <h3>Create New Room</h3>
+              <p>Start a new game and invite a friend.</p>
+              <button id="createRoom" class="btn btn-primary lobby-action-btn" type="button">
+                <span class="btn-text">Create Room</span>
+              </button>
+            </div>
+
+            <!-- JOIN SECTION -->
+            <div class="lobby-action-card">
+              <div class="action-icon">🚀</div>
+              <h3>Join Existing Room</h3>
+              <p>Enter a code to join a friend's game.</p>
+              <div class="lobby-join-group">
+                <input id="joinRoomCode" placeholder="Enter room code..." />
+                <div class="lobby-join-buttons">
+                  <button id="joinRoom" class="btn btn-secondary" type="button">
+                    <span class="btn-text">Join Game</span>
+                  </button>
+                  <button id="spectateRoom" class="btn btn-ghost" type="button" title="Watch a game without playing">
+                    👁 Spectate
+                  </button>
+                </div>
               </div>
             </div>
           </div>
+
           <details class="advanced-server">
             <summary>Advanced: Server URL</summary>
             <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />

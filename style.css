@@ -528,6 +528,14 @@ body {
   color: var(--text-soft);
   margin-bottom: 16px;
   justify-content: center;
+  position: relative;
+}
+
+.lobby-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
 }
 
 .lobby-theme-row {
@@ -559,45 +567,72 @@ body {
   color: var(--text-main);
 }
 
-.lobby-online-actions {
+.lobby-online-split {
   display: flex;
-  flex-direction: column;
   gap: 16px;
   margin-bottom: 16px;
 }
 
-.lobby-action-btn {
-  width: 100%;
-  justify-content: center;
-  padding: 14px;
-  font-size: 1rem;
-}
-
-.lobby-divider {
+.lobby-action-card {
+  flex: 1;
+  background: var(--surface-hover);
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid var(--border-soft);
   text-align: center;
-  color: var(--text-muted);
-  font-size: 0.82rem;
-  position: relative;
-}
-
-.lobby-divider::before,
-.lobby-divider::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: calc(50% - 20px);
-  height: 1px;
-  background: var(--border-main);
-}
-
-.lobby-divider::before { left: 0; }
-.lobby-divider::after { right: 0; }
-
-.lobby-join-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: center;
+  transition: transform 0.2s, border-color 0.2s;
 }
+
+.lobby-action-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-main);
+  background: var(--surface-active);
+}
+
+.action-icon {
+  font-size: 2rem;
+  margin-bottom: 12px;
+}
+
+.lobby-action-card h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+  color: var(--text-main);
+}
+
+.lobby-action-card p {
+  margin: 0 0 16px;
+  font-size: 0.8rem;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+/* Creating/Joining States */
+.btn-loading {
+  opacity: 0.7;
+  pointer-events: none;
+  cursor: wait;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-soft);
+  border: 1px solid transparent;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+}
+
 
 .lobby-join-group input {
   width: 100%;

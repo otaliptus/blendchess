@@ -3125,7 +3125,13 @@
   }
 
   async function handleCreateRoom() {
+    const btn = createRoomEl;
+    const originalText = btn.querySelector('.btn-text')?.textContent || btn.textContent;
     try {
+      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = 'Creating...';
+      else btn.textContent = 'Creating...';
+      btn.classList.add('btn-loading');
+
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
@@ -3136,13 +3142,16 @@
         nickname: 'Player',
         hardMode: Boolean(state.hardMode),
       })) {
-        return;
+        throw new Error('Failed to send create request');
       }
       addEvent('Requesting room...');
       syncMultiplayerPanel();
       syncMultiplayerControlState();
     } catch (error) {
       addEvent(error.message);
+      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = originalText;
+      else btn.textContent = originalText;
+      btn.classList.remove('btn-loading');
       render();
     }
   }
@@ -3155,7 +3164,12 @@
       return;
     }
 
+    const btn = joinRoomEl;
     try {
+      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = 'Joining...';
+      else btn.textContent = 'Joining...';
+      btn.classList.add('btn-loading');
+
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
@@ -3196,7 +3210,7 @@
       }
 
       if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, joinPayload, roomCode)) {
-        return;
+        throw new Error('Failed to send join request');
       }
       multiplayer.role = 'player';
       multiplayer.spectatorId = null;
@@ -3208,6 +3222,10 @@
       syncMultiplayerControlState();
     } catch (error) {
       addEvent(error.message);
+      const btn = joinRoomEl;
+      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = 'Join Game';
+      else btn.textContent = 'Join Game';
+      btn.classList.remove('btn-loading');
       render();
     }
   }
@@ -3220,7 +3238,12 @@
       return;
     }
 
+    const btn = spectateRoomEl;
+    const originalText = btn.textContent;
     try {
+      btn.textContent = 'Joining...';
+      btn.classList.add('btn-loading');
+
       multiplayer.intentionalLeave = false;
       await connectSocket();
       setMode('online');
@@ -3229,7 +3252,7 @@
         nickname: 'Spectator',
         spectator: true,
       }, roomCode)) {
-        return;
+        throw new Error('Failed to send spectate request');
       }
       clearSavedOnlineSession();
       multiplayer.role = 'spectator';
@@ -3242,6 +3265,8 @@
       syncMultiplayerControlState();
     } catch (error) {
       addEvent(error.message);
+      btn.textContent = originalText;
+      btn.classList.remove('btn-loading');
       render();
     }
   }
