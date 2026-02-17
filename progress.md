@@ -35,3 +35,27 @@ Original prompt: Do the smoke pass test please
 - Targeted Node websocket simulation confirms behavior:
   - plain join after disconnect in active game -> `PLAYER_NOT_FOUND` (reserved seat)
   - token resume -> same seat/color restored.
+
+- Online lobby regression fix for playability:
+  - Root cause: `lobbyChooseOnline()` did not switch `playMode` to `online`, so `syncMultiplayerControlState()` kept Create/Join/Spectate controls disabled and mode status stuck in local.
+  - Removed forced `Create Room` loading lock in lobby mode-selection flow.
+  - Added lobby action helpers in `app.js`:
+    - `setLobbyButtonLabel()` for span/non-span button labels.
+    - `resetLobbyActionButtons()` to clear stale loading states/text after success/failure/re-open.
+    - `ensureOnlineModeSelected()` so create/join/spectate/connect paths always run in online mode.
+  - Changed create/join/spectate click flow: lobby now closes only after `ROOM_CREATED` / `ROOM_JOINED` server confirmations.
+  - Added fallback reset on websocket `ERROR` and connect failures so buttons remain usable for retries.
+  - Restored missing compatibility DOM node: added `<p id="setupHint">` in `index.html` so online setup guidance text updates again.
+- Validation:
+  - `node --check app.js`
+  - `node --check server/server.js`
+  - Playwright DOM flow check (custom script):
+    - After clicking `#lobbyOnline`: `playMode=online`, `createRoom/joinRoom/joinRoomCode` enabled.
+    - After clicking `#createRoom`: lobby hidden, room badge populated (`Room: <code>`), join input auto-filled.
+  - Mandatory web-game client run:
+    - `node --experimental-default-type=module "$WEB_GAME_CLIENT" --url http://127.0.0.1:8080 --click-selector "#lobbyOnline" --actions-json '{"steps":[]}' --iterations 1 --pause-ms 250 --screenshot-dir /tmp/blendchess-online-fix`
+    - Screenshot inspected: `/tmp/blendchess-online-fix/shot-0.png` (online step with active controls visible, no captured console errors).
+- Additional E2E multiplayer verification (isolated browser contexts):
+  - Client A: open lobby -> Online -> Create Room.
+  - Client B: open lobby -> Online -> Join using created code.
+  - Result: both clients reached same room with assigned colors (`White`/`Black`) and `Players connected: 2/2` status confirmed.

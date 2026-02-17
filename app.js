@@ -2914,6 +2914,8 @@
       multiplayer.intentionalLeave = false;
       syncFromRoomPayload(message);
       saveOnlineSession();
+      resetLobbyActionButtons();
+      hideLobby();
       addEvent(`Room ${multiplayer.roomCode} created. Share this code with your friend.`);
       joinRoomCodeEl.value = multiplayer.roomCode;
       copyInviteLinkSilently(multiplayer.roomCode);
@@ -2944,6 +2946,8 @@
       applyRosterFromPayload(payload);
       multiplayer.intentionalLeave = false;
       updateOnlineSessionPersistence();
+      resetLobbyActionButtons();
+      hideLobby();
       syncMultiplayerPanel();
       render();
       return;
@@ -3104,6 +3108,8 @@
       ) {
         clearSavedOnlineSession();
       }
+      resetLobbyActionButtons();
+      syncMultiplayerControlState();
       addEvent(`Server error: ${text}`);
       render();
       return;
@@ -3120,21 +3126,51 @@
       await connectSocket();
     } catch (error) {
       multiplayerStatusEl.textContent = error.message;
+      resetLobbyActionButtons();
       syncMultiplayerControlState();
     }
   }
 
+  function setLobbyButtonLabel(button, text) {
+    if (!button) {
+      return;
+    }
+    const textEl = button.querySelector('.btn-text');
+    if (textEl) {
+      textEl.textContent = text;
+      return;
+    }
+    button.textContent = text;
+  }
+
+  function resetLobbyActionButtons() {
+    setLobbyButtonLabel(createRoomEl, 'Create Room');
+    createRoomEl.classList.remove('btn-loading');
+    setLobbyButtonLabel(joinRoomEl, 'Join Game');
+    joinRoomEl.classList.remove('btn-loading');
+    if (spectateRoomEl) {
+      setLobbyButtonLabel(spectateRoomEl, '👁 Spectate');
+      spectateRoomEl.classList.remove('btn-loading');
+    }
+  }
+
+  function ensureOnlineModeSelected() {
+    if (isOnlineMode()) {
+      return;
+    }
+    playModeEl.value = 'online';
+    setMode('online');
+  }
+
   async function handleCreateRoom() {
     const btn = createRoomEl;
-    const originalText = btn.querySelector('.btn-text')?.textContent || btn.textContent;
     try {
-      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = 'Creating...';
-      else btn.textContent = 'Creating...';
+      ensureOnlineModeSelected();
+      setLobbyButtonLabel(btn, 'Creating...');
       btn.classList.add('btn-loading');
 
       multiplayer.intentionalLeave = false;
       await connectSocket();
-      setMode('online');
       multiplayer.role = 'player';
       multiplayer.resumeToken = null;
       multiplayer.spectatorId = null;
@@ -3149,9 +3185,8 @@
       syncMultiplayerControlState();
     } catch (error) {
       addEvent(error.message);
-      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = originalText;
-      else btn.textContent = originalText;
-      btn.classList.remove('btn-loading');
+      resetLobbyActionButtons();
+      syncMultiplayerControlState();
       render();
     }
   }
@@ -3166,13 +3201,12 @@
 
     const btn = joinRoomEl;
     try {
-      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = 'Joining...';
-      else btn.textContent = 'Joining...';
+      ensureOnlineModeSelected();
+      setLobbyButtonLabel(btn, 'Joining...');
       btn.classList.add('btn-loading');
 
       multiplayer.intentionalLeave = false;
       await connectSocket();
-      setMode('online');
       const currentRoomCode = normalizeRoomCode(multiplayer.roomCode || '');
       const saved = readSavedOnlineSession();
       const hasLiveResume = currentRoomCode === roomCode
@@ -3222,10 +3256,8 @@
       syncMultiplayerControlState();
     } catch (error) {
       addEvent(error.message);
-      const btn = joinRoomEl;
-      if (btn.querySelector('.btn-text')) btn.querySelector('.btn-text').textContent = 'Join Game';
-      else btn.textContent = 'Join Game';
-      btn.classList.remove('btn-loading');
+      resetLobbyActionButtons();
+      syncMultiplayerControlState();
       render();
     }
   }
@@ -3239,14 +3271,13 @@
     }
 
     const btn = spectateRoomEl;
-    const originalText = btn.textContent;
     try {
-      btn.textContent = 'Joining...';
+      ensureOnlineModeSelected();
+      setLobbyButtonLabel(btn, 'Joining...');
       btn.classList.add('btn-loading');
 
       multiplayer.intentionalLeave = false;
       await connectSocket();
-      setMode('online');
       multiplayer.resumeToken = null;
       if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, {
         nickname: 'Spectator',
@@ -3265,8 +3296,8 @@
       syncMultiplayerControlState();
     } catch (error) {
       addEvent(error.message);
-      btn.textContent = originalText;
-      btn.classList.remove('btn-loading');
+      resetLobbyActionButtons();
+      syncMultiplayerControlState();
       render();
     }
   }
@@ -3313,6 +3344,7 @@
       playModeEl.value = 'local';
     }
     setMode('local');
+    resetLobbyActionButtons();
     multiplayerStatusEl.textContent = 'Left room.';
     syncMultiplayerPanel();
     syncMultiplayerControlState();
@@ -3363,6 +3395,7 @@
       lobbyStep1.classList.add('active');
       lobbyStep2.classList.remove('active');
       if (lobbyHardModeEl) lobbyHardModeEl.checked = hardModeEl.checked;
+      resetLobbyActionButtons();
     }
   }
 
@@ -3387,9 +3420,15 @@
       hardModeEl.checked = lobbyHardModeEl.checked;
       state.hardMode = hardModeEl.checked;
     }
-    // Show step 2 (online setup)
+    ensureOnlineModeSelected();
     lobbyStep1.classList.remove('active');
     lobbyStep2.classList.add('active');
+    resetLobbyActionButtons();
+    syncMultiplayerControlState();
+    syncMultiplayerPanel();
+    if (!multiplayer.connected && !multiplayer.connectPromise && !multiplayer.resumeInFlight) {
+      handleConnectClick();
+    }
   }
 
   function lobbyGoBack() {
@@ -3435,20 +3474,16 @@
   }
 
   createRoomEl.addEventListener('click', () => {
-    // If in lobby step 2, connect and create
     handleCreateRoom();
-    hideLobby();
   });
 
   joinRoomEl.addEventListener('click', () => {
     handleJoinRoom();
-    hideLobby();
   });
 
   if (spectateRoomEl) {
     spectateRoomEl.addEventListener('click', () => {
       handleSpectateRoom();
-      hideLobby();
     });
   }
 
