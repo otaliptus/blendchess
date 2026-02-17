@@ -413,7 +413,18 @@
     return color === 'w' || color === 'b' ? color : null;
   }
 
+  function getViewerColorForMasking() {
+    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
+      return null;
+    }
+    if (isOnlineMode()) {
+      return normalizeEventColor(multiplayer.color);
+    }
+    return state.turn === 'w' || state.turn === 'b' ? state.turn : null;
+  }
+
   function inferEventColor(text) {
+    const viewerColor = getViewerColorForMasking();
     if (/^White\b/i.test(text)) {
       return 'w';
     }
@@ -421,10 +432,10 @@
       return 'b';
     }
     if (/^You\b/i.test(text)) {
-      return normalizeEventColor(multiplayer.color);
+      return viewerColor;
     }
-    if (/^Opponent\b/i.test(text) && multiplayer.color) {
-      return otherColor(multiplayer.color);
+    if (/^Opponent\b/i.test(text) && viewerColor) {
+      return otherColor(viewerColor);
     }
     return null;
   }
@@ -1400,7 +1411,7 @@
   }
 
   function shouldMaskOpponentMoves() {
-    return isOnlineMode() && !isSpectatorMode() && !shouldRevealBoardAndHistory();
+    return Boolean(getViewerColorForMasking());
   }
 
   function moveColorFromPly(ply) {
@@ -1423,19 +1434,8 @@
     if (!moverColor) {
       return false;
     }
-
-    if (isOnlineMode()) {
-      if (!multiplayer.color) {
-        return false;
-      }
-      return moverColor === multiplayer.color;
-    }
-
-    const perspectiveColor = getPerspectiveColor();
-    if (!perspectiveColor) {
-      return false;
-    }
-    return moverColor === perspectiveColor;
+    const viewerColor = getViewerColorForMasking();
+    return viewerColor ? moverColor === viewerColor : true;
   }
 
   function shouldShowCaptureMarker(marker) {
@@ -1445,16 +1445,11 @@
     if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
       return true;
     }
-    if (!isOnlineMode()) {
-      return true;
-    }
     if (!shouldMaskOpponentMoves()) {
       return true;
     }
-    if (!multiplayer.color) {
-      return false;
-    }
-    return marker.moverColor === multiplayer.color;
+    const viewerColor = getViewerColorForMasking();
+    return viewerColor ? marker.moverColor === viewerColor : true;
   }
 
   function shouldShowCheckSquareHighlight(turnForBoard) {
@@ -1493,10 +1488,11 @@
     if (!shouldMaskOpponentMoves()) {
       return text;
     }
-    if (!multiplayer.color) {
+    const viewerColor = getViewerColorForMasking();
+    if (!viewerColor) {
       return MASKED_MOVE_TEXT;
     }
-    return color === multiplayer.color ? text : MASKED_MOVE_TEXT;
+    return color === viewerColor ? text : MASKED_MOVE_TEXT;
   }
 
   function maskBoardSquareText(text) {
@@ -1505,6 +1501,10 @@
 
   function formatEventForViewer(entry, eventColor = null) {
     if (!shouldMaskOpponentMoves()) {
+      return entry;
+    }
+    const viewerColor = getViewerColorForMasking();
+    if (!viewerColor) {
       return entry;
     }
     const body = entry;
@@ -1517,7 +1517,7 @@
     const playedByColor = body.match(/^(White|Black) played\s+(.+)$/);
     if (playedByColor) {
       const moverColor = playedByColor[1] === 'White' ? 'w' : 'b';
-      if (multiplayer.color && moverColor === multiplayer.color) {
+      if (moverColor === viewerColor) {
         return entry;
       }
       return `${playedByColor[1]} played ${maskMoveText(playedByColor[2])}`;
@@ -1531,13 +1531,13 @@
     const illegalAttemptByColor = body.match(/^(White|Black) attempted illegal move\s+([a-h][1-8])\s+to\s+([a-h][1-8])(.*)$/i);
     if (illegalAttemptByColor) {
       const moverColor = illegalAttemptByColor[1] === 'White' ? 'w' : 'b';
-      if (multiplayer.color && moverColor !== multiplayer.color) {
+      if (moverColor !== viewerColor) {
         return `${illegalAttemptByColor[1]} attempted illegal move ${MASKED_MOVE_TEXT} to ${MASKED_MOVE_TEXT}${illegalAttemptByColor[4] || ''}`;
       }
       return entry;
     }
 
-    if (multiplayer.color && normalizedEventColor && normalizedEventColor !== multiplayer.color) {
+    if (normalizedEventColor && normalizedEventColor !== viewerColor) {
       return maskBoardSquareText(body);
     }
 
@@ -1733,10 +1733,6 @@
   function syncMultiplayerControlState() {
     const online = isOnlineMode();
     const spectator = isSpectatorMode();
-    const canEditHardMode = !online
-      || !multiplayer.connected
-      || !multiplayer.color
-      || multiplayer.color === 'w';
     const inRoom = Boolean(multiplayer.roomCode);
     connectServerEl.disabled = !online || multiplayer.connected || multiplayer.resumeInFlight;
     createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
@@ -1749,8 +1745,8 @@
     leaveRoomEl.disabled = !online;
     serverUrlEl.disabled = multiplayer.connected || multiplayer.resumeInFlight;
     claimDrawEl.disabled = online ? (!multiplayer.connected || spectator) : false;
-    resignEl.disabled = !online || !multiplayer.connected || spectator;
-    hardModeEl.disabled = !canEditHardMode || multiplayer.resumeInFlight || spectator;
+    resignEl.disabled = spectator || multiplayer.resumeInFlight || state.gameOver;
+    hardModeEl.disabled = spectator || multiplayer.resumeInFlight;
   }
 
   function updateModeText() {
@@ -2582,14 +2578,6 @@
       return;
     }
 
-    if (multiplayer.color && multiplayer.color !== 'w') {
-      state.hardMode = previousHardMode;
-      hardModeEl.checked = previousHardMode;
-      showTransientBanner('Only White can change hard mode.');
-      addEvent('Only White can change hard mode in online rooms.');
-      return;
-    }
-
     sendSocketMessage(
       WEBSOCKET_TYPES.SET_HARD_MODE,
       { enabled: Boolean(state.hardMode) },
@@ -2637,9 +2625,31 @@
     render();
   }
 
+  function applyLocalResignation(resigningColor) {
+    if (state.gameOver) {
+      return;
+    }
+
+    const color = resigningColor === 'w' || resigningColor === 'b' ? resigningColor : state.turn;
+    const winnerColor = otherColor(color);
+    state.gameOver = true;
+    state.winner = colorName(winnerColor);
+    state.result = 'resign';
+    state.selected = null;
+    addEvent(`${colorName(color)} resigned. ${state.winner} wins.`, {
+      color,
+      move: getCurrentPly(),
+    });
+  }
+
   function handleResign() {
-    if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
-      addEvent('Join a room first.');
+    if (isSpectatorMode()) {
+      addEvent('Spectators cannot resign.');
+      render();
+      return;
+    }
+
+    if (state.gameOver) {
       render();
       return;
     }
@@ -2649,7 +2659,13 @@
       return;
     }
 
-    sendSocketMessage(WEBSOCKET_TYPES.RESIGN, {}, multiplayer.roomCode);
+    if (isOnlineMode() && multiplayer.connected && multiplayer.roomCode) {
+      sendSocketMessage(WEBSOCKET_TYPES.RESIGN, {}, multiplayer.roomCode);
+      return;
+    }
+
+    applyLocalResignation(getActiveColor() || state.turn);
+    render();
   }
 
   async function handleSquareClick(r, c) {
@@ -3441,7 +3457,11 @@
     if (!ingameToolbar) return;
     const online = isOnlineMode();
     const inRoom = Boolean(multiplayer.roomCode);
-    ingameToolbar.hidden = !(online && inRoom);
+    ingameToolbar.hidden = online && !inRoom;
+    copyRoomCodeEl.hidden = !online || !inRoom;
+    leaveRoomEl.hidden = !online;
+    claimDrawEl.hidden = false;
+    resignEl.hidden = false;
   }
 
   // ===== EVENT HANDLERS =====

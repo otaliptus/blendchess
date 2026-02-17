@@ -634,6 +634,13 @@ body {
 }
 
 
+.lobby-join-group {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .lobby-join-group input {
   width: 100%;
 }
@@ -891,6 +898,10 @@ input::placeholder {
 .advanced-server input {
   width: 100%;
   margin-top: 8px;
+}
+
+.advanced-appearance .lobby-theme-row {
+  margin-top: 10px;
 }
 
 /* =============================================

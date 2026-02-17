@@ -41,29 +41,6 @@
             <span class="toggle-switch"></span>
             <span>Hard mode (illegal moves lose turn)</span>
           </label>
-          <div class="lobby-theme-row">
-            <div class="theme-group">
-              <label class="theme-label" for="uiTheme">Theme</label>
-              <select id="uiTheme" class="theme-select">
-                <option value="classic">Classic</option>
-                <option value="modern">Modern</option>
-                <option value="dark">Dark</option>
-                <option value="midnight">Midnight</option>
-              </select>
-            </div>
-            <div class="theme-group">
-              <label class="theme-label" for="boardTheme">Board</label>
-              <select id="boardTheme" class="theme-select">
-                <option value="chesscom">Chess.com Green</option>
-                <option value="lichess">Lichess Brown</option>
-                <option value="wood">Wood</option>
-                <option value="green">Tournament Green</option>
-                <option value="blue">Ice Blue</option>
-                <option value="brown">Classic Brown</option>
-                <option value="purple">Royal Purple</option>
-              </select>
-            </div>
-          </div>
         </div>
 
         <!-- Step 2: Online setup -->
@@ -104,6 +81,32 @@
           <details class="advanced-server">
             <summary>Advanced: Server URL</summary>
             <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
+          </details>
+          <details class="advanced-server advanced-appearance">
+            <summary>Appearance</summary>
+            <div class="lobby-theme-row">
+              <div class="theme-group">
+                <label class="theme-label" for="uiTheme">Theme</label>
+                <select id="uiTheme" class="theme-select">
+                  <option value="classic">Classic</option>
+                  <option value="modern">Modern</option>
+                  <option value="dark">Dark</option>
+                  <option value="midnight">Midnight</option>
+                </select>
+              </div>
+              <div class="theme-group">
+                <label class="theme-label" for="boardTheme">Board</label>
+                <select id="boardTheme" class="theme-select">
+                  <option value="chesscom">Chess.com Green</option>
+                  <option value="lichess">Lichess Brown</option>
+                  <option value="wood">Wood</option>
+                  <option value="green">Tournament Green</option>
+                  <option value="blue">Ice Blue</option>
+                  <option value="brown">Classic Brown</option>
+                  <option value="purple">Royal Purple</option>
+                </select>
+              </div>
+            </div>
           </details>
         </div>
       </div>

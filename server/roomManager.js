@@ -422,13 +422,6 @@ export class Room {
       };
     }
 
-    if (!this.isReady()) {
-      return {
-        ok: false,
-        reason: ERROR_CODES.ROOM_NOT_READY,
-      };
-    }
-
     const winnerColor = core.otherColor(player.color);
     this.state.gameOver = true;
     this.state.winner = core.colorName(winnerColor);

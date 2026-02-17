@@ -59,3 +59,33 @@ Original prompt: Do the smoke pass test please
   - Client A: open lobby -> Online -> Create Room.
   - Client B: open lobby -> Online -> Join using created code.
   - Result: both clients reached same room with assigned colors (`White`/`Black`) and `Players connected: 2/2` status confirmed.
+
+- Deep stability pass for UI + multiplayer regressions (user bug batch):
+  - Fixed hard-mode interactivity and authority parity:
+    - Client no longer silently reverts hard-mode toggle for Black (`app.js`), and hard-mode control is no longer color-gated.
+    - Node server `SET_HARD_MODE` now accepts either player seat (`server/server.js`).
+    - Worker DO `SET_HARD_MODE` now accepts either player seat and logs actor color (`ws-worker/src/room.js`).
+  - Resign flow is now available without prior room-readiness constraints:
+    - Local mode: resign works and ends game immediately.
+    - Online mode: resign request is allowed even when only one player is connected (Node + Worker parity).
+    - Toolbar now remains available in local mode so resign is actually accessible (`app.js`).
+  - Lobby/UI UX fixes:
+    - Theme selectors moved out of initial mode-selection step into later `Appearance` advanced section on online setup (`index.html`).
+    - Join-code input/button spacing improved via structured `lobby-join-group` layout (`style.css`).
+  - Local hidden-info leak fix:
+    - Move/event masking generalized from online-only to viewer-color based masking so local pass-and-play no longer reveals opponent SAN/events during active game (`app.js`).
+- Backend test coverage added:
+  - Added Node roomManager test verifying resign is allowed before room is fully ready (`server/tests/roomManager.test.mjs`).
+- Verification performed:
+  - Syntax checks: `node --check app.js`, `node --check server/server.js`, `node --check server/roomManager.js`, `node --check ws-worker/src/room.js`.
+  - Node tests: `npm test` in `server/` (all passing).
+  - Browser automation checks (Playwright):
+    - Step1 theme controls removed; step2 appearance controls present.
+    - Local mode: hard-mode toggle clickable, resign enabled, local move list masks opponent move.
+    - Online 2-player room: Black can toggle hard mode; White receives synced state.
+    - Online solo room: resign succeeds and game ends by resignation.
+  - Required skill run: `$WEB_GAME_CLIENT` run with screenshot output at `/tmp/blendchess-deep-pass/shot-0.png`; additional lobby screenshot at `/tmp/blendchess-deep-pass/lobby-step2.png`.
+
+- TODO suggestions for next pass:
+  - Consider a dedicated local action cluster (Draw/Resign) instead of reusing online toolbar, to reduce UI noise.
+  - Add Worker-side automated tests mirroring Node roomManager resign/hard-mode policy coverage.

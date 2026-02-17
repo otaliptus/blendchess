@@ -110,6 +110,17 @@ test('soft mode keeps illegal moves for current player', () => {
   assert.equal(room.state.boardVersion, 0);
 });
 
+test('resign is allowed before room is fully ready', () => {
+  const room = new Room('ABC123');
+  room.assignPlayer('white-player', 'White');
+
+  const result = room.resign('white-player');
+  assert.equal(result.ok, true);
+  assert.equal(result.winner, 'Black');
+  assert.equal(room.state.result, 'resign');
+  assert.equal(room.state.gameOver, true);
+});
+
 test('assignPlayer cleans stale seat before capacity check', () => {
   const room = new Room('ABC123');
   room.assignPlayer('white-player', 'White');

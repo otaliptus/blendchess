@@ -738,10 +738,6 @@ export class GameHub extends DurableObject {
       return { ok: false, reason: ERROR_CODES.GAME_OVER };
     }
 
-    if (!isRoomReady(room)) {
-      return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
-    }
-
     const winnerColor = otherColor(player.color);
     room.gameOver = true;
     room.winner = colorName(winnerColor);
@@ -1063,13 +1059,8 @@ export class GameHub extends DurableObject {
     }
 
     if (type === TYPES.SET_HARD_MODE) {
-      if (player.color !== 'w') {
-        this.sendErrorToConnection(connectionId, room.roomCode, connection.playerId, ERROR_CODES.WRONG_COLOR, 'Only White may set hard mode.');
-        return;
-      }
-
       room.hardMode = Boolean(payload.enabled);
-      addEvent(room, `Hard mode ${room.hardMode ? 'enabled' : 'disabled'} by White.`);
+      addEvent(room, `Hard mode ${room.hardMode ? 'enabled' : 'disabled'} by ${colorName(player.color)}.`);
       this.broadcast(room, (targetId, targetRole) =>
         createMessage(TYPES.GAME_STATE, room.roomCode, targetRole === 'player' ? targetId : '', {
           game: createGameSnapshot(room),

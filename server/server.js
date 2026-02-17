@@ -543,8 +543,8 @@ wss.on('connection', (ws) => {
 
     if (type === TYPES.SET_HARD_MODE) {
       const player = room.getPlayer(activePlayerId);
-      if (!player || player.color !== 'w') {
-        sendError(playerId, room.state.roomCode, ERROR_CODES.WRONG_COLOR, 'Only White may set hard mode.');
+      if (!player) {
+        sendError(playerId, room.state.roomCode, ERROR_CODES.WRONG_COLOR, 'No active membership in this room.');
         return;
       }
 
