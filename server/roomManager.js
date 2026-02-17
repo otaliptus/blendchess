@@ -39,6 +39,7 @@ function createRoomState() {
     result: null,
     gameOver: false,
     boardVersion: 0,
+    pendingDrawOffer: null,
     waitingForStart: true,
     createdAt: Date.now(),
     lastActivity: Date.now(),
@@ -387,9 +388,28 @@ export class Room {
 
     const drawReason = evaluateDrawEligibility(this.state, normalizeDrawReason(payload.reason));
     if (!drawReason) {
+      // No valid chess draw condition - treat as a draw offer / mutual draw check
+      if (this.state.pendingDrawOffer && this.state.pendingDrawOffer !== player.color) {
+        // Opponent has a pending offer - mutual draw!
+        this.state.pendingDrawOffer = null;
+        this.state.gameOver = true;
+        this.state.result = 'mutualDraw';
+        this.state.winner = null;
+        addEvent(this.state, 'Draw by mutual agreement.');
+        return {
+          ok: true,
+          reason: 'mutualDraw',
+          game: this.createGameSnapshot(),
+        };
+      }
+      // Record this player's draw offer
+      this.state.pendingDrawOffer = player.color;
+      addEvent(this.state, `${core.colorName(player.color)} offered a draw.`);
       return {
         ok: false,
         reason: ERROR_CODES.INVALID_DRAW_CLAIM,
+        drawOffered: true,
+        offeredBy: player.color,
       };
     }
 
@@ -529,6 +549,8 @@ export class Room {
 
     this.state.board = outcome.board;
     this.state.enPassant = outcome.enPassant;
+    // Clear any pending draw offer when a move is made
+    this.state.pendingDrawOffer = null;
 
     if (outcome.captured) {
       this.state.captured[outcome.captured.color] += 1;

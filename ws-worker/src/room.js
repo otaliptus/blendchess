@@ -45,6 +45,7 @@ const TYPES = {
   SET_HARD_MODE: 'set_hard_mode',
   CLAIM_DRAW: 'claim_draw',
   DRAW_RESULT: 'draw_result',
+  DRAW_OFFERED: 'draw_offered',
   RESIGN: 'resign',
   RESIGN_RESULT: 'resign_result',
   NEW_GAME: 'new_game',
@@ -136,6 +137,7 @@ function createRoomState(roomCode) {
     result: base.result,
     gameOver: base.gameOver,
     boardVersion: 0,
+    pendingDrawOffer: null,
     waitingForStart: true,
     hardMode: false,
     createdAt: Date.now(),
@@ -660,6 +662,8 @@ export class GameHub extends DurableObject {
 
     room.board = outcome.board;
     room.enPassant = outcome.enPassant;
+    // Clear any pending draw offer when a move is made
+    room.pendingDrawOffer = null;
 
     if (outcome.captured) {
       room.captured[outcome.captured.color] += 1;
@@ -722,7 +726,25 @@ export class GameHub extends DurableObject {
     const requestedReason = normalizeDrawReason(payload.reason);
     const drawReason = evaluateDrawEligibility(room, requestedReason);
     if (!drawReason) {
-      return { ok: false, reason: ERROR_CODES.INVALID_DRAW_CLAIM };
+      // No valid chess draw condition - treat as a draw offer / mutual draw check
+      if (room.pendingDrawOffer && room.pendingDrawOffer !== player.color) {
+        // Opponent has a pending offer - mutual draw!
+        room.pendingDrawOffer = null;
+        room.gameOver = true;
+        room.winner = null;
+        room.result = 'mutualDraw';
+        addEvent(room, 'Draw by mutual agreement.');
+        return { ok: true, reason: 'mutualDraw' };
+      }
+      // Record this player's draw offer
+      room.pendingDrawOffer = player.color;
+      addEvent(room, `${colorName(player.color)} offered a draw.`);
+      return {
+        ok: false,
+        reason: ERROR_CODES.INVALID_DRAW_CLAIM,
+        drawOffered: true,
+        offeredBy: player.color,
+      };
     }
 
     room.gameOver = true;
@@ -1074,13 +1096,23 @@ export class GameHub extends DurableObject {
     if (type === TYPES.CLAIM_DRAW) {
       const result = this.claimDraw(room, player, payload);
       if (!result.ok) {
-        this.sendToConnection(
-          connectionId,
-          createMessage(TYPES.MOVE_REJECTED, room.roomCode, connection.playerId, {
-            reasonCode: result.reason,
-            moveIntent: payload,
-          }),
-        );
+        if (result.drawOffered) {
+          // Broadcast draw offer to all players/spectators
+          this.broadcast(room, (targetId, targetRole) =>
+            createMessage(TYPES.DRAW_OFFERED, room.roomCode, targetRole === 'player' ? targetId : '', {
+              offeredBy: result.offeredBy,
+            }),
+          );
+          await this.persist();
+        } else {
+          this.sendToConnection(
+            connectionId,
+            createMessage(TYPES.MOVE_REJECTED, room.roomCode, connection.playerId, {
+              reasonCode: result.reason,
+              moveIntent: payload,
+            }),
+          );
+        }
         return;
       }
 

@@ -13,6 +13,7 @@ export const TYPES = {
   SET_HARD_MODE: 'set_hard_mode',
   CLAIM_DRAW: 'claim_draw',
   DRAW_RESULT: 'draw_result',
+  DRAW_OFFERED: 'draw_offered',
   RESIGN: 'resign',
   RESIGN_RESULT: 'resign_result',
   NEW_GAME: 'new_game',

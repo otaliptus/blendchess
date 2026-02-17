@@ -64,6 +64,7 @@
     SET_HARD_MODE: 'set_hard_mode',
     CLAIM_DRAW: 'claim_draw',
     DRAW_RESULT: 'draw_result',
+    DRAW_OFFERED: 'draw_offered',
     RESIGN: 'resign',
     RESIGN_RESULT: 'resign_result',
     NEW_GAME: 'new_game',
@@ -87,6 +88,22 @@
     PLAYER_NOT_FOUND: 'Could not find player in room.',
     INVALID_DRAW_CLAIM: 'Draw claim is not currently valid.',
     VERSION_MISMATCH: 'Client/server protocol mismatch. Refresh and reconnect.',
+  };
+
+  // Mirror of server ERROR_CODES for client-side comparisons
+  const ERROR_CODES = {
+    INVALID_PAYLOAD: 'INVALID_PAYLOAD',
+    UNKNOWN_ROOM: 'UNKNOWN_ROOM',
+    ROOM_FULL: 'ROOM_FULL',
+    NOT_YOUR_TURN: 'NOT_YOUR_TURN',
+    WRONG_COLOR: 'WRONG_COLOR',
+    ILLEGAL_MOVE: 'ILLEGAL_MOVE',
+    GAME_OVER: 'GAME_OVER',
+    ROOM_NOT_READY: 'ROOM_NOT_READY',
+    RATE_LIMIT: 'RATE_LIMIT',
+    PLAYER_NOT_FOUND: 'PLAYER_NOT_FOUND',
+    INVALID_DRAW_CLAIM: 'INVALID_DRAW_CLAIM',
+    VERSION_MISMATCH: 'VERSION_MISMATCH',
   };
 
   const boardEl = document.getElementById('board');
@@ -1449,20 +1466,22 @@
       return true;
     }
     const viewerColor = getViewerColorForMasking();
-    return viewerColor ? marker.moverColor === viewerColor : true;
+    // Show to the taker (green circle) AND to the player who lost the piece (X)
+    return viewerColor
+      ? (marker.moverColor === viewerColor || marker.capturedColor === viewerColor)
+      : true;
   }
 
   function shouldShowCheckSquareHighlight(turnForBoard) {
     if (!turnForBoard) {
       return false;
     }
-    if (state.hardMode && !shouldRevealBoardAndHistory() && !replay.active) {
-      return false;
-    }
+    // Always show check to the player whose king is in check (even in hard mode)
     if (shouldRevealBoardAndHistory() || replay.active) {
       return true;
     }
     if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
+      // Local mode: only show to the player whose turn it is (they are the one in check)
       return true;
     }
     if (isSpectatorMode()) {
@@ -1471,6 +1490,7 @@
     if (!multiplayer.color) {
       return false;
     }
+    // Online: only show check highlight to the player whose king is in check
     return turnForBoard === multiplayer.color;
   }
 
@@ -1735,18 +1755,20 @@
     const spectator = isSpectatorMode();
     const inRoom = Boolean(multiplayer.roomCode);
     connectServerEl.disabled = !online || multiplayer.connected || multiplayer.resumeInFlight;
-    createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
-    joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
+    createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
+    joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
     if (spectateRoomEl) {
-      spectateRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
+      spectateRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
     }
-    joinRoomCodeEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || inRoom;
+    joinRoomCodeEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
     copyRoomCodeEl.disabled = !online || !multiplayer.roomCode;
     leaveRoomEl.disabled = !online;
     serverUrlEl.disabled = multiplayer.connected || multiplayer.resumeInFlight;
     claimDrawEl.disabled = online ? (!multiplayer.connected || spectator) : false;
     resignEl.disabled = spectator || multiplayer.resumeInFlight || state.gameOver;
-    hardModeEl.disabled = spectator || multiplayer.resumeInFlight;
+    const onlineGameActive = isOnlineMode() && multiplayer.connected && Boolean(multiplayer.roomCode);
+    const hardModeLocked = onlineGameActive && (multiplayer.color === 'b' || getCurrentPly() > 0);
+    hardModeEl.disabled = spectator || multiplayer.resumeInFlight || hardModeLocked;
   }
 
   function updateModeText() {
@@ -3131,6 +3153,22 @@
       return;
     }
 
+    if (type === WEBSOCKET_TYPES.DRAW_OFFERED) {
+      const offeredBy = payload.offeredBy || '';
+      const offeredByName = offeredBy === 'w' ? 'White' : offeredBy === 'b' ? 'Black' : 'Opponent';
+      if (offeredBy && offeredBy === multiplayer.color) {
+        // This is our own offer confirmation
+        showTransientBanner('Draw offer sent. Waiting for opponent to accept.');
+        addEvent('You offered a draw.');
+      } else {
+        // Opponent offered a draw
+        showTransientBanner(`${offeredByName} offers a draw. Click ½ Draw to accept.`);
+        addEvent(`${offeredByName} offers a draw. Click ½ Draw to accept or ignore to decline.`);
+      }
+      render();
+      return;
+    }
+
     if (type === WEBSOCKET_TYPES.PONG) {
       addEvent('Server responded to ping.');
       render();
@@ -3184,6 +3222,24 @@
       ensureOnlineModeSelected();
       setLobbyButtonLabel(btn, 'Creating...');
       btn.classList.add('btn-loading');
+
+      // If already in a room, leave it first
+      if (multiplayer.roomCode) {
+        multiplayer.intentionalLeave = true;
+        clearSavedOnlineSession();
+        clearReconnectTimer();
+        disconnectSocket();
+        multiplayer.roomCode = '';
+        multiplayer.playerId = null;
+        multiplayer.resumeToken = null;
+        multiplayer.color = null;
+        multiplayer.role = 'player';
+        multiplayer.spectatorId = null;
+        multiplayer.players = [];
+        multiplayer.spectators = [];
+        multiplayer.awaitingStateSync = false;
+        multiplayer.connected = false;
+      }
 
       multiplayer.intentionalLeave = false;
       await connectSocket();
@@ -3387,6 +3443,13 @@
       return;
     }
 
+    // Local: ask for confirmation if a game is in progress
+    if (getCurrentPly() > 0 && !state.gameOver) {
+      if (!window.confirm('Start a new game? The current game will be lost.')) {
+        return;
+      }
+    }
+
     state = newGameState();
     state.hardMode = hardModeEl.checked;
     state.selected = null;
@@ -3448,8 +3511,22 @@
   }
 
   function lobbyGoBack() {
+    // Reset any in-flight lobby operations
+    resetLobbyActionButtons();
+    // If not yet in a room, disconnect any partial socket connection and revert to local
+    if (!multiplayer.roomCode) {
+      multiplayer.intentionalLeave = true;
+      if (multiplayer.connected) {
+        disconnectSocket();
+      }
+      multiplayer.connectPromise = null;
+      setMode('local');
+      playModeEl.value = 'local';
+    }
     lobbyStep2.classList.remove('active');
     lobbyStep1.classList.add('active');
+    syncMultiplayerControlState();
+    syncMultiplayerPanel();
   }
 
   // ===== INGAME TOOLBAR SYNC =====
@@ -3467,7 +3544,21 @@
   // ===== EVENT HANDLERS =====
   hardModeEl.addEventListener('change', () => {
     const previousHardMode = state.hardMode;
+    // Online restrictions: only White can change hard mode, and only before the first move
+    if (isOnlineMode() && multiplayer.connected && multiplayer.roomCode) {
+      if (multiplayer.color === 'b') {
+        hardModeEl.checked = previousHardMode;
+        showTransientBanner('Only White can change the hard mode setting.');
+        return;
+      }
+      if (getCurrentPly() > 0) {
+        hardModeEl.checked = previousHardMode;
+        showTransientBanner('Hard mode can only be changed before the first move.');
+        return;
+      }
+    }
     state.hardMode = hardModeEl.checked;
+    if (lobbyHardModeEl) lobbyHardModeEl.checked = hardModeEl.checked;
     sendHardModeUpdate(previousHardMode);
     renderStatus();
   });
@@ -3596,8 +3687,9 @@
 
   if (lobbyHardModeEl) {
     lobbyHardModeEl.addEventListener('change', () => {
-      // Sync to main switch just in case
+      // Sync to main switch and state
       if (hardModeEl) hardModeEl.checked = lobbyHardModeEl.checked;
+      state.hardMode = lobbyHardModeEl.checked;
     });
   }
 

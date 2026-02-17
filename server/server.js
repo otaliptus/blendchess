@@ -561,13 +561,22 @@ wss.on('connection', (ws) => {
     if (type === TYPES.CLAIM_DRAW) {
       const result = room.claimDraw(activePlayerId, payload);
       if (!result.ok) {
-        sendTo(
-          activePlayerId,
-          createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, activePlayerId, {
-            reasonCode: result.reason,
-            moveIntent: payload,
-          }),
-        );
+        if (result.drawOffered) {
+          // Broadcast draw offer to all players/spectators
+          broadcast(room, (targetId) =>
+            createMessage(TYPES.DRAW_OFFERED, room.state.roomCode, targetId, {
+              offeredBy: result.offeredBy,
+            }),
+          );
+        } else {
+          sendTo(
+            activePlayerId,
+            createMessage(TYPES.MOVE_REJECTED, room.state.roomCode, activePlayerId, {
+              reasonCode: result.reason,
+              moveIntent: payload,
+            }),
+          );
+        }
         return;
       }
 
