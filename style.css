@@ -474,6 +474,63 @@ body {
   font-size: 0.95rem;
 }
 
+/* ── Resume Banner ── */
+.lobby-resume-section {
+  margin-bottom: 18px;
+}
+
+.lobby-resume-section.hidden {
+  display: none;
+}
+
+.lobby-resume-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: color-mix(in srgb, var(--action) 10%, transparent);
+  border: 1.5px solid var(--action);
+  border-radius: 14px;
+  padding: 13px 15px;
+}
+
+.lobby-resume-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.lobby-resume-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.lobby-resume-title {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 3px;
+}
+
+.lobby-resume-info {
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.lobby-resume-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.lobby-resume-btns .btn {
+  min-width: 90px;
+  justify-content: center;
+  text-align: center;
+}
+
 .lobby-choices {
   display: grid;
   grid-template-columns: 1fr 1fr;

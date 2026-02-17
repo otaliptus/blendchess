@@ -23,6 +23,22 @@
             <span class="lobby-logo">♞</span>
             <h1>BlendChess</h1>
           </div>
+
+          <!-- Resume Banner: shown only when a saved online session exists -->
+          <div id="lobbyResumeSection" class="lobby-resume-section hidden">
+            <div class="lobby-resume-card">
+              <div class="lobby-resume-icon">⚡</div>
+              <div class="lobby-resume-body">
+                <strong class="lobby-resume-title">Online Game in Progress</strong>
+                <div id="lobbyResumeInfo" class="lobby-resume-info"></div>
+              </div>
+              <div class="lobby-resume-btns">
+                <button id="lobbyResumeBtn" class="btn btn-primary btn-sm" type="button">↩ Resume</button>
+                <button id="lobbyStartFreshBtn" class="btn btn-ghost btn-sm" type="button">Start Fresh</button>
+              </div>
+            </div>
+          </div>
+
           <p class="lobby-subtitle">Choose how to play</p>
           <div class="lobby-choices">
             <button id="lobbyLocal" class="lobby-choice-btn" type="button">

@@ -155,6 +155,10 @@
   const lobbyBackBtn = document.getElementById('lobbyBack');
   const lobbyHardModeEl = document.getElementById('lobbyHardMode');
   const openLobbyBtn = document.getElementById('openLobby');
+  const lobbyResumeSectionEl = document.getElementById('lobbyResumeSection');
+  const lobbyResumeInfoEl = document.getElementById('lobbyResumeInfo');
+  const lobbyResumeBtnEl = document.getElementById('lobbyResumeBtn');
+  const lobbyStartFreshBtnEl = document.getElementById('lobbyStartFreshBtn');
   const ingameToolbar = document.getElementById('ingameToolbar');
   const promotionPickerEl = document.getElementById('promotionPicker');
   const promotionPiecesEl = document.getElementById('promotionPieces');
@@ -2426,7 +2430,8 @@
     }
 
     const roster = payload?.players || payload?.game?.players;
-    if (!multiplayer.color && roster && multiplayer.playerId) {
+    // Always trust the server's roster for color — overrides stale local cache
+    if (roster && multiplayer.playerId) {
       const match = roster.find((player) => player.playerId === multiplayer.playerId);
       if (match?.color) {
         multiplayer.color = match.color;
@@ -3468,6 +3473,60 @@
   }
 
   // ===== LOBBY MODAL LOGIC =====
+  function populateLobbyResumeSection() {
+    if (!lobbyResumeSectionEl) {
+      return;
+    }
+    const saved = readSavedOnlineSession();
+    if (!saved) {
+      lobbyResumeSectionEl.classList.add('hidden');
+      return;
+    }
+    const colorLabel = saved.color === 'w' ? 'White' : saved.color === 'b' ? 'Black' : 'Unknown color';
+    if (lobbyResumeInfoEl) {
+      lobbyResumeInfoEl.textContent = `Room: ${saved.roomCode}  ·  Playing as: ${colorLabel}`;
+    }
+    lobbyResumeSectionEl.classList.remove('hidden');
+  }
+
+  async function handleLobbyResume() {
+    const saved = readSavedOnlineSession();
+    if (!saved) {
+      return;
+    }
+    // Pre-populate the multiplayer state so the resume flow works
+    multiplayer.roomCode = saved.roomCode;
+    multiplayer.playerId = saved.playerId;
+    multiplayer.resumeToken = saved.resumeToken;
+    multiplayer.color = saved.color || null;
+    multiplayer.role = 'player';
+    multiplayer.spectatorId = null;
+    multiplayer.socketUrl = saved.socketUrl || DEFAULT_SERVER_URL;
+    joinRoomCodeEl.value = saved.roomCode;
+    serverUrlEl.value = multiplayer.socketUrl;
+    if (!isOnlineMode()) {
+      playModeEl.value = 'online';
+      setMode('online', { preserveSession: true });
+    }
+    syncMultiplayerPanel();
+    syncMultiplayerControlState();
+    hideLobby();
+    resumeOnlineSession('Resuming saved session');
+  }
+
+  function handleLobbyStartFresh() {
+    clearSavedOnlineSession();
+    if (lobbyResumeSectionEl) {
+      lobbyResumeSectionEl.classList.add('hidden');
+    }
+    // Reset multiplayer color so the board renders neutrally
+    multiplayer.color = null;
+    multiplayer.roomCode = '';
+    multiplayer.playerId = null;
+    multiplayer.resumeToken = null;
+    render();
+  }
+
   function showLobby() {
     if (gameLobbyOverlay) {
       gameLobbyOverlay.classList.remove('hidden');
@@ -3475,6 +3534,7 @@
       lobbyStep2.classList.remove('active');
       if (lobbyHardModeEl) lobbyHardModeEl.checked = hardModeEl.checked;
       resetLobbyActionButtons();
+      populateLobbyResumeSection();
     }
   }
 
@@ -3706,6 +3766,12 @@
   if (openLobbyBtn) {
     openLobbyBtn.addEventListener('click', showLobby);
   }
+  if (lobbyResumeBtnEl) {
+    lobbyResumeBtnEl.addEventListener('click', handleLobbyResume);
+  }
+  if (lobbyStartFreshBtnEl) {
+    lobbyStartFreshBtnEl.addEventListener('click', handleLobbyStartFresh);
+  }
 
   // Initialize
   loadSavedThemes();
@@ -3715,15 +3781,11 @@
   state.hardMode = hardModeEl.checked;
   loadHistoryCache();
   applyUrlPrefill();
-  tryResumeOnlineSessionOnLoad();
 
-  // Show lobby on first load if no saved session
-  const savedSession = readSavedOnlineSession();
-  if (!savedSession && initialMode === 'local') {
-    showLobby();
-  } else {
-    hideLobby();
-  }
+  // Always show the lobby on page load so users explicitly choose how to proceed.
+  // If a saved online session exists the lobby resume banner will appear,
+  // letting the user decide whether to resume or start fresh.
+  showLobby();
 
   render();
 })();

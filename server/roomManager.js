@@ -251,6 +251,11 @@ export class Room {
       return { ok: false, reason: ERROR_CODES.ROOM_FULL };
     }
 
+    // Guard: never assign a color that is already held by a connected player
+    if (this.isColorConnected(color)) {
+      return { ok: false, reason: ERROR_CODES.ROOM_FULL };
+    }
+
     const player = {
       id: playerId,
       color,

@@ -382,7 +382,23 @@ export class GameHub extends DurableObject {
     const persisted = await this.ctx.storage.get('rooms');
     if (persisted && typeof persisted === 'object') {
       for (const [roomCode, room] of Object.entries(persisted)) {
-        this.rooms.set(roomCode, normalizeRoomState(room));
+        const normalized = normalizeRoomState(room);
+        // Mark every player disconnected — their WebSocket connections do not
+        // survive DO hibernation/restart.  Reconnecting clients will resume
+        // their seats via the resume-token flow; fresh joiners will receive
+        // correct color assignments based on who is actually connected.
+        for (const playerId of normalized.playerOrder) {
+          if (normalized.players[playerId]) {
+            normalized.players[playerId].connected = false;
+          }
+        }
+        for (const spectatorId of normalized.spectatorOrder || []) {
+          if (normalized.spectators?.[spectatorId]) {
+            normalized.spectators[spectatorId].connected = false;
+          }
+        }
+        normalized.waitingForStart = true;
+        this.rooms.set(roomCode, normalized);
       }
     }
   }
@@ -487,6 +503,11 @@ export class GameHub extends DurableObject {
 
     const color = isColorConnected(room, 'w') ? 'b' : 'w';
     cleanupDisconnectedColor(room, color);
+
+    // Guard: never assign a color that is already held by a connected player
+    if (isColorConnected(room, color)) {
+      return { ok: false, reason: ERROR_CODES.ROOM_FULL };
+    }
 
     const playerId = connection.id;
     const player = {
