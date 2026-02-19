@@ -1016,6 +1016,7 @@ export class GameHub extends DurableObject {
           playerId: connection.playerId,
           color: assigned.player.color,
           nickname: assigned.player.nickname,
+          resumeToken: assigned.player.resumeToken,
         }),
       );
 

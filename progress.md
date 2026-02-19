@@ -89,3 +89,44 @@ Original prompt: Do the smoke pass test please
 - TODO suggestions for next pass:
   - Consider a dedicated local action cluster (Draw/Resign) instead of reusing online toolbar, to reduce UI noise.
   - Add Worker-side automated tests mirroring Node roomManager resign/hard-mode policy coverage.
+
+- Deep reconnect + visibility stabilization pass (Feb 18, 2026):
+  - Fixed online move/history masking race in `app.js` where opponent SAN could briefly render unmasked if `multiplayer.color` was temporarily unresolved; online player mode now stays masked until identity is known.
+  - Refactored client socket lifecycle in `app.js`:
+    - Added deterministic connect-settle behavior (`connectSocket` now rejects on close-before-open instead of hanging).
+    - Added heartbeat ping/pong loop (`SOCKET_HEARTBEAT_INTERVAL_MS`) to detect stale sockets and trigger reconnect.
+    - Added pending room-action timeout tracking (`markPendingRoomAction`) for create/join/spectate/resume flows, with auto-retry behavior for resume timeouts.
+    - Cleared pending action/heartbeat state consistently on disconnect/reconnect transitions.
+    - Increased auto-reconnect budget from 6 to 20 attempts.
+  - Worker parity fix in `ws-worker/src/room.js`:
+    - `JOIN_ROOM -> PLAYER_ASSIGNED` now includes `resumeToken` (matching Node server), enabling persisted resumable sessions for joined players on Worker deployments.
+  - Validation:
+    - Syntax: `node --check app.js`, `node --check ws-worker/src/room.js`, `node --check server/server.js`, `node --check server/roomManager.js`.
+    - Node tests: `npm test` in `server/` (all passing).
+    - Required web-game client run:
+      - `node --experimental-default-type=module "$WEB_GAME_CLIENT" --url http://127.0.0.1:8080 --click-selector "#lobbyOnline" --actions-json '{"steps":[]}' --iterations 1 --pause-ms 300 --screenshot-dir /tmp/blendchess-connection-refactor`
+      - Screenshot reviewed: `/tmp/blendchess-connection-refactor/shot-0.png`.
+    - Additional Playwright reconnect smoke (2 contexts, create/join, reload/resume) confirmed session persistence and reconnect:
+      - resume session payload present before/after reload with `resumeToken`.
+      - artifact screenshots: `/tmp/blendchess-connection-refactor/reconnect-a.png`, `/tmp/blendchess-connection-refactor/reconnect-b.png`.
+    - Additional masking smoke (2 contexts; opponent move visibility) confirms move list remains masked on defender view (`****`):
+      - artifact screenshot: `/tmp/blendchess-connection-refactor/mask-b-after-opponent-move.png`.
+
+- TODO suggestions:
+  - Mirror the Worker reconnect/session semantics with dedicated automated Worker tests (similar to `server/tests/roomManager.test.mjs`) to catch future parity drift.
+  - Consider moving heartbeat/reconnect constants behind a small config object for easier tuning by environment (local vs production).
+- Follow-up retry edge-case hardening:
+  - Added post-resume failure requeue in `resumeOnlineSession()` finally block so auto-reconnect continues when socket closes before handshake completes.
+  - Re-validated after this patch:
+    - Reconnect smoke: `/tmp/blendchess-reconnect-smoke.mjs` succeeds (room resume active, session payload persisted).
+    - Masking smoke: `/tmp/blendchess-mask-smoke.mjs` still reports first opponent move as `****`.
+
+- Added automated Worker tests (`ws-worker/tests/room.test.mjs`) with a lightweight Node VM harness for `src/room.js`:
+  - verifies `join_room` emits `player_assigned.resumeToken`
+  - verifies plain join is rejected with `PLAYER_NOT_FOUND` when a disconnected seat is reserved in an active game
+  - verifies resume join with `playerId + resumeToken` successfully reclaims the prior seat
+- Added `ws-worker` test script: `npm test` -> `node --experimental-vm-modules --test tests/*.test.mjs`.
+- Updated `ws-worker/README.md` with test command docs.
+- Validation run:
+  - `npm test` in `ws-worker` passes (3/3)
+  - `npm test` in `server` still passes (18/18)

@@ -16,6 +16,13 @@ npm install
 npm run dev
 ```
 
+## Run tests
+
+```bash
+cd ws-worker
+npm test
+```
+
 ## Deploy
 
 ```bash

@@ -208,8 +208,10 @@
   const HISTORY_MAX_ITEMS = 40;
   const UI_THEME_STORAGE_KEY = 'blendchess.uiTheme';
   const BOARD_THEME_STORAGE_KEY = 'blendchess.boardTheme';
-  const AUTO_RECONNECT_MAX_ATTEMPTS = 6;
+  const AUTO_RECONNECT_MAX_ATTEMPTS = 20;
   const AUTO_RECONNECT_BASE_DELAY_MS = 1200;
+  const SOCKET_HEARTBEAT_INTERVAL_MS = 9000;
+  const ROOM_ACTION_TIMEOUT_MS = 9000;
   const DRAW_CLAIM_REASONS = ['threefold', 'fiftyMove', 'seventyFiveMove', 'fivefold', 'insufficientMaterial'];
   const MASKED_MOVE_TEXT = '****';
   const DRAW_REASON_ALIASES = {
@@ -239,6 +241,10 @@
     awaitingStateSync: false,
     reconnectAttempts: 0,
     reconnectTimer: null,
+    roomAction: null,
+    roomActionTimer: null,
+    heartbeatTimer: null,
+    waitingForPong: false,
     resumeInFlight: false,
     intentionalLeave: false,
   };
@@ -1121,6 +1127,111 @@
     }
   }
 
+  function clearRoomActionTimer() {
+    if (multiplayer.roomActionTimer) {
+      window.clearTimeout(multiplayer.roomActionTimer);
+      multiplayer.roomActionTimer = null;
+    }
+  }
+
+  function clearPendingRoomAction() {
+    clearRoomActionTimer();
+    multiplayer.roomAction = null;
+  }
+
+  function markPendingRoomAction(actionType, roomCode = '') {
+    clearPendingRoomAction();
+    multiplayer.roomAction = {
+      type: actionType,
+      roomCode: normalizeRoomCode(roomCode || multiplayer.roomCode || ''),
+      startedAt: Date.now(),
+    };
+    multiplayer.roomActionTimer = window.setTimeout(() => {
+      const pending = multiplayer.roomAction;
+      if (!pending || pending.type !== actionType) {
+        return;
+      }
+
+      const targetRoom = pending.roomCode || normalizeRoomCode(multiplayer.roomCode || '');
+      clearPendingRoomAction();
+      if (actionType === 'resume_join') {
+        addEvent(targetRoom
+          ? `Reconnect to room ${targetRoom} timed out. Retrying...`
+          : 'Reconnect timed out. Retrying...');
+        render();
+        if (multiplayer.socket && (
+          multiplayer.socket.readyState === WebSocket.OPEN
+          || multiplayer.socket.readyState === WebSocket.CONNECTING
+        )) {
+          try {
+            multiplayer.socket.close();
+          } catch {
+            // no-op
+          }
+        } else {
+          scheduleAutoReconnect();
+        }
+        return;
+      }
+
+      addEvent(targetRoom
+        ? `Timed out waiting for room response (${targetRoom}). Please retry.`
+        : 'Timed out waiting for room response. Please retry.');
+      resetLobbyActionButtons();
+      syncMultiplayerControlState();
+      render();
+    }, ROOM_ACTION_TIMEOUT_MS);
+  }
+
+  function clearHeartbeatTimer() {
+    if (multiplayer.heartbeatTimer) {
+      window.clearInterval(multiplayer.heartbeatTimer);
+      multiplayer.heartbeatTimer = null;
+    }
+    multiplayer.waitingForPong = false;
+  }
+
+  function markSocketActivity() {
+    multiplayer.waitingForPong = false;
+  }
+
+  function startHeartbeatLoop() {
+    clearHeartbeatTimer();
+    if (!multiplayer.socket || !multiplayer.connected) {
+      return;
+    }
+
+    multiplayer.heartbeatTimer = window.setInterval(() => {
+      if (!multiplayer.socket || multiplayer.socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (!isOnlineMode() || multiplayer.intentionalLeave || !multiplayer.roomCode) {
+        return;
+      }
+
+      if (multiplayer.waitingForPong) {
+        addEvent('Connection heartbeat timed out. Reconnecting...');
+        render();
+        clearHeartbeatTimer();
+        try {
+          multiplayer.socket.close();
+        } catch {
+          // no-op
+        }
+        return;
+      }
+
+      multiplayer.waitingForPong = true;
+      multiplayer.socket.send(JSON.stringify({
+        type: WEBSOCKET_TYPES.PING,
+        roomCode: multiplayer.roomCode,
+        playerId: multiplayer.playerId || '',
+        payload: {},
+        version: PROTOCOL_VERSION,
+      }));
+    }, SOCKET_HEARTBEAT_INTERVAL_MS);
+  }
+
   function readSavedOnlineSession() {
     try {
       const raw = window.localStorage.getItem(ONLINE_SESSION_STORAGE_KEY);
@@ -1203,6 +1314,7 @@
   }
 
   function scheduleAutoReconnect() {
+    clearPendingRoomAction();
     if (
       multiplayer.intentionalLeave
       || !isOnlineMode()
@@ -1359,16 +1471,31 @@
 
     try {
       await connectSocket();
-      sendSocketMessage(
+      const sent = sendSocketMessage(
         WEBSOCKET_TYPES.JOIN_ROOM,
         { nickname: 'Player', resume: true, resumeToken: multiplayer.resumeToken },
         saved.roomCode,
       );
+      if (!sent) {
+        throw new Error('Failed to send resume request.');
+      }
+      markPendingRoomAction('resume_join', saved.roomCode);
     } catch (error) {
+      clearPendingRoomAction();
       addEvent(`Reconnect failed: ${error.message}`);
       render();
     } finally {
       multiplayer.resumeInFlight = false;
+      if (
+        !multiplayer.connected
+        && !multiplayer.intentionalLeave
+        && isOnlineMode()
+        && multiplayer.role === 'player'
+        && multiplayer.roomCode
+        && multiplayer.playerId
+      ) {
+        scheduleAutoReconnect();
+      }
       syncMultiplayerControlState();
     }
   }
@@ -1433,6 +1560,12 @@
   }
 
   function shouldMaskOpponentMoves() {
+    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
+      return false;
+    }
+    if (isOnlineMode()) {
+      return multiplayer.role === 'player';
+    }
     return Boolean(getViewerColorForMasking());
   }
 
@@ -1457,7 +1590,10 @@
       return false;
     }
     const viewerColor = getViewerColorForMasking();
-    return viewerColor ? moverColor === viewerColor : true;
+    if (viewerColor) {
+      return moverColor === viewerColor;
+    }
+    return !isOnlineMode();
   }
 
   function shouldShowCaptureMarker(marker) {
@@ -1474,7 +1610,7 @@
     // Show to the taker (green circle) AND to the player who lost the piece (X)
     return viewerColor
       ? (marker.moverColor === viewerColor || marker.capturedColor === viewerColor)
-      : true;
+      : !isOnlineMode();
   }
 
   function shouldShowCheckSquareHighlight(turnForBoard) {
@@ -1530,7 +1666,7 @@
     }
     const viewerColor = getViewerColorForMasking();
     if (!viewerColor) {
-      return entry;
+      return isOnlineMode() ? maskBoardSquareText(entry) : entry;
     }
     const body = entry;
     const normalizedEventColor = normalizeEventColor(eventColor) || inferEventColor(body);
@@ -1804,6 +1940,8 @@
       disconnectSocket();
     }
     clearReconnectTimer();
+    clearPendingRoomAction();
+    clearHeartbeatTimer();
     multiplayer.reconnectAttempts = 0;
     multiplayer.resumeInFlight = false;
     multiplayer.connected = false;
@@ -2854,6 +2992,8 @@
     if (multiplayer.connectPromise) {
       multiplayer.connectPromise = null;
     }
+    clearPendingRoomAction();
+    clearHeartbeatTimer();
     if (!multiplayer.socket) {
       multiplayer.connected = false;
       multiplayer.awaitingStateSync = false;
@@ -2867,6 +3007,7 @@
     socket.onclose = null;
     socket.onerror = null;
     multiplayer.awaitingStateSync = false;
+    multiplayer.waitingForPong = false;
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
       socket.close();
     }
@@ -2877,7 +3018,11 @@
     if (multiplayer.connectPromise) {
       return multiplayer.connectPromise;
     }
-    if (multiplayer.socket && multiplayer.connected) {
+    if (
+      multiplayer.socket
+      && multiplayer.connected
+      && multiplayer.socket.readyState === WebSocket.OPEN
+    ) {
       return Promise.resolve();
     }
 
@@ -2895,39 +3040,80 @@
     multiplayer.connectPromise = new Promise((resolve, reject) => {
       const socket = new WebSocket(nextServerUrl);
       multiplayer.socket = socket;
+      let settled = false;
+      const isCurrentSocket = () => multiplayer.socket === socket;
+      const settleResolve = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve();
+      };
+      const settleReject = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
 
       socket.addEventListener('open', () => {
+        if (!isCurrentSocket()) {
+          return;
+        }
         multiplayer.connected = true;
         multiplayer.reconnectAttempts = 0;
         clearReconnectTimer();
         multiplayer.connectPromise = null;
         multiplayerStatusEl.textContent = `Connected to ${nextServerUrl}.`;
+        markSocketActivity();
+        startHeartbeatLoop();
         syncMultiplayerControlState();
         syncMultiplayerPanel();
-        resolve();
+        settleResolve();
       });
 
-      socket.addEventListener('message', handleServerMessage);
+      socket.addEventListener('message', (messageEvent) => {
+        if (!isCurrentSocket()) {
+          return;
+        }
+        markSocketActivity();
+        handleServerMessage(messageEvent);
+      });
       socket.addEventListener('error', () => {
+        if (!isCurrentSocket()) {
+          return;
+        }
         multiplayer.connected = false;
         multiplayer.connectPromise = null;
         multiplayerStatusEl.textContent = 'Socket error while connecting.';
+        clearHeartbeatTimer();
         syncMultiplayerControlState();
-        reject(new Error('WebSocket error.'));
+        settleReject(new Error('WebSocket error.'));
       });
 
       socket.addEventListener('close', () => {
+        if (!isCurrentSocket()) {
+          return;
+        }
+        const wasConnected = multiplayer.connected;
         const wasOnline = isOnlineMode();
         const hadRoom = Boolean(multiplayer.roomCode);
         const shouldAutoReconnect = wasOnline && hadRoom && !multiplayer.intentionalLeave;
         multiplayer.connected = false;
         multiplayer.connectPromise = null;
+        multiplayer.socket = null;
         multiplayer.awaitingStateSync = false;
+        clearPendingRoomAction();
+        clearHeartbeatTimer();
         if (wasOnline) {
           syncMultiplayerPanel();
           render();
         }
         syncMultiplayerControlState();
+        if (!wasConnected) {
+          settleReject(new Error('WebSocket closed before connecting.'));
+        }
         if (shouldAutoReconnect) {
           scheduleAutoReconnect();
         }
@@ -2948,7 +3134,9 @@
     }
 
     const { type, payload = {} } = message;
+    markSocketActivity();
     if (type === WEBSOCKET_TYPES.ROOM_CREATED) {
+      clearPendingRoomAction();
       multiplayer.roomCode = normalizeRoomCode(message.roomCode || payload.roomCode);
       applyPlayerIdentity(message, payload);
       multiplayer.role = 'player';
@@ -2979,6 +3167,7 @@
     }
 
     if (type === WEBSOCKET_TYPES.ROOM_JOINED) {
+      clearPendingRoomAction();
       multiplayer.roomCode = normalizeRoomCode(message.roomCode || payload.roomCode);
       applyPlayerIdentity(message, payload);
       if (payload.role === 'spectator') {
@@ -3146,10 +3335,8 @@
 
     if (type === WEBSOCKET_TYPES.ERROR) {
       const text = ERROR_TEXT[payload.errorCode] || payload.message || 'Server error.';
-      if (
-        payload.errorCode === 'UNKNOWN_ROOM'
-        || payload.errorCode === 'PLAYER_NOT_FOUND'
-      ) {
+      clearPendingRoomAction();
+      if (payload.errorCode === 'UNKNOWN_ROOM') {
         clearSavedOnlineSession();
       }
       resetLobbyActionButtons();
@@ -3176,8 +3363,7 @@
     }
 
     if (type === WEBSOCKET_TYPES.PONG) {
-      addEvent('Server responded to ping.');
-      render();
+      return;
     }
   }
 
@@ -3258,10 +3444,12 @@
       })) {
         throw new Error('Failed to send create request');
       }
+      markPendingRoomAction('create_room');
       addEvent('Requesting room...');
       syncMultiplayerPanel();
       syncMultiplayerControlState();
     } catch (error) {
+      clearPendingRoomAction();
       addEvent(error.message);
       resetLobbyActionButtons();
       syncMultiplayerControlState();
@@ -3324,6 +3512,7 @@
       if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, joinPayload, roomCode)) {
         throw new Error('Failed to send join request');
       }
+      markPendingRoomAction(resumeIdentity ? 'resume_join' : 'join_room', roomCode);
       multiplayer.role = 'player';
       multiplayer.spectatorId = null;
       multiplayer.roomCode = roomCode;
@@ -3333,6 +3522,7 @@
       syncMultiplayerPanel();
       syncMultiplayerControlState();
     } catch (error) {
+      clearPendingRoomAction();
       addEvent(error.message);
       resetLobbyActionButtons();
       syncMultiplayerControlState();
@@ -3363,6 +3553,7 @@
       }, roomCode)) {
         throw new Error('Failed to send spectate request');
       }
+      markPendingRoomAction('spectate_room', roomCode);
       clearSavedOnlineSession();
       multiplayer.role = 'spectator';
       multiplayer.color = null;
@@ -3373,6 +3564,7 @@
       syncMultiplayerPanel();
       syncMultiplayerControlState();
     } catch (error) {
+      clearPendingRoomAction();
       addEvent(error.message);
       resetLobbyActionButtons();
       syncMultiplayerControlState();
@@ -3577,10 +3769,9 @@
     // If not yet in a room, disconnect any partial socket connection and revert to local
     if (!multiplayer.roomCode) {
       multiplayer.intentionalLeave = true;
-      if (multiplayer.connected) {
+      if (multiplayer.connected || multiplayer.socket || multiplayer.connectPromise) {
         disconnectSocket();
       }
-      multiplayer.connectPromise = null;
       setMode('local');
       playModeEl.value = 'local';
     }
