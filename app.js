@@ -3,6 +3,10 @@
   if (!core) {
     throw new Error('Chess core is required. Load chess-core.js before app.js.');
   }
+  const sharedProtocol = window.BlendChessProtocol;
+  if (!sharedProtocol) {
+    throw new Error('Protocol is required. Load shared/protocol.js before app.js.');
+  }
 
   const PIECE_SYMBOLS = {
     w: { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙' },
@@ -51,29 +55,9 @@
     shouldHydrateSnapshotVersion,
   } = stateGuards;
 
-  const WEBSOCKET_TYPES = {
-    CREATE_ROOM: 'create_room',
-    ROOM_CREATED: 'room_created',
-    JOIN_ROOM: 'join_room',
-    ROOM_JOINED: 'room_joined',
-    PLAYER_ASSIGNED: 'player_assigned',
-    GAME_STATE: 'game_state',
-    MOVE_INTENT: 'move_intent',
-    MOVE_APPLIED: 'move_applied',
-    MOVE_REJECTED: 'move_rejected',
-    SET_HARD_MODE: 'set_hard_mode',
-    CLAIM_DRAW: 'claim_draw',
-    DRAW_RESULT: 'draw_result',
-    DRAW_OFFERED: 'draw_offered',
-    RESIGN: 'resign',
-    RESIGN_RESULT: 'resign_result',
-    NEW_GAME: 'new_game',
-    ERROR: 'error',
-    PING: 'ping',
-    PONG: 'pong',
-  };
-
-  const PROTOCOL_VERSION = '1.0.0';
+  const WEBSOCKET_TYPES = sharedProtocol.TYPES;
+  const PROTOCOL_VERSION = sharedProtocol.PROTOCOL_VERSION;
+  const ERROR_CODES = sharedProtocol.ERROR_CODES;
 
   const ERROR_TEXT = {
     INVALID_PAYLOAD: 'Server could not parse that move request.',
@@ -88,22 +72,6 @@
     PLAYER_NOT_FOUND: 'Could not find player in room.',
     INVALID_DRAW_CLAIM: 'Draw claim is not currently valid.',
     VERSION_MISMATCH: 'Client/server protocol mismatch. Refresh and reconnect.',
-  };
-
-  // Mirror of server ERROR_CODES for client-side comparisons
-  const ERROR_CODES = {
-    INVALID_PAYLOAD: 'INVALID_PAYLOAD',
-    UNKNOWN_ROOM: 'UNKNOWN_ROOM',
-    ROOM_FULL: 'ROOM_FULL',
-    NOT_YOUR_TURN: 'NOT_YOUR_TURN',
-    WRONG_COLOR: 'WRONG_COLOR',
-    ILLEGAL_MOVE: 'ILLEGAL_MOVE',
-    GAME_OVER: 'GAME_OVER',
-    ROOM_NOT_READY: 'ROOM_NOT_READY',
-    RATE_LIMIT: 'RATE_LIMIT',
-    PLAYER_NOT_FOUND: 'PLAYER_NOT_FOUND',
-    INVALID_DRAW_CLAIM: 'INVALID_DRAW_CLAIM',
-    VERSION_MISMATCH: 'VERSION_MISMATCH',
   };
 
   const boardEl = document.getElementById('board');
@@ -214,15 +182,7 @@
   const ROOM_ACTION_TIMEOUT_MS = 9000;
   const DRAW_CLAIM_REASONS = ['threefold', 'fiftyMove', 'seventyFiveMove', 'fivefold', 'insufficientMaterial'];
   const MASKED_MOVE_TEXT = '****';
-  const DRAW_REASON_ALIASES = {
-    threefold: 'threefold',
-    fiftymove: 'fiftyMove',
-    fiftymoverule: 'fiftyMove',
-    seventyfivemove: 'seventyFiveMove',
-    seventyfivemoverule: 'seventyFiveMove',
-    fivefold: 'fivefold',
-    insufficientmaterial: 'insufficientMaterial',
-  };
+  const DRAW_REASON_ALIASES = sharedProtocol.DRAW_REASON_ALIASES;
 
   const multiplayer = {
     mode: 'local',

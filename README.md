@@ -31,9 +31,32 @@ npm start
 
 Use `ws://localhost:3000` in the app.
 
-### Cloudflare backend
+### Cloudflare backend (Pages + Worker Durable Object)
 
-See `CLOUDFLARE_DEPLOY.md`.
+Deploy Worker backend:
+
+```bash
+cd ws-worker
+npx wrangler login
+npx wrangler deploy
+```
+
+Deploy frontend to Pages:
+
+```bash
+npx wrangler pages project create blendchess
+npx wrangler pages deploy . --project-name=blendchess
+```
+
+Use `wss://<worker-subdomain>.workers.dev` as the server URL in the app.
+
+To set a default server URL, define before loading `app.js`:
+
+```html
+<script>
+  window.BLENDCHESS_SERVER_URL = 'wss://blendchess-ws.<subdomain>.workers.dev';
+</script>
+```
 
 ## Core behavior summary
 
@@ -43,10 +66,9 @@ See `CLOUDFLARE_DEPLOY.md`.
 - PGN export is enabled only after the game ends.
 - Spectator roster is shown as count, not spectator name list.
 
-## Documentation map
+## Documentation
 
-- `ARCHITECTURE.md`: detailed system flow and component boundaries.
-- `GAMEPLAY_EXPECTATIONS.md`: expected behavior and explicit non-goals.
-- `MULTIPLAYER_QUICKSTART.md`: shortest multiplayer setup path.
-- `multiplayer-schema.md`: websocket protocol envelope and message schema.
-- `DETAILS.md`: compact project index.
+- `ARCHITECTURE.md` — system design, component boundaries, scaling direction.
+- `multiplayer-schema.md` — WebSocket protocol envelope and message schema.
+- `server/README.md` — Node backend specifics.
+- `ws-worker/README.md` — Cloudflare Worker backend specifics.

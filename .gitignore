@@ -1,3 +1,7 @@
+node_modules/
 server/node_modules/
 ws-worker/node_modules/
 *.log
+.playwright-cli/
+.wrangler/
+test-results/

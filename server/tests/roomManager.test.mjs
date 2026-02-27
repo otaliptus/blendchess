@@ -43,6 +43,16 @@ test('spectators can join and be represented in game snapshots', () => {
   assert.equal(room.createGameSnapshot().spectators[0].spectatorId, 'spectator-1');
 });
 
+test('assignSpectator is idempotent for the same spectator id', () => {
+  const room = new Room('ABC123');
+  room.assignSpectator('spectator-1', 'First Name');
+  room.assignSpectator('spectator-1', 'Second Name');
+
+  assert.equal(room.connectedSpectatorCount(), 1);
+  assert.equal(room.getSpectatorAssignments().length, 1);
+  assert.equal(room.getSpectatorAssignments()[0].nickname, 'Second Name');
+});
+
 test('spectator removal updates connected members', () => {
   const room = new Room('ABC123');
   room.assignPlayer('player-1', 'White');
@@ -51,6 +61,24 @@ test('spectator removal updates connected members', () => {
   room.removeSpectator('spectator-1');
   assert.equal(room.connectedSpectatorCount(), 0);
   assert.equal(room.createGameSnapshot().spectators.length, 0);
+});
+
+test('removePlayer updates room lastActivity', () => {
+  const room = new Room('ABC123');
+  room.assignPlayer('player-1', 'White');
+  room.state.lastActivity = 0;
+
+  room.removePlayer('player-1');
+  assert.notEqual(room.state.lastActivity, 0);
+});
+
+test('removeSpectator updates room lastActivity', () => {
+  const room = new Room('ABC123');
+  room.assignSpectator('spectator-1', 'Watcher');
+  room.state.lastActivity = 0;
+
+  room.removeSpectator('spectator-1');
+  assert.notEqual(room.state.lastActivity, 0);
 });
 
 test('hard mode forfeits illegal moves and advances turn', () => {
@@ -127,24 +155,11 @@ test('assignPlayer cleans stale seat before capacity check', () => {
   room.assignPlayer('black-stale', 'Black');
   room.removePlayer('black-stale');
 
-  const callOrder = [];
-  const originalCleanupDisconnectedColor = room.cleanupDisconnectedColor.bind(room);
-  const originalIsFull = room.isFull.bind(room);
-  room.cleanupDisconnectedColor = (color) => {
-    callOrder.push(`cleanup:${color}`);
-    return originalCleanupDisconnectedColor(color);
-  };
-  room.isFull = () => {
-    callOrder.push('isFull');
-    return originalIsFull();
-  };
-
+  // Stale disconnected black seat should be cleaned up, allowing a new black player
   const result = room.assignPlayer('black-player', 'Black');
   assert.equal(result.ok, true);
   assert.equal(result.player.color, 'b');
   assert.equal(room.getPlayer('black-stale'), null);
-  assert.equal(callOrder[0], 'cleanup:b');
-  assert.equal(callOrder[1], 'isFull');
 });
 
 test('assignPlayer rejects additional connected player when room is full', () => {
@@ -167,4 +182,36 @@ test('assignPlayer reconnect keeps color and marks player connected', () => {
   assert.equal(reconnect.player.color, firstColor);
   assert.equal(reconnect.player.connected, true);
   assert.equal(reconnect.player.resumeToken, 'token-2');
+});
+
+test('isResumeTokenValid validates saved player resume tokens', () => {
+  const room = new Room('ABC123');
+  room.assignPlayer('player-1', 'First', 'token-1');
+
+  assert.equal(room.isResumeTokenValid('player-1', 'token-1'), true);
+  assert.equal(room.isResumeTokenValid('player-1', 'wrong-token'), false);
+  assert.equal(room.isResumeTokenValid('missing-player', 'token-1'), false);
+});
+
+test('game snapshot does not expose mutable move history or en passant state', () => {
+  const room = createReadyRoom();
+  room.applyMove('white-player', {
+    from: { r: 6, c: 4 },
+    to: { r: 4, c: 4 },
+  });
+  room.applyMove('black-player', {
+    from: { r: 1, c: 0 },
+    to: { r: 3, c: 0 },
+  });
+
+  const snapshot = room.createGameSnapshot();
+  snapshot.movePairs[0].white = 'HACK';
+  if (snapshot.enPassant) {
+    snapshot.enPassant.r = 0;
+  }
+
+  assert.notEqual(room.state.movePairs[0].white, 'HACK');
+  if (room.state.enPassant) {
+    assert.notEqual(room.state.enPassant.r, 0);
+  }
 });

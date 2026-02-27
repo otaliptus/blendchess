@@ -1,4 +1,7 @@
 import './chess-core.js';
+import '../../shared/protocol.js';
+import '../../shared/engine-facade.js';
+import '../../shared/room-logic.js';
 import { GameHub } from './room.js';
 
 function isWebSocketUpgrade(request) {

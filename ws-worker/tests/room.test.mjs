@@ -1,17 +1,23 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import vm from 'node:vm';
 
+const require = createRequire(import.meta.url);
 const PROTOCOL_VERSION = '1.0.0';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOM_MODULE_PATH = path.resolve(__dirname, '../src/room.js');
 const CHESS_CORE_PATH = path.resolve(__dirname, '../src/chess-core.js');
 
+// Load shared IIFE modules via CJS require and bridge to globalThis
 await import(CHESS_CORE_PATH);
+globalThis.BlendChessProtocol = globalThis.BlendChessProtocol || require('../../shared/protocol.js');
+globalThis.BlendChessEngineFacade = globalThis.BlendChessEngineFacade || require('../../shared/engine-facade.js');
+globalThis.BlendChessRoomLogic = globalThis.BlendChessRoomLogic || require('../../shared/room-logic.js');
 
 async function loadGameHubClass() {
   const source = await readFile(ROOM_MODULE_PATH, 'utf8');
@@ -21,14 +27,24 @@ async function loadGameHubClass() {
     Date,
     JSON,
     Math,
+    Object,
+    Array,
+    String,
+    Number,
+    Boolean,
     Uint32Array,
     setTimeout,
     clearTimeout,
     setInterval,
     clearInterval,
+    WebSocketPair: class WebSocketPair {},
+    Response: class Response { constructor(body, init) { this.body = body; this.status = init?.status; } },
   });
   context.globalThis = context;
   context.ChessCore = globalThis.ChessCore;
+  context.BlendChessProtocol = globalThis.BlendChessProtocol;
+  context.BlendChessEngineFacade = globalThis.BlendChessEngineFacade;
+  context.BlendChessRoomLogic = globalThis.BlendChessRoomLogic;
 
   const module = new vm.SourceTextModule(source, {
     context,
