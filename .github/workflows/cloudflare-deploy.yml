@@ -28,7 +28,10 @@ jobs:
           node --check client/stateGuards.js
 
       - name: Verify chess-core sync
-        run: diff chess-core.js ws-worker/src/chess-core.js
+        run: |
+          tmp_file="$(mktemp)"
+          perl -0pe "s/\n\n  if \(typeof module !== 'undefined' && module\.exports\) \{\n    module\.exports = coreExports;\n  \}\n/\n/s" chess-core.js > "$tmp_file"
+          diff "$tmp_file" ws-worker/src/chess-core.js
 
       - name: Server tests
         working-directory: server

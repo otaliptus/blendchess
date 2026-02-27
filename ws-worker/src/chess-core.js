@@ -732,5 +732,4 @@
   } else if (typeof window !== 'undefined') {
     window.ChessCore = coreExports;
   }
-
 })();
