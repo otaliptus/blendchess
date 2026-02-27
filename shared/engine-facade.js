@@ -98,11 +98,13 @@
     normalizeMoveIntent: normalizeMoveIntent,
   };
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = exports;
+  if (typeof globalThis !== 'undefined') {
+    globalThis.BlendChessEngineFacade = exports;
   } else if (typeof window !== 'undefined') {
     window.BlendChessEngineFacade = exports;
-  } else if (typeof globalThis !== 'undefined') {
-    globalThis.BlendChessEngineFacade = exports;
+  }
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = exports;
   }
 })();

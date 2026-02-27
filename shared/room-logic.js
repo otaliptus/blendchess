@@ -542,11 +542,13 @@
     applyMove: applyMoveToRoom,
   };
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = exports;
+  if (typeof globalThis !== 'undefined') {
+    globalThis.BlendChessRoomLogic = exports;
   } else if (typeof window !== 'undefined') {
     window.BlendChessRoomLogic = exports;
-  } else if (typeof globalThis !== 'undefined') {
-    globalThis.BlendChessRoomLogic = exports;
+  }
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = exports;
   }
 })();

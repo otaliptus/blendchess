@@ -727,11 +727,10 @@
     moveRejectionReason,
   };
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = coreExports;
+  if (typeof globalThis !== 'undefined') {
+    globalThis.ChessCore = coreExports;
   } else if (typeof window !== 'undefined') {
     window.ChessCore = coreExports;
-  } else if (typeof globalThis !== 'undefined') {
-    globalThis.ChessCore = coreExports;
   }
+
 })();

@@ -92,11 +92,13 @@
     createError: createError,
   };
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = exports;
+  if (typeof globalThis !== 'undefined') {
+    globalThis.BlendChessProtocol = exports;
   } else if (typeof window !== 'undefined') {
     window.BlendChessProtocol = exports;
-  } else if (typeof globalThis !== 'undefined') {
-    globalThis.BlendChessProtocol = exports;
+  }
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = exports;
   }
 })();
