@@ -2,6 +2,8 @@
 
 Blendchess is a chess game where the information is intentionally limited in a [Kriegspiel](https://en.wikipedia.org/wiki/Kriegspiel_(chess)) style.
 
+![Gameplay](gameplay.gif)
+
 ## What is different from normal online chess?
 
 - The rules are classical chess; with a subtle difference: **you can only see your own pieces, and nothing else!**
