@@ -746,6 +746,11 @@ button {
   touch-action: none;
 }
 
+/* Keyboard play shows its own cursor brackets on the squares. */
+.board:focus-visible {
+  outline: none;
+}
+
 .sq {
   position: relative;
   border: 0;
@@ -994,6 +999,56 @@ button {
   letter-spacing: 0.2em;
   color: var(--warn);
   text-shadow: 4px 4px 0 var(--ink);
+  user-select: all;
+}
+
+.invite {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.invite-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.invite-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.qr {
+  width: clamp(120px, calc(var(--board-size) * 0.34), 210px);
+  height: auto;
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+  background: #f6efe0;
+  box-shadow: 0 0 0 4px var(--ink), 0 0 0 8px var(--accent);
+  margin: 8px;
+}
+
+.qr-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.qr-big {
+  width: min(260px, 64vw);
+}
+
+.qr-link {
+  margin: 0;
+  max-width: 100%;
+  font-size: 18px;
+  color: var(--muted);
+  word-break: break-all;
   user-select: all;
 }
 
@@ -1737,6 +1792,45 @@ button {
 }
 
 @media (max-width: 560px) {
+  #musicBtn {
+    display: none;
+  }
+
+  .topbar {
+    flex-wrap: nowrap;
+  }
+
+  .topbar-actions {
+    flex-wrap: nowrap;
+    gap: 2px;
+  }
+
+  .palette {
+    gap: 2px;
+    margin-right: 2px;
+  }
+
+  .invite {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .invite .qr {
+    width: 118px;
+  }
+
+  .invite .big-code {
+    font-size: 20px;
+  }
+
+  .invite .overlay-label br {
+    display: none;
+  }
+
+  #waiting .overlay-small {
+    display: none;
+  }
+
   .turn-banner {
     flex-wrap: wrap;
     gap: 6px 10px;

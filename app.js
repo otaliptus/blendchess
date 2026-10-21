@@ -113,6 +113,7 @@
       button.setAttribute('aria-pressed', String(button.dataset.themeChoice === settings.theme));
     });
     $('crtInput').checked = settings.crt;
+    $('musicInput').checked = settings.music;
     $('fxInput').checked = settings.fx;
     $('hintsInput').checked = settings.hints;
     $('serverUrlInput').value = settings.serverUrl;
@@ -1163,6 +1164,60 @@
     return url.toString();
   }
 
+  // Always dark-on-light with a quiet zone, whatever the palette: phones need contrast to scan.
+  function drawQr(canvas, text, scale = 6) {
+    if (!window.qrcode || canvas.dataset.text === text) return;
+    const qr = window.qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    const margin = 2;
+    const count = qr.getModuleCount();
+    canvas.width = (count + margin * 2) * scale;
+    canvas.height = canvas.width;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f6efe0';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#07030f';
+    for (let r = 0; r < count; r += 1) {
+      for (let c = 0; c < count; c += 1) {
+        if (qr.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
+      }
+    }
+    canvas.dataset.text = text;
+  }
+
+  const canShare = typeof navigator.share === 'function';
+
+  async function shareInvite() {
+    try {
+      await navigator.share({ title: 'Blendchess', text: `Join my Blendchess game (room ${net.roomCode})`, url: inviteUrl() });
+    } catch (error) {
+      if (error && error.name !== 'AbortError') copyInvite();
+    }
+  }
+
+  async function showQrDialog() {
+    sfx.play('click');
+    const canvas = el('canvas', { class: 'qr qr-big', role: 'img', 'aria-label': 'QR code with the invite link' });
+    drawQr(canvas, inviteUrl(), 8);
+    const body = el('div', { class: 'qr-dialog' },
+      canvas,
+      el('p', { class: 'big-code', text: net.roomCode }),
+      el('p', { class: 'qr-link', text: inviteUrl() }),
+      el('p', { class: 'overlay-small', text: 'Scan with a phone camera to join, or to watch if both seats are taken.' }));
+    const choice = await dialog({
+      title: 'SCAN TO JOIN',
+      body,
+      buttons: [
+        { label: 'DONE', kind: 'ghost', value: null },
+        { label: 'COPY LINK', value: 'copy' },
+        ...(canShare ? [{ label: 'SHARE', kind: 'primary', value: 'share' }] : []),
+      ],
+    });
+    if (choice === 'copy') copyInvite();
+    else if (choice === 'share') shareInvite();
+  }
+
   async function copyInvite() {
     const link = inviteUrl();
     try {
@@ -1657,8 +1712,10 @@
       const last = [...view.events].reverse().find((event) => event.kind === 'game_over');
       note = { text: last ? resultLine(last) : '', tone: 'warn' };
     } else if (app.mode === 'online' && view.waitingForStart) {
-      who = view.players.length < 2 ? 'WAITING FOR OPPONENT' : 'OPPONENT DISCONNECTED';
+      const empty = view.players.length < 2;
+      who = empty ? 'WAITING FOR OPPONENT' : 'OPPONENT DISCONNECTED';
       side = '';
+      note = { text: empty ? 'Let your friend scan the QR code, or send them the link.' : 'Their seat is saved until they come back.', tone: '' };
     } else {
       const myTurn = viewer && view.turn === viewer;
       if (app.mode === 'local') who = `${colorName(view.turn).toUpperCase()} TO MOVE`;
@@ -1805,11 +1862,11 @@
         const neverJoined = !opponentSeat;
         waiting.querySelector('.overlay-kicker').firstChild.textContent = neverJoined ? 'WAITING FOR OPPONENT' : 'OPPONENT DISCONNECTED';
         $('waitingCode').textContent = net.roomCode;
-        waiting.querySelector('.overlay-label').classList.toggle('hidden', !neverJoined);
-        $('waitingCode').classList.toggle('hidden', !neverJoined);
-        $('waitingCopy').classList.toggle('hidden', !neverJoined);
+        $('waitingInvite').classList.toggle('hidden', !neverJoined);
+        $('waitingShare').hidden = !canShare;
+        if (neverJoined) drawQr($('waitingQr'), inviteUrl());
         waiting.querySelector('.overlay-small').textContent = neverJoined
-          ? 'Send the link or the code to a friend.'
+          ? 'Your friend scans the code and taps PLAY.'
           : 'Their seat is saved. The game continues when they reconnect.';
       }
     }
@@ -1879,9 +1936,11 @@
     };
     $('joinGo').addEventListener('click', () => join(false));
     $('watchGo').addEventListener('click', () => join(true));
-    $('roomCodeInput').addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') join(false);
-    });
+    for (const id of ['roomCodeInput', 'joinNicknameInput']) {
+      $(id).addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') join(false);
+      });
+    }
 
     $('archiveClear').addEventListener('click', async () => {
       if (await confirmDialog('CLEAR ARCHIVE?', 'Every saved game on this device will be deleted.', 'CLEAR', 'danger')) {
@@ -1912,6 +1971,8 @@
     boardEl.addEventListener('contextmenu', (event) => event.preventDefault());
     $('waitingCopy').addEventListener('click', copyInvite);
     $('copyLink').addEventListener('click', copyInvite);
+    $('qrBtn').addEventListener('click', showQrDialog);
+    $('waitingShare').addEventListener('click', shareInvite);
     document.querySelectorAll('[data-replay]').forEach((button) => {
       button.addEventListener('click', () => stepReplay(button.dataset.replay));
     });
@@ -1968,6 +2029,12 @@
         sfx.play('select');
         render();
       });
+    });
+    $('musicInput').addEventListener('change', (event) => {
+      settings.music = event.target.checked;
+      saveSettings();
+      applySettings();
+      sfx.setMusic(settings.music);
     });
     for (const [id, key] of [['crtInput', 'crt'], ['fxInput', 'fx'], ['hintsInput', 'hints']]) {
       $(id).addEventListener('change', (event) => {
@@ -2032,9 +2099,12 @@
       return;
     }
     if (room) {
+      // Arrived from an invite link or QR code: the code is filled in, so PLAY is one tap away.
       $('roomCodeInput').value = room;
       $('joinNicknameInput').value = settings.nickname;
+      $('joinTitle').textContent = `JOIN ROOM ${room}`;
       showMenuPanel('menuJoin');
+      setTimeout(() => $('joinGo').focus(), 0);
       return;
     }
     showMenuPanel('title');

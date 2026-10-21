@@ -158,10 +158,18 @@
             <div id="board" class="board" role="grid" aria-label="Chess board"></div>
             <div id="waiting" class="board-overlay hidden">
               <p class="overlay-kicker">WAITING FOR OPPONENT<span class="dots"></span></p>
-              <p class="overlay-label">ROOM CODE</p>
-              <p id="waitingCode" class="big-code">------</p>
-              <button id="waitingCopy" class="px-btn primary" type="button">COPY INVITE LINK</button>
-              <p class="overlay-small">Send the link or code to a friend.</p>
+              <div id="waitingInvite" class="invite">
+                <canvas id="waitingQr" class="qr" role="img" aria-label="QR code with the invite link"></canvas>
+                <div class="invite-side">
+                  <p class="overlay-label">SCAN WITH A PHONE<br />OR ENTER THE CODE</p>
+                  <p id="waitingCode" class="big-code">------</p>
+                  <div class="invite-buttons">
+                    <button id="waitingShare" class="px-btn primary" type="button" hidden>SHARE</button>
+                    <button id="waitingCopy" class="px-btn" type="button">COPY LINK</button>
+                  </div>
+                </div>
+              </div>
+              <p class="overlay-small">Your friend scans the code and taps PLAY.</p>
             </div>
           </div>
           <div id="barBottom" class="player-bar"></div>
@@ -187,6 +195,7 @@
             <div class="room-line">
               <span class="room-label">ROOM</span>
               <span id="roomCode" class="room-code">------</span>
+              <button id="qrBtn" class="px-btn small" type="button" title="Show a QR code to scan">QR</button>
               <button id="copyLink" class="px-btn small" type="button">COPY LINK</button>
             </div>
             <div class="room-line">
@@ -240,6 +249,11 @@
       <div class="modal-box px-panel">
         <h2 id="settingsTitle" class="menu-title">OPTIONS</h2>
         <label class="toggle">
+          <input id="musicInput" type="checkbox" />
+          <span class="toggle-box" aria-hidden="true"></span>
+          <span class="toggle-text">MUSIC</span>
+        </label>
+        <label class="toggle">
           <input id="crtInput" type="checkbox" />
           <span class="toggle-box" aria-hidden="true"></span>
           <span class="toggle-text">CRT SCANLINES</span>
@@ -273,6 +287,7 @@
     <script src="shared/engine-facade.js"></script>
     <script src="shared/room-logic.js"></script>
     <script src="client/stateGuards.js"></script>
+    <script src="client/vendor/qrcode.js"></script>
     <script src="client/sprites.js"></script>
     <script src="client/sfx.js"></script>
     <script src="client/fx.js"></script>
