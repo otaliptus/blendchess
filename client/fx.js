@@ -140,6 +140,7 @@
     }
     el.textContent = text;
     el.dataset.tone = tone;
+    el.style.animationDuration = `${duration}ms`;
     retrigger(el, 'show');
     clearTimeout(bannerTimer);
     bannerTimer = setTimeout(() => el.classList.remove('show'), duration);

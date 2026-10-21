@@ -796,24 +796,24 @@
         fx.shake($('app'), true);
         break;
       case 'check':
-        fx.banner('CHECK!', 'bad');
+        fx.banner('CHECK!', 'bad', 1600);
         fx.flash('bad');
         fx.shake(boardFrame);
         break;
       case 'illegal':
-        fx.banner('NO!', 'bad', 700);
+        fx.banner('NO!', 'bad', 1200);
         fx.shake(boardFrame);
         break;
       case 'forfeit':
-        fx.banner('TURN LOST', 'bad');
+        fx.banner('TURN LOST', 'bad', 2000);
         fx.flash('bad');
         fx.shake($('app'), true);
         break;
       case 'opponentForfeit':
-        fx.banner('THEY FUMBLED!', 'good');
+        fx.banner('THEY FUMBLED!', 'good', 2000);
         break;
       case 'drawOffer':
-        fx.banner('DRAW?', 'warn');
+        fx.banner('DRAW?', 'warn', 1600);
         break;
       default:
         break;
@@ -1019,7 +1019,7 @@
       render();
       setTimeout(() => {
         if (app.mode === 'local' && local.state === state) showLocalTurn(state.turn);
-      }, result.forfeited ? 1700 : 1000);
+      }, result.forfeited ? 2100 : 1000);
     }
     if (state.gameOver) remove(STORAGE.local);
   }
