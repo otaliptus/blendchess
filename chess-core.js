@@ -104,65 +104,89 @@
     return null;
   }
 
+  const KNIGHT_OFFSETS = [
+    [-2, -1],
+    [-2, 1],
+    [-1, -2],
+    [-1, 2],
+    [1, -2],
+    [1, 2],
+    [2, -1],
+    [2, 1],
+  ];
+  const DIAGONAL_DIRS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+  const ORTHOGONAL_DIRS = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  const ALL_DIRS = [...DIAGONAL_DIRS, ...ORTHOGONAL_DIRS];
+
+  function slideDirsFor(type) {
+    if (type === 'B') return DIAGONAL_DIRS;
+    if (type === 'R') return ORTHOGONAL_DIRS;
+    return ALL_DIRS;
+  }
+
+  function pieceAttacksSquare(board, sr, sc, r, c) {
+    const piece = board[sr][sc];
+    if (!piece) return false;
+    const dr = r - sr;
+    const dc = c - sc;
+
+    if (piece.type === 'P') {
+      const pawnDir = piece.color === 'w' ? -1 : 1;
+      return dr === pawnDir && Math.abs(dc) === 1;
+    }
+    if (piece.type === 'N') {
+      return (Math.abs(dr) === 2 && Math.abs(dc) === 1) || (Math.abs(dr) === 1 && Math.abs(dc) === 2);
+    }
+    if (piece.type === 'K') {
+      return Math.max(Math.abs(dr), Math.abs(dc)) === 1;
+    }
+
+    const straight = dr === 0 || dc === 0;
+    const diagonal = Math.abs(dr) === Math.abs(dc);
+    if (dr === 0 && dc === 0) return false;
+    if (piece.type === 'R' && !straight) return false;
+    if (piece.type === 'B' && !diagonal) return false;
+    if (piece.type === 'Q' && !straight && !diagonal) return false;
+
+    const stepR = Math.sign(dr);
+    const stepC = Math.sign(dc);
+    let tr = sr + stepR;
+    let tc = sc + stepC;
+    while (tr !== r || tc !== c) {
+      if (board[tr][tc]) return false;
+      tr += stepR;
+      tc += stepC;
+    }
+    return true;
+  }
+
   function squareIsAttacked(board, r, c, attackerColor) {
-    const pawnDir = attackerColor === 'w' ? -1 : 1;
     for (let sr = 0; sr < 8; sr += 1) {
       for (let sc = 0; sc < 8; sc += 1) {
         const piece = board[sr][sc];
-        if (!piece || piece.color !== attackerColor) continue;
-
-        if (piece.type === 'P') {
-          const attacks = [
-            [pawnDir, -1],
-            [pawnDir, 1],
-          ];
-          for (const [dr, dc] of attacks) {
-            const tr = sr + dr;
-            const tc = sc + dc;
-            if (tr === r && tc === c) return true;
-          }
-        } else if (piece.type === 'N') {
-          const offsets = [
-            [-2, -1],
-            [-2, 1],
-            [-1, -2],
-            [-1, 2],
-            [1, -2],
-            [1, 2],
-            [2, -1],
-            [2, 1],
-          ];
-          for (const [dr, dc] of offsets) {
-            if (sr + dr === r && sc + dc === c) return true;
-          }
-        } else if (piece.type === 'B' || piece.type === 'R' || piece.type === 'Q') {
-          const dirs = piece.type === 'B'
-            ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
-            : piece.type === 'R'
-              ? [[-1, 0], [1, 0], [0, -1], [0, 1]]
-              : [[-1, -1], [-1, 1], [1, -1], [1, 1], [-1, 0], [1, 0], [0, -1], [0, 1]];
-
-          for (const [dr, dc] of dirs) {
-            let tr = sr + dr;
-            let tc = sc + dc;
-            while (inBounds(tr, tc)) {
-              if (tr === r && tc === c) return true;
-              if (board[tr][tc]) break;
-              tr += dr;
-              tc += dc;
-            }
-          }
-        } else if (piece.type === 'K') {
-          for (let dr = -1; dr <= 1; dr += 1) {
-            for (let dc = -1; dc <= 1; dc += 1) {
-              if (dr === 0 && dc === 0) continue;
-              if (sr + dr === r && sc + dc === c) return true;
-            }
-          }
-        }
+        if (piece && piece.color === attackerColor && pieceAttacksSquare(board, sr, sc, r, c)) return true;
       }
     }
     return false;
+  }
+
+  // Kriegspiel-style umpire hint: the lines a check comes from ('file', 'rank', 'diagonal', 'knight').
+  function checkDirections(board, color) {
+    const king = findKing(board, color);
+    if (!king) return [];
+    const kinds = [];
+    for (let sr = 0; sr < 8; sr += 1) {
+      for (let sc = 0; sc < 8; sc += 1) {
+        const piece = board[sr][sc];
+        if (!piece || piece.color === color || !pieceAttacksSquare(board, sr, sc, king.r, king.c)) continue;
+        let kind = 'diagonal';
+        if (piece.type === 'N') kind = 'knight';
+        else if (sr === king.r) kind = 'rank';
+        else if (sc === king.c) kind = 'file';
+        if (!kinds.includes(kind)) kinds.push(kind);
+      }
+    }
+    return kinds;
   }
 
   function isInCheck(board, color) {
@@ -228,30 +252,21 @@
     return state.halfMoveClock >= 150;
   }
 
+  // Dead positions only: K v K, a single minor piece, or bishops that all stand on one square colour.
   function isInsufficientMaterial(board) {
-    const white = [];
-    const black = [];
-
+    const minors = [];
     for (let r = 0; r < 8; r += 1) {
       for (let c = 0; c < 8; c += 1) {
         const piece = board[r][c];
         if (!piece || piece.type === 'K') continue;
         if (piece.type === 'P' || piece.type === 'R' || piece.type === 'Q') return false;
-        if (piece.color === 'w') white.push(piece);
-        else black.push(piece);
+        minors.push({ type: piece.type, shade: (r + c) % 2 });
       }
     }
 
-    const total = white.length + black.length;
-    if (total === 0) return true;
-    if (total > 2) return false;
-    if (total === 1) return true;
-
-    const whiteOnlyTwoBishops = white.length === 2 && white.every((piece) => piece.type === 'B');
-    const blackOnlyTwoBishops = black.length === 2 && black.every((piece) => piece.type === 'B');
-    if (whiteOnlyTwoBishops || blackOnlyTwoBishops) return false;
-
-    return true;
+    if (minors.length <= 1) return true;
+    if (minors.some((piece) => piece.type === 'N')) return false;
+    return minors.every((piece) => piece.shade === minors[0].shade);
   }
 
   function generatePseudoMovesForPiece(board, r, c, enPassant) {
@@ -298,17 +313,7 @@
         }
       }
     } else if (piece.type === 'N') {
-      const offsets = [
-        [-2, -1],
-        [-2, 1],
-        [-1, -2],
-        [-1, 2],
-        [1, -2],
-        [1, 2],
-        [2, -1],
-        [2, 1],
-      ];
-      for (const [dr, dc] of offsets) {
+      for (const [dr, dc] of KNIGHT_OFFSETS) {
         const tr = r + dr;
         const tc = c + dc;
         if (!inBounds(tr, tc)) continue;
@@ -318,14 +323,7 @@
         }
       }
     } else if (piece.type === 'B' || piece.type === 'R' || piece.type === 'Q') {
-      const dirs =
-        piece.type === 'B'
-          ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
-          : piece.type === 'R'
-            ? [[-1, 0], [1, 0], [0, -1], [0, 1]]
-            : [[-1, -1], [-1, 1], [1, -1], [1, 1], [-1, 0], [1, 0], [0, -1], [0, 1]];
-
-      for (const [dr, dc] of dirs) {
+      for (const [dr, dc] of slideDirsFor(piece.type)) {
         let tr = r + dr;
         let tc = c + dc;
         while (inBounds(tr, tc)) {
@@ -389,6 +387,68 @@
       }
     }
 
+    return moves;
+  }
+
+  // Moves that might be legal when only the mover's own pieces are known: every square without
+  // an own piece could be empty or hold an enemy, so the server has the final word.
+  function generatePlausibleMovesForPiece(board, r, c) {
+    const piece = board[r][c];
+    if (!piece) return [];
+    const color = piece.color;
+    const moves = [];
+    const ownAt = (tr, tc) => Boolean(board[tr][tc] && board[tr][tc].color === color);
+    const add = (tr, tc, options = {}) => {
+      if (piece.type === 'P' && (tr === 0 || tr === 7)) {
+        for (const promotion of PROMOTION_OPTIONS) {
+          moves.push(createMove({ r, c }, { r: tr, c: tc }, { ...options, promotion }));
+        }
+        return;
+      }
+      moves.push(createMove({ r, c }, { r: tr, c: tc }, options));
+    };
+
+    if (piece.type === 'P') {
+      const dir = color === 'w' ? -1 : 1;
+      const oneRow = r + dir;
+      if (!inBounds(oneRow, c)) return moves;
+      if (!ownAt(oneRow, c)) {
+        add(oneRow, c);
+        const startRow = color === 'w' ? 6 : 1;
+        if (r === startRow && !ownAt(r + 2 * dir, c)) add(r + 2 * dir, c);
+      }
+      for (const dc of [-1, 1]) {
+        if (inBounds(oneRow, c + dc) && !ownAt(oneRow, c + dc)) add(oneRow, c + dc, { capture: true });
+      }
+    } else if (piece.type === 'N' || piece.type === 'K') {
+      const offsets = piece.type === 'N' ? KNIGHT_OFFSETS : ALL_DIRS;
+      for (const [dr, dc] of offsets) {
+        const tr = r + dr;
+        const tc = c + dc;
+        if (inBounds(tr, tc) && !ownAt(tr, tc)) add(tr, tc);
+      }
+      const homeRow = color === 'w' ? 7 : 0;
+      if (piece.type === 'K' && !piece.hasMoved && r === homeRow && c === 4) {
+        const rookOk = (rc) => {
+          const rook = board[homeRow][rc];
+          return Boolean(rook && rook.type === 'R' && rook.color === color && !rook.hasMoved);
+        };
+        if (rookOk(7) && !ownAt(homeRow, 5) && !ownAt(homeRow, 6)) add(homeRow, 6, { castling: 'kingside' });
+        if (rookOk(0) && !ownAt(homeRow, 1) && !ownAt(homeRow, 2) && !ownAt(homeRow, 3)) {
+          add(homeRow, 2, { castling: 'queenside' });
+        }
+      }
+    } else {
+      for (const [dr, dc] of slideDirsFor(piece.type)) {
+        let tr = r + dr;
+        let tc = c + dc;
+        while (inBounds(tr, tc) && !ownAt(tr, tc)) {
+          add(tr, tc);
+          tr += dr;
+          tc += dc;
+        }
+      }
+    }
     return moves;
   }
 
@@ -506,7 +566,7 @@
       return {
         isTerminal: true,
         winner: colorName(otherColor(state.turn)),
-        result: null,
+        result: 'checkmate',
         eventText: `${colorName(state.turn)} is checkmated.`,
       };
     }
@@ -703,7 +763,9 @@
     squareName,
     createMove,
     findKing,
+    pieceAttacksSquare,
     squareIsAttacked,
+    checkDirections,
     isInCheck,
     pieceToKeySymbol,
     castlingRightsFromBoard,
@@ -715,6 +777,7 @@
     isSeventyFiveMoveRule,
     isInsufficientMaterial,
     generatePseudoMovesForPiece,
+    generatePlausibleMovesForPiece,
     generatePseudoMoves,
     applyMove,
     generateLegalMoves,
@@ -727,11 +790,7 @@
     moveRejectionReason,
   };
 
-  if (typeof globalThis !== 'undefined') {
-    globalThis.ChessCore = coreExports;
-  } else if (typeof window !== 'undefined') {
-    window.ChessCore = coreExports;
-  }
+  globalThis.ChessCore = coreExports;
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = coreExports;

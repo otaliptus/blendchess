@@ -1,38 +1,33 @@
 (function installRoomLogic() {
-  var core;
-  if (typeof globalThis !== 'undefined' && globalThis.ChessCore) {
-    core = globalThis.ChessCore;
-  } else if (typeof window !== 'undefined' && window.ChessCore) {
-    core = window.ChessCore;
-  }
-
-  var protocol;
-  if (typeof globalThis !== 'undefined' && globalThis.BlendChessProtocol) {
-    protocol = globalThis.BlendChessProtocol;
-  } else if (typeof window !== 'undefined' && window.BlendChessProtocol) {
-    protocol = window.BlendChessProtocol;
-  }
-
-  var facade;
-  if (typeof globalThis !== 'undefined' && globalThis.BlendChessEngineFacade) {
-    facade = globalThis.BlendChessEngineFacade;
-  } else if (typeof window !== 'undefined' && window.BlendChessEngineFacade) {
-    facade = window.BlendChessEngineFacade;
-  }
+  const core = globalThis.ChessCore;
+  const protocol = globalThis.BlendChessProtocol;
+  const facade = globalThis.BlendChessEngineFacade;
 
   if (!core) throw new Error('chess-core.js must be loaded before room-logic.js');
   if (!protocol) throw new Error('shared/protocol.js must be loaded before room-logic.js');
   if (!facade) throw new Error('shared/engine-facade.js must be loaded before room-logic.js');
 
-  var ERROR_CODES = protocol.ERROR_CODES;
-  var evaluateMove = facade.evaluateMove;
+  const ERROR_CODES = protocol.ERROR_CODES;
+  const MAX_PLAYERS_PER_ROOM = 2;
+  const MAX_EVENTS = 40;
+  const NICKNAME_MAX_LENGTH = 16;
+  const DRAW_REASON_PRIORITY = ['fivefold', 'seventyFiveMove', 'threefold', 'fiftyMove', 'insufficientMaterial'];
 
-  var MAX_PLAYERS_PER_ROOM = 2;
-  var DRAW_REASON_PRIORITY = ['fivefold', 'seventyFiveMove', 'threefold', 'fiftyMove', 'insufficientMaterial'];
-  var DRAW_REASON_ALIASES = protocol.DRAW_REASON_ALIASES;
+  function cleanNickname(value, fallback) {
+    const text = String(value || '')
+      .replace(/[\u0000-\u001f\u007f<>]/g, '')
+      .trim()
+      .slice(0, NICKNAME_MAX_LENGTH);
+    return text || fallback;
+  }
 
-  function createRoomState(roomCode) {
-    var base = core.createInitialState();
+  function normalizeSpectatorView(value) {
+    return value === 'open' ? 'open' : 'fog';
+  }
+
+  function createRoomState(roomCode, options = {}) {
+    const base = core.createInitialState();
+    const now = Date.now();
     return {
       roomCode: roomCode || '',
       players: {},
@@ -44,19 +39,23 @@
       enPassant: base.enPassant,
       halfMoveClock: base.halfMoveClock,
       positionCounts: base.positionCounts,
-      moveNumber: base.moveNumber,
-      movePairs: base.movePairs,
-      events: base.events,
-      captured: base.captured,
-      winner: base.winner,
-      result: base.result,
-      gameOver: base.gameOver,
+      // One entry per ply, including forfeited turns, so colours always alternate.
+      log: [],
+      events: [],
+      eventSeq: 0,
+      captured: { w: 0, b: 0 },
+      winner: null,
+      result: null,
+      gameOver: false,
+      gameId: 1,
+      // Never reset, not even by a new game, so clients can always drop stale snapshots.
       boardVersion: 0,
       pendingDrawOffer: null,
       waitingForStart: true,
-      hardMode: false,
-      createdAt: Date.now(),
-      lastActivity: Date.now(),
+      hardMode: Boolean(options.hardMode),
+      spectatorView: normalizeSpectatorView(options.spectatorView),
+      createdAt: now,
+      lastActivity: now,
     };
   }
 
@@ -64,44 +63,38 @@
     state.lastActivity = Date.now();
   }
 
-  function addEvent(state, text) {
-    var time = new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' });
-    state.events.unshift('[' + time + '] ' + text);
-    state.events = state.events.slice(0, 20);
-  }
-
-  function addMoveRecord(state, color, san) {
-    if (color === 'w') {
-      state.movePairs.push({ num: state.moveNumber, white: san, black: '' });
-      return;
+  // scope.only: visible to that colour alone. scope.owner + scope.secret: extra fields only the owner sees.
+  // Everything becomes visible once the game is over.
+  function addEvent(state, kind, data = {}, scope = {}) {
+    state.eventSeq += 1;
+    const event = { id: state.eventSeq, at: Date.now(), kind, ...data };
+    if (scope.only) event.only = scope.only;
+    if (scope.owner) {
+      event.owner = scope.owner;
+      event.secret = { ...scope.secret };
     }
-
-    var last = state.movePairs[state.movePairs.length - 1];
-    if (!last || last.black) {
-      state.movePairs.push({ num: state.moveNumber, white: '', black: san });
-    } else {
-      last.black = san;
-    }
-    state.moveNumber += 1;
+    state.events.push(event);
+    if (state.events.length > MAX_EVENTS) state.events.splice(0, state.events.length - MAX_EVENTS);
+    return event;
   }
 
   function connectedPlayerCount(state) {
-    return state.playerOrder.reduce(function (count, playerId) {
-      var player = state.players[playerId];
+    return state.playerOrder.reduce((count, playerId) => {
+      const player = state.players[playerId];
       return player && player.connected ? count + 1 : count;
     }, 0);
   }
 
   function connectedSpectatorCount(state) {
-    return (state.spectatorOrder || []).reduce(function (count, spectatorId) {
-      var spectator = state.spectators[spectatorId];
+    return state.spectatorOrder.reduce((count, spectatorId) => {
+      const spectator = state.spectators[spectatorId];
       return spectator && spectator.connected ? count + 1 : count;
     }, 0);
   }
 
   function isColorConnected(state, color) {
-    return state.playerOrder.some(function (playerId) {
-      var player = state.players[playerId];
+    return state.playerOrder.some((playerId) => {
+      const player = state.players[playerId];
       return player && player.connected && player.color === color;
     });
   }
@@ -110,20 +103,23 @@
     return connectedPlayerCount(state) > 0 || connectedSpectatorCount(state) > 0;
   }
 
+  function isGameInProgress(state) {
+    return !state.gameOver && state.log.length > 0;
+  }
+
+  function hasReservedSeat(state) {
+    if (!isGameInProgress(state)) return false;
+    return state.playerOrder.some((playerId) => state.players[playerId] && !state.players[playerId].connected);
+  }
+
   function cleanupDisconnectedColor(state, color) {
-    var stalePlayerIds = state.playerOrder.filter(function (playerId) {
-      var player = state.players[playerId];
+    const stale = state.playerOrder.filter((playerId) => {
+      const player = state.players[playerId];
       return player && player.color === color && !player.connected;
     });
-
-    if (!stalePlayerIds.length) return;
-
-    state.playerOrder = state.playerOrder.filter(function (playerId) {
-      return stalePlayerIds.indexOf(playerId) === -1;
-    });
-    for (var i = 0; i < stalePlayerIds.length; i++) {
-      delete state.players[stalePlayerIds[i]];
-    }
+    if (!stale.length) return;
+    state.playerOrder = state.playerOrder.filter((playerId) => !stale.includes(playerId));
+    for (const playerId of stale) delete state.players[playerId];
   }
 
   function isFull(state) {
@@ -135,22 +131,26 @@
   }
 
   function getPlayer(state, playerId) {
-    return state.players[playerId] || null;
+    return (playerId && state.players[playerId]) || null;
   }
 
   function getPlayerByColor(state, color) {
-    for (var i = 0; i < state.playerOrder.length; i++) {
-      var player = state.players[state.playerOrder[i]];
+    for (const playerId of state.playerOrder) {
+      const player = state.players[playerId];
       if (player && player.color === color) return player;
     }
     return null;
   }
 
+  function isResumeTokenValid(state, playerId, resumeToken) {
+    const player = getPlayer(state, playerId);
+    return Boolean(player && player.resumeToken && resumeToken && player.resumeToken === resumeToken);
+  }
+
   function getSeatAssignments(state) {
-    return state.playerOrder.map(function (id) {
-      var player = state.players[id];
+    return state.playerOrder.map((playerId) => {
+      const player = state.players[playerId];
       return {
-        playerId: player.id,
         color: player.color,
         nickname: player.nickname,
         connected: player.connected,
@@ -158,149 +158,130 @@
     });
   }
 
-  function getSpectatorAssignments(state) {
-    return (state.spectatorOrder || []).map(function (spectatorId) {
-      var spectator = state.spectators[spectatorId];
-      return {
-        spectatorId: spectator.id,
-        nickname: spectator.nickname,
-        connected: spectator.connected,
-      };
-    });
-  }
-
   function assignPlayer(state, playerId, nickname, makeResumeTokenFn) {
     touchState(state);
 
-    if (state.spectators[playerId]) {
-      delete state.spectators[playerId];
-      state.spectatorOrder = state.spectatorOrder.filter(function (id) { return id !== playerId; });
-    }
+    if (state.spectators[playerId]) removeSpectator(state, playerId);
 
-    var existing = getPlayer(state, playerId);
+    const existing = getPlayer(state, playerId);
     if (existing) {
+      const wasConnected = existing.connected;
       existing.connected = true;
-      existing.nickname = nickname || existing.nickname;
+      existing.nickname = cleanNickname(nickname, existing.nickname);
       existing.resumeToken = makeResumeTokenFn();
+      state.waitingForStart = !isReady(state);
+      if (!wasConnected) addEvent(state, 'presence', { color: existing.color, nickname: existing.nickname, online: true });
       return { ok: true, player: existing };
     }
-
-    var color = isColorConnected(state, 'w') ? 'b' : 'w';
-    cleanupDisconnectedColor(state, color);
 
     if (isFull(state)) {
       return { ok: false, reason: ERROR_CODES.ROOM_FULL };
     }
 
-    var newPlayer = {
+    const color = isColorConnected(state, 'w') ? 'b' : 'w';
+    cleanupDisconnectedColor(state, color);
+
+    const player = {
       id: playerId,
-      color: color,
-      nickname: nickname || 'Player',
+      color,
+      nickname: cleanNickname(nickname, 'Player'),
       connected: true,
       resumeToken: makeResumeTokenFn(),
     };
-    state.players[playerId] = newPlayer;
+    state.players[playerId] = player;
     state.playerOrder.push(playerId);
+    state.waitingForStart = !isReady(state);
+    addEvent(state, 'presence', { color, nickname: player.nickname, online: true });
 
-    if (connectedPlayerCount(state) === MAX_PLAYERS_PER_ROOM) {
-      state.waitingForStart = false;
-    }
-
-    return { ok: true, player: newPlayer };
+    return { ok: true, player };
   }
 
   function assignSpectator(state, spectatorId, nickname) {
     touchState(state);
-    var existing = state.spectators[spectatorId];
+    const existing = state.spectators[spectatorId];
     if (existing) {
       existing.connected = true;
-      existing.nickname = nickname || existing.nickname;
+      existing.nickname = cleanNickname(nickname, existing.nickname);
       return { ok: true, spectator: existing };
     }
 
-    var spectator = {
-      id: spectatorId,
-      nickname: nickname || 'Spectator',
-      connected: true,
-    };
+    const spectator = { id: spectatorId, nickname: cleanNickname(nickname, 'Spectator'), connected: true };
     state.spectators[spectatorId] = spectator;
-    if (!state.spectatorOrder) state.spectatorOrder = [];
     state.spectatorOrder.push(spectatorId);
-    return { ok: true, spectator: spectator };
+    return { ok: true, spectator };
   }
 
   function removePlayer(state, playerId) {
-    var player = getPlayer(state, playerId);
-    if (player) {
-      player.connected = false;
-      state.waitingForStart = !isReady(state);
-      touchState(state);
-    }
+    const player = getPlayer(state, playerId);
+    if (!player) return;
+    const wasConnected = player.connected;
+    player.connected = false;
+    state.waitingForStart = !isReady(state);
+    touchState(state);
+    if (wasConnected) addEvent(state, 'presence', { color: player.color, nickname: player.nickname, online: false });
   }
 
   function removeSpectator(state, spectatorId) {
-    var spectator = state.spectators[spectatorId];
-    if (spectator) {
-      spectator.connected = false;
-      state.spectatorOrder = (state.spectatorOrder || []).filter(function (id) { return id !== spectatorId; });
-      delete state.spectators[spectatorId];
-      touchState(state);
-    }
+    if (!state.spectators[spectatorId]) return;
+    state.spectatorOrder = state.spectatorOrder.filter((id) => id !== spectatorId);
+    delete state.spectators[spectatorId];
+    touchState(state);
   }
 
-  function resetGame(state) {
-    var previousPlayers = state.players;
-    var previousOrder = state.playerOrder;
-    var previousSpectators = state.spectators;
-    var previousSpectatorOrder = state.spectatorOrder;
-    var roomCode = state.roomCode;
-    var hardMode = state.hardMode;
+  // Starts the next game in the same room. Players trade colours after a finished game.
+  function resetGame(state, options = {}) {
+    const fresh = createRoomState(state.roomCode, state);
+    const keep = ['players', 'playerOrder', 'spectators', 'spectatorOrder', 'events', 'eventSeq', 'createdAt'];
+    for (const key of keep) fresh[key] = state[key];
+    fresh.gameId = state.gameId + 1;
+    fresh.boardVersion = state.boardVersion + 1;
+    fresh.waitingForStart = !isReady(state);
 
-    var fresh = createRoomState(roomCode);
-    fresh.players = previousPlayers;
-    fresh.playerOrder = previousOrder;
-    fresh.spectators = previousSpectators;
-    fresh.spectatorOrder = previousSpectatorOrder;
-    fresh.hardMode = hardMode;
-    fresh.waitingForStart = connectedPlayerCount(fresh) < MAX_PLAYERS_PER_ROOM;
+    if (options.swapColors) {
+      for (const playerId of fresh.playerOrder) {
+        const player = fresh.players[playerId];
+        player.color = core.otherColor(player.color);
+      }
+    }
 
-    // Copy all properties back onto state so callers keep their reference
-    Object.keys(state).forEach(function (k) { delete state[k]; });
+    Object.keys(state).forEach((key) => { delete state[key]; });
     Object.assign(state, fresh);
   }
 
-  function createGameSnapshot(state) {
-    return {
-      roomCode: state.roomCode,
-      turn: state.turn,
-      board: core.cloneBoard(state.board),
-      enPassant: state.enPassant ? { r: state.enPassant.r, c: state.enPassant.c } : null,
-      moveNumber: state.moveNumber,
-      movePairs: state.movePairs.map(function (movePair) { return Object.assign({}, movePair); }),
-      events: state.events.slice(),
-      captured: { w: state.captured.w, b: state.captured.b },
-      winner: state.winner,
-      result: state.result,
-      gameOver: state.gameOver,
-      boardVersion: state.boardVersion,
+  function newGame(state, player) {
+    touchState(state);
+    if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
+    if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
+
+    const swapColors = state.gameOver;
+    resetGame(state, { swapColors });
+    addEvent(state, 'new_game', { gameId: state.gameId, swapped: swapColors });
+    return { ok: true };
+  }
+
+  function setOptions(state, player, options = {}) {
+    touchState(state);
+    if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
+    if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
+
+    if (typeof options.hardMode === 'boolean') state.hardMode = options.hardMode;
+    if (typeof options.spectatorView === 'string') state.spectatorView = normalizeSpectatorView(options.spectatorView);
+    addEvent(state, 'options', {
+      color: player.color,
       hardMode: state.hardMode,
-      halfMoveClock: state.halfMoveClock,
-      positionCounts: Object.assign({}, state.positionCounts),
-      waitingForStart: state.waitingForStart,
-      players: getSeatAssignments(state),
-      spectators: getSpectatorAssignments(state),
-      spectatorCount: connectedSpectatorCount(state),
-    };
+      spectatorView: state.spectatorView,
+    });
+    return { ok: true };
   }
 
   function normalizeDrawReason(reason) {
     if (typeof reason !== 'string') return '';
-    var normalized = reason.trim().toLowerCase().replace(/[^a-z]/g, '');
-    return DRAW_REASON_ALIASES[normalized] || '';
+    const normalized = reason.trim().toLowerCase().replace(/[^a-z]/g, '');
+    return protocol.DRAW_REASON_ALIASES[normalized] || '';
   }
 
   function evaluateDrawEligibility(state, requestedReason) {
-    var claims = {
+    const claims = {
       fivefold: core.isFivefoldRepetition(state),
       seventyFiveMove: core.isSeventyFiveMoveRule(state),
       threefold: core.isThreefoldRepetition(state),
@@ -308,247 +289,337 @@
       insufficientMaterial: core.isInsufficientMaterial(state.board),
     };
 
-    if (requestedReason) {
-      return claims[requestedReason] ? requestedReason : '';
-    }
-
-    for (var i = 0; i < DRAW_REASON_PRIORITY.length; i++) {
-      if (claims[DRAW_REASON_PRIORITY[i]]) return DRAW_REASON_PRIORITY[i];
-    }
-    return '';
+    if (requestedReason) return claims[requestedReason] ? requestedReason : '';
+    return DRAW_REASON_PRIORITY.find((reason) => claims[reason]) || '';
   }
 
-  function squareText(position) {
-    var r = Number(position && position.r);
-    var c = Number(position && position.c);
-    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r > 7 || c < 0 || c > 7) {
-      return 'unknown';
-    }
-    return core.squareName({ r: r, c: c });
+  function finishGame(state, winner, result) {
+    state.gameOver = true;
+    state.winner = winner;
+    state.result = result;
+    state.pendingDrawOffer = null;
+    addEvent(state, 'game_over', { winner, result });
+  }
+
+  function guardPlayerAction(state, player) {
+    if (!player || !player.connected) return ERROR_CODES.WRONG_COLOR;
+    if (state.gameOver) return ERROR_CODES.GAME_OVER;
+    return '';
   }
 
   function claimDraw(state, player, payload) {
     touchState(state);
-    if (!player || !player.connected) {
-      return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
-    }
-    if (state.gameOver) {
-      return { ok: false, reason: ERROR_CODES.GAME_OVER };
-    }
-    if (!isReady(state)) {
-      return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    const blocked = guardPlayerAction(state, player) || (isReady(state) ? '' : ERROR_CODES.ROOM_NOT_READY);
+    if (blocked) return { ok: false, reason: blocked };
+
+    const drawReason = evaluateDrawEligibility(state, normalizeDrawReason((payload || {}).reason));
+    if (drawReason) {
+      finishGame(state, null, drawReason);
+      return { ok: true, reason: drawReason };
     }
 
-    var drawReason = evaluateDrawEligibility(state, normalizeDrawReason((payload || {}).reason));
-    if (!drawReason) {
-      if (state.pendingDrawOffer && state.pendingDrawOffer !== player.color) {
-        state.pendingDrawOffer = null;
-        state.gameOver = true;
-        state.result = 'mutualDraw';
-        state.winner = null;
-        addEvent(state, 'Draw by mutual agreement.');
-        return { ok: true, reason: 'mutualDraw', game: createGameSnapshot(state) };
-      }
-      state.pendingDrawOffer = player.color;
-      addEvent(state, core.colorName(player.color) + ' offered a draw.');
-      return {
-        ok: false,
-        reason: ERROR_CODES.INVALID_DRAW_CLAIM,
-        drawOffered: true,
-        offeredBy: player.color,
-      };
+    if (state.pendingDrawOffer && state.pendingDrawOffer !== player.color) {
+      finishGame(state, null, 'mutualDraw');
+      return { ok: true, reason: 'mutualDraw' };
     }
 
-    state.gameOver = true;
-    state.result = drawReason;
-    state.winner = null;
-    addEvent(state, core.colorName(player.color) + ' claimed a draw (' + drawReason + ').');
-    return { ok: true, reason: drawReason, game: createGameSnapshot(state) };
+    if (state.pendingDrawOffer === player.color) {
+      return { ok: false, reason: ERROR_CODES.INVALID_DRAW_CLAIM, drawOffered: true, alreadyOffered: true };
+    }
+
+    state.pendingDrawOffer = player.color;
+    addEvent(state, 'draw_offer', { color: player.color });
+    return { ok: false, reason: ERROR_CODES.INVALID_DRAW_CLAIM, drawOffered: true, offeredBy: player.color };
   }
 
   function resign(state, player) {
     touchState(state);
-    if (!player || !player.connected) {
-      return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
-    }
-    if (state.gameOver) {
-      return { ok: false, reason: ERROR_CODES.GAME_OVER };
-    }
+    const blocked = guardPlayerAction(state, player);
+    if (blocked) return { ok: false, reason: blocked };
 
-    var winnerColor = core.otherColor(player.color);
-    state.gameOver = true;
-    state.winner = core.colorName(winnerColor);
-    state.result = 'resign';
-    addEvent(state, core.colorName(player.color) + ' resigned. ' + state.winner + ' wins.');
-    return { ok: true, winner: state.winner, game: createGameSnapshot(state) };
+    addEvent(state, 'resign', { color: player.color });
+    finishGame(state, core.colorName(core.otherColor(player.color)), 'resign');
+    return { ok: true, winner: state.winner };
   }
 
-  function setHardMode(state, enabled, actorLabel) {
-    state.hardMode = Boolean(enabled);
-    addEvent(state, 'Hard mode ' + (state.hardMode ? 'enabled' : 'disabled') + ' by ' + actorLabel + '.');
+  function squareText(position) {
+    const r = Number(position && position.r);
+    const c = Number(position && position.c);
+    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r > 7 || c < 0 || c > 7) return 'unknown';
+    return core.squareName({ r, c });
+  }
+
+  function attemptSecret(payload) {
+    const normalized = facade.normalizeMoveIntent(payload);
+    if (!normalized) return {};
+    return { from: normalized.from, to: normalized.to, fromSquare: squareText(normalized.from), toSquare: squareText(normalized.to) };
+  }
+
+  // Bookkeeping shared by real moves and forfeited turns.
+  function completePly(state, moverColor, ply) {
+    state.log.push(ply);
+    state.turn = core.otherColor(moverColor);
+    state.boardVersion += 1;
+    core.recordCurrentPosition(state);
+
+    // Moving without answering is how a draw offer gets declined.
+    if (state.pendingDrawOffer && state.pendingDrawOffer !== moverColor) {
+      addEvent(state, 'draw_declined', { color: state.pendingDrawOffer });
+      state.pendingDrawOffer = null;
+    }
+
+    const terminal = core.evaluateTerminalState(state);
+    if (terminal.isTerminal) {
+      finishGame(state, terminal.winner, terminal.result);
+      return terminal;
+    }
+
+    if (core.isInCheck(state.board, state.turn)) {
+      addEvent(state, 'check', { color: state.turn, directions: core.checkDirections(state.board, state.turn) }, { only: state.turn });
+    }
+    return terminal;
   }
 
   function applyMoveToRoom(state, player, payload) {
     touchState(state);
 
-    if (!player) {
-      return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
-    }
-    if (!isReady(state)) {
-      return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
-    }
-    if (state.gameOver) {
-      return { ok: false, reason: ERROR_CODES.GAME_OVER };
-    }
-    if (state.turn !== player.color) {
-      return { ok: false, reason: ERROR_CODES.NOT_YOUR_TURN };
-    }
+    if (!player) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
+    if (!isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    if (state.gameOver) return { ok: false, reason: ERROR_CODES.GAME_OVER };
+    if (state.turn !== player.color) return { ok: false, reason: ERROR_CODES.NOT_YOUR_TURN };
 
-    var beforeBoard = core.cloneBoard(state.board);
-    var beforeEnPassant = state.enPassant ? { r: state.enPassant.r, c: state.enPassant.c } : null;
-
-    var outcome = evaluateMove(state, player.color, payload);
+    const outcome = facade.evaluateMove(state, player.color, payload);
     if (!outcome.ok) {
-      if (outcome.reason === ERROR_CODES.ILLEGAL_MOVE && state.hardMode) {
-        var offenderInCheck = core.isInCheck(state.board, player.color);
+      if (outcome.reason !== ERROR_CODES.ILLEGAL_MOVE) return outcome;
 
-        if (offenderInCheck) {
-          addEvent(
-            state,
-            core.colorName(player.color) + ' attempted illegal move ' + squareText(payload.from) +
-            ' to ' + squareText(payload.to) + ' while in check. Move rejected.',
-          );
-          return { ok: false, reason: ERROR_CODES.ILLEGAL_MOVE };
-        }
-
-        state.boardVersion += 1;
-        state.turn = core.otherColor(player.color);
-        addEvent(
-          state,
-          core.colorName(player.color) + ' attempted illegal move ' + squareText(payload.from) +
-          ' to ' + squareText(payload.to) + '. Turn forfeited by hard mode.',
-        );
-
-        var terminal = core.evaluateTerminalState(state);
-        if (terminal.isTerminal) {
-          state.gameOver = true;
-          state.result = terminal.result;
-          state.winner = terminal.winner;
-          if (terminal.eventText) addEvent(state, terminal.eventText);
-        }
-
-        return {
-          ok: false,
-          reason: ERROR_CODES.ILLEGAL_MOVE,
-          forfeited: true,
-          boardVersion: state.boardVersion,
-          nextTurn: state.turn,
-        };
+      const secret = attemptSecret(payload);
+      const inCheck = core.isInCheck(state.board, player.color);
+      if (!state.hardMode || inCheck) {
+        addEvent(state, 'illegal', { color: player.color }, { owner: player.color, secret });
+        return { ok: false, reason: ERROR_CODES.ILLEGAL_MOVE };
       }
 
-      if (outcome.reason === ERROR_CODES.ILLEGAL_MOVE) {
-        addEvent(
-          state,
-          core.colorName(player.color) + ' attempted illegal move ' + squareText(payload.from) +
-          ' to ' + squareText(payload.to) + '. Move rejected.',
-        );
-      }
-      return outcome;
+      // Hard mode: the turn passes. A double-step can't be answered en passant by a turn that never happened.
+      addEvent(state, 'forfeit', { color: player.color }, { owner: player.color, secret });
+      state.enPassant = null;
+      state.halfMoveClock += 1;
+      completePly(state, player.color, {
+        color: player.color,
+        san: '--',
+        forfeit: true,
+        from: secret.from || null,
+        to: secret.to || null,
+        promotion: null,
+        capture: null,
+      });
+      return { ok: false, reason: ERROR_CODES.ILLEGAL_MOVE, forfeited: true, nextTurn: state.turn };
     }
+
+    const beforeBoard = core.cloneBoard(state.board);
+    const beforeEnPassant = state.enPassant ? { ...state.enPassant } : null;
+    const move = outcome.move;
 
     state.board = outcome.board;
     state.enPassant = outcome.enPassant;
-    state.pendingDrawOffer = null;
 
+    let capture = null;
     if (outcome.captured) {
       state.captured[outcome.captured.color] += 1;
-      var capturedColorName = outcome.captured.color === 'w' ? 'White' : 'Black';
-      addEvent(state, capturedColorName + ' piece was taken.');
+      const square = move.enPassant ? { r: move.from.r, c: move.to.c } : { ...move.to };
+      capture = { r: square.r, c: square.c, square: core.squareName(square), color: outcome.captured.color };
     }
 
-    if (outcome.isPawnMove || outcome.captured) {
-      state.halfMoveClock = 0;
-    } else {
-      state.halfMoveClock += 1;
+    state.halfMoveClock = outcome.isPawnMove || outcome.captured ? 0 : state.halfMoveClock + 1;
+
+    const san = core.moveToSAN(beforeBoard, beforeEnPassant, move, state.board, state.enPassant);
+    const ply = state.log.length + 1;
+    addEvent(state, 'move', { color: player.color, ply }, {
+      owner: player.color,
+      secret: { san: stripCheckMarks(san), from: move.from, to: move.to },
+    });
+    if (capture) {
+      addEvent(state, 'capture', { color: player.color, captured: capture.color, square: capture.square, r: capture.r, c: capture.c });
     }
 
-    var san = core.moveToSAN(beforeBoard, beforeEnPassant, outcome.move, state.board, state.enPassant);
-    addMoveRecord(state, player.color, san);
+    const terminal = completePly(state, player.color, {
+      color: player.color,
+      san,
+      forfeit: false,
+      from: { ...move.from },
+      to: { ...move.to },
+      promotion: move.promotion || null,
+      capture,
+    });
 
-    state.turn = core.otherColor(player.color);
-    state.boardVersion += 1;
-    var repetitionCount = core.recordCurrentPosition(state);
+    return { ok: true, san, ply, terminal, nextTurn: state.turn };
+  }
 
-    var terminalAfter = core.evaluateTerminalState(state);
-    if (terminalAfter.isTerminal) {
-      state.gameOver = true;
-      state.result = terminalAfter.result;
-      state.winner = terminalAfter.winner;
-      if (terminalAfter.eventText) addEvent(state, terminalAfter.eventText);
-    } else if (core.isInCheck(state.board, state.turn)) {
-      addEvent(state, core.colorName(state.turn) + ' is in check.');
-    }
+  // Check marks are the opponent's secret until the game ends.
+  function stripCheckMarks(san) {
+    return String(san || '').replace(/[+#]+$/, '');
+  }
 
+  function redactBoard(board, color) {
+    return board.map((row) => row.map((piece) => (piece && piece.color === color ? { ...piece } : null)));
+  }
+
+  function viewEvent(event, color, reveal) {
+    if (event.only && event.only !== color && !reveal) return null;
+    const { only, owner, secret, ...visible } = event;
+    if (secret && (reveal || owner === color)) Object.assign(visible, secret);
+    return visible;
+  }
+
+  function viewPly(ply, index, color, reveal) {
+    const mine = reveal || ply.color === color;
     return {
-      ok: true,
-      move: {
-        from: outcome.move.from,
-        to: outcome.move.to,
-        piece: outcome.move.piece.type,
-        capture: outcome.move.capture,
-        castling: outcome.move.castling,
-        enPassant: outcome.move.enPassant,
-        promotion: outcome.move.promotion,
-      },
-      san: san,
-      moveNumber: state.moveNumber,
-      boardVersion: state.boardVersion,
-      snapshot: createGameSnapshot(state),
-      repetitionCount: repetitionCount,
-      terminal: terminalAfter,
-      nextTurn: state.turn,
+      ply: index + 1,
+      color: ply.color,
+      forfeit: Boolean(ply.forfeit),
+      capture: ply.capture ? { square: ply.capture.square, r: ply.capture.r, c: ply.capture.c } : null,
+      san: mine ? (reveal ? ply.san : stripCheckMarks(ply.san)) : null,
+      from: mine && ply.from ? { ...ply.from } : null,
+      to: mine && ply.to ? { ...ply.to } : null,
+      promotion: mine ? ply.promotion : null,
     };
   }
 
-  var exports = {
-    MAX_PLAYERS_PER_ROOM: MAX_PLAYERS_PER_ROOM,
-    createRoomState: createRoomState,
-    touchState: touchState,
-    addEvent: addEvent,
-    addMoveRecord: addMoveRecord,
-    connectedPlayerCount: connectedPlayerCount,
-    connectedSpectatorCount: connectedSpectatorCount,
-    isColorConnected: isColorConnected,
-    hasConnectedMembers: hasConnectedMembers,
-    cleanupDisconnectedColor: cleanupDisconnectedColor,
-    isFull: isFull,
-    isReady: isReady,
-    getPlayer: getPlayer,
-    getPlayerByColor: getPlayerByColor,
-    getSeatAssignments: getSeatAssignments,
-    getSpectatorAssignments: getSpectatorAssignments,
-    assignPlayer: assignPlayer,
-    assignSpectator: assignSpectator,
-    removePlayer: removePlayer,
-    removeSpectator: removeSpectator,
-    resetGame: resetGame,
-    createGameSnapshot: createGameSnapshot,
-    normalizeDrawReason: normalizeDrawReason,
-    evaluateDrawEligibility: evaluateDrawEligibility,
-    squareText: squareText,
-    claimDraw: claimDraw,
-    resign: resign,
-    setHardMode: setHardMode,
-    applyMove: applyMoveToRoom,
-  };
+  // What one member is allowed to know. viewer: { role: 'player' | 'spectator', color }.
+  function createView(state, viewer = {}) {
+    const role = viewer.role === 'player' ? 'player' : 'spectator';
+    const color = role === 'player' && (viewer.color === 'w' || viewer.color === 'b') ? viewer.color : null;
+    const reveal = state.gameOver || (role === 'spectator' && state.spectatorView === 'open');
+    const inCheck = !state.gameOver && core.isInCheck(state.board, state.turn);
 
-  if (typeof globalThis !== 'undefined') {
-    globalThis.BlendChessRoomLogic = exports;
-  } else if (typeof window !== 'undefined') {
-    window.BlendChessRoomLogic = exports;
+    return {
+      roomCode: state.roomCode,
+      gameId: state.gameId,
+      boardVersion: state.boardVersion,
+      you: { role, color },
+      revealed: reveal,
+      turn: state.turn,
+      board: reveal ? core.cloneBoard(state.board) : redactBoard(state.board, color),
+      moves: state.log.map((ply, index) => viewPly(ply, index, color, reveal)),
+      events: state.events.map((event) => viewEvent(event, color, reveal)).filter(Boolean),
+      captured: { w: state.captured.w, b: state.captured.b },
+      check: inCheck && (reveal || state.turn === color)
+        ? { color: state.turn, directions: core.checkDirections(state.board, state.turn) }
+        : null,
+      drawOffer: state.pendingDrawOffer,
+      gameOver: state.gameOver,
+      winner: state.winner,
+      result: state.result,
+      hardMode: state.hardMode,
+      spectatorView: state.spectatorView,
+      waitingForStart: state.waitingForStart,
+      inProgress: isGameInProgress(state),
+      players: getSeatAssignments(state),
+      spectatorCount: connectedSpectatorCount(state),
+    };
   }
 
+  const PGN_TERMINATIONS = {
+    checkmate: 'checkmate',
+    resign: 'resignation',
+    stalemate: 'stalemate',
+    mutualDraw: 'draw agreed',
+    threefold: 'threefold repetition',
+    fivefold: 'fivefold repetition',
+    fiftyMove: '50-move rule',
+    seventyFiveMove: '75-move rule',
+    insufficientMaterial: 'insufficient material',
+    kingCaptured: 'king captured',
+  };
+
+  function pgnResult(winner, gameOver) {
+    if (winner === 'White') return '1-0';
+    if (winner === 'Black') return '0-1';
+    return gameOver ? '1/2-1/2' : '*';
+  }
+
+  function pgnEscape(value) {
+    return String(value || '').replace(/["\\]/g, '');
+  }
+
+  // Forfeited turns become null moves ("--") so colours keep alternating.
+  function buildPgn(options) {
+    const { moves = [], winner = null, gameOver = false, result = null } = options;
+    const date = options.date ? new Date(options.date) : new Date();
+    const dateTag = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+    const resultTag = pgnResult(winner, gameOver);
+    const headers = [
+      ['Event', 'Blendchess game'],
+      ['Site', options.site || 'Blendchess'],
+      ['Date', dateTag],
+      ['White', options.white || 'White'],
+      ['Black', options.black || 'Black'],
+      ['Result', resultTag],
+      ['Variant', options.hardMode ? 'Blendchess (Kriegspiel, hard mode)' : 'Blendchess (Kriegspiel)'],
+    ];
+    if (result && PGN_TERMINATIONS[result]) headers.push(['Termination', PGN_TERMINATIONS[result]]);
+
+    const tokens = [];
+    moves.forEach((ply, index) => {
+      if (index % 2 === 0) tokens.push(`${index / 2 + 1}.`);
+      tokens.push(ply.forfeit ? '-- {turn forfeited}' : ply.san || '--');
+    });
+    tokens.push(resultTag);
+
+    const lines = [];
+    let line = '';
+    for (const token of tokens) {
+      if (line && line.length + token.length + 1 > 79) {
+        lines.push(line);
+        line = token;
+      } else {
+        line = line ? `${line} ${token}` : token;
+      }
+    }
+    if (line) lines.push(line);
+
+    return `${headers.map(([key, value]) => `[${key} "${pgnEscape(value)}"]`).join('\n')}\n\n${lines.join('\n')}\n`;
+  }
+
+  const roomLogicExports = {
+    MAX_PLAYERS_PER_ROOM,
+    cleanNickname,
+    createRoomState,
+    touchState,
+    addEvent,
+    connectedPlayerCount,
+    connectedSpectatorCount,
+    isColorConnected,
+    hasConnectedMembers,
+    isGameInProgress,
+    hasReservedSeat,
+    cleanupDisconnectedColor,
+    isFull,
+    isReady,
+    getPlayer,
+    getPlayerByColor,
+    isResumeTokenValid,
+    getSeatAssignments,
+    assignPlayer,
+    assignSpectator,
+    removePlayer,
+    removeSpectator,
+    resetGame,
+    newGame,
+    setOptions,
+    normalizeDrawReason,
+    evaluateDrawEligibility,
+    squareText,
+    claimDraw,
+    resign,
+    applyMove: applyMoveToRoom,
+    stripCheckMarks,
+    createView,
+    buildPgn,
+  };
+
+  globalThis.BlendChessRoomLogic = roomLogicExports;
+
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = exports;
+    module.exports = roomLogicExports;
   }
 })();

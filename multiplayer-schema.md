@@ -1,455 +1,159 @@
-# Blendchess Multiplayer Protocol Schema
+# Blendchess multiplayer protocol (v2.0.0)
 
-Version: `1.0.0`  
-Transport: WebSocket JSON envelopes.
-
-## Canonical envelope
-
-```json
-{
-  "type": "<TYPE>",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty-for-spectator-targets",
-  "payload": {},
-  "version": "1.0.0"
-}
-```
-
-## Global rules
-
-- `roomCode` is required for all messages except `create_room`.
-- `version` must equal `1.0.0`, otherwise `error.errorCode = VERSION_MISMATCH`.
-- Spectator-targeted server messages commonly use `playerId: ""`.
-- `create_room` is the only room-less request.
-- Node backend enforces payload size and per-connection message-rate limits.
-- Worker backend currently does not mirror Node rate-limit/message-size guards yet.
-
-## Client -> Server messages
-
-### `create_room`
-
-```json
-{
-  "type": "create_room",
-  "payload": {
-    "nickname": "WhitePlayer",
-    "hardMode": false
-  },
-  "version": "1.0.0"
-}
-```
-
-Notes:
-- `nickname` is optional.
-- `hardMode` is optional and coerced to boolean.
-
-### `join_room`
-
-Player join:
-
-```json
-{
-  "type": "join_room",
-  "roomCode": "ABCD12",
-  "playerId": "existing-player-id-when-resuming",
-  "payload": {
-    "nickname": "BlackPlayer",
-    "resume": false,
-    "resumeToken": "optional"
-  },
-  "version": "1.0.0"
-}
-```
-
-Spectator join:
-
-```json
-{
-  "type": "join_room",
-  "roomCode": "ABCD12",
-  "payload": {
-    "nickname": "Spectator",
-    "spectator": true
-  },
-  "version": "1.0.0"
-}
-```
-
-Resume requirements:
-- `payload.resume === true`
-- `playerId` must be provided
-- `payload.resumeToken` must be valid for that seat
-
-### `game_state`
-
-```json
-{
-  "type": "game_state",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty-for-spectator",
-  "payload": {},
-  "version": "1.0.0"
-}
-```
-
-Requests a fresh authoritative snapshot.
-
-### `move_intent`
+JSON messages over one WebSocket per room membership. Every message uses the same envelope:
 
 ```json
 {
   "type": "move_intent",
   "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {
-    "from": { "r": 6, "c": 4 },
-    "to": { "r": 4, "c": 4 },
-    "promotion": "Q"
-  },
-  "version": "1.0.0"
+  "playerId": "seat-id-or-empty",
+  "payload": {},
+  "version": "2.0.0"
 }
 ```
 
-Notes:
-- `from` and `to` must be board coordinates `0..7`.
-- `promotion` is optional and must be valid promotion piece when present.
+- `roomCode` is required for everything except `create_room`.
+- A different `version` is rejected with `VERSION_MISMATCH`.
+- Board coordinates are `{ r, c }` with `r = 0` on rank 8 and `c = 0` on the a-file.
 
-### `set_hard_mode`
+## Connecting
+
+The Cloudflare Worker gives every room its own Durable Object, so it routes on the query string:
+
+| Purpose | URL |
+| --- | --- |
+| Create a room | `wss://<worker>/?create=1`, then send `create_room` |
+| Join, watch, resume | `wss://<worker>/?room=ABCD12`, then send `join_room` |
+
+The Node server accepts the same URLs and ignores the query string.
+
+## The core rule: per-viewer views
+
+The server never sends the full game to a player while it is running. Every state change is
+broadcast as a separate `game_state` per member, built by `createView(state, viewer)` in
+`shared/room-logic.js`:
+
+| Field | Player | Spectator (fog) | Spectator (party mode) | After game over |
+| --- | --- | --- | --- | --- |
+| `board` | own pieces only | empty | full | full |
+| `moves[].san/from/to` | own plies only; `+`/`#` stripped | hidden | full | full |
+| `moves[].capture.square` | yes | yes | yes | yes |
+| `check` | only when *you* are in check | no | yes | n/a |
+| `events` | public + your secrets | public | everything | everything |
+
+## Client -> server
+
+### `create_room`
 
 ```json
-{
-  "type": "set_hard_mode",
-  "roomCode": "ABCD12",
-  "playerId": "white-player-id",
-  "payload": { "enabled": true },
-  "version": "1.0.0"
-}
+{ "type": "create_room", "payload": { "nickname": "Wendy", "hardMode": false, "spectatorView": "fog" }, "version": "2.0.0" }
 ```
 
-Only White can toggle this.
+`spectatorView`: `"fog"` (default) or `"open"` (party mode: spectators see the live board).
+
+### `join_room`
+
+```json
+{ "type": "join_room", "roomCode": "ABCD12", "payload": { "nickname": "Boris" }, "version": "2.0.0" }
+```
+
+- Watch instead of play: `"payload": { "spectator": true }`.
+- Resume a seat: top-level `playerId` plus `"payload": { "resume": true, "resumeToken": "..." }`.
+- While a game is in progress, a disconnected player's seat is reserved; plain joins get `PLAYER_NOT_FOUND`.
+- Resuming from a new socket detaches the old one (it is closed with code `4000`) without dropping the seat.
+
+### `move_intent`
+
+```json
+{ "type": "move_intent", "roomCode": "ABCD12", "playerId": "seat", "payload": { "from": { "r": 6, "c": 4 }, "to": { "r": 4, "c": 4 }, "promotion": "Q" }, "version": "2.0.0" }
+```
+
+Illegal moves are rejected and announced to everyone as an `illegal` event; only the mover sees the squares.
+In hard mode an illegal move forfeits the turn (recorded as a null move `--`) unless the mover is in check.
+
+### `set_options`
+
+```json
+{ "type": "set_options", "roomCode": "ABCD12", "playerId": "seat", "payload": { "hardMode": true, "spectatorView": "open" }, "version": "2.0.0" }
+```
+
+Either player may change options before the first move and between games. During a game: `GAME_IN_PROGRESS`.
 
 ### `claim_draw`
 
-```json
-{
-  "type": "claim_draw",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {
-    "reason": "threefold|fiftyMove|seventyFiveMove|fivefold|insufficientMaterial"
-  },
-  "version": "1.0.0"
-}
-```
+`payload.reason` is optional (`threefold`, `fiftyMove`, ...). The server ends the game if a claim is
+available. Otherwise it records a draw offer, or accepts the opponent's pending offer. An offer stays up
+through the offerer's own move and lapses when the opponent moves.
 
-`reason` is optional. Backend validates draw eligibility.
+### `resign`, `new_game`, `game_state`, `ping`
 
-### `resign`
+- `resign`: ends the game; the opponent wins.
+- `new_game`: allowed only when the game is over (or before the first move). Players swap colours after a finished game.
+- `game_state`: asks for a fresh view.
+- `ping`: answered with `pong`.
 
-```json
-{
-  "type": "resign",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {},
-  "version": "1.0.0"
-}
-```
+## Server -> client
 
-### `new_game`
+### `room_created` / `room_joined`
 
 ```json
-{
-  "type": "new_game",
-  "roomCode": "ABCD12",
-  "playerId": "white-player-id",
-  "payload": {},
-  "version": "1.0.0"
-}
+{ "type": "room_joined", "roomCode": "ABCD12", "playerId": "seat", "payload": { "roomCode": "ABCD12", "role": "player", "playerId": "seat", "color": "b", "resumeToken": "..." }, "version": "2.0.0" }
 ```
 
-Only White can request this.
-
-### `ping`
-
-```json
-{
-  "type": "ping",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty-for-spectator",
-  "payload": { "ts": 1700000000000 },
-  "version": "1.0.0"
-}
-```
-
-Payload is echoed in `pong`.
-
-## Server -> Client messages
-
-### `room_created`
-
-```json
-{
-  "type": "room_created",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {
-    "roomCode": "ABCD12",
-    "role": "player",
-    "playerColor": "w",
-    "playerId": "player-id",
-    "resumeToken": "resume-token",
-    "players": [],
-    "spectators": [],
-    "gameStarted": false,
-    "game": {}
-  },
-  "version": "1.0.0"
-}
-```
-
-### `room_joined`
-
-Player recipient form:
-
-```json
-{
-  "type": "room_joined",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {
-    "roomCode": "ABCD12",
-    "role": "player",
-    "players": [],
-    "spectators": [],
-    "gameStarted": true
-  },
-  "version": "1.0.0"
-}
-```
-
-Spectator recipient form:
-
-```json
-{
-  "type": "room_joined",
-  "roomCode": "ABCD12",
-  "playerId": "",
-  "payload": {
-    "roomCode": "ABCD12",
-    "role": "spectator",
-    "spectatorId": "spectator-id",
-    "players": [],
-    "spectators": [],
-    "gameStarted": true
-  },
-  "version": "1.0.0"
-}
-```
-
-### `player_assigned`
-
-```json
-{
-  "type": "player_assigned",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {
-    "playerId": "player-id",
-    "color": "w|b",
-    "nickname": "Player",
-    "resumeToken": "resume-token-optional"
-  },
-  "version": "1.0.0"
-}
-```
-
-Notes:
-- Node includes `resumeToken` on create and join assignment.
-- Worker includes `resumeToken` on create assignment.
-- Worker join assignment currently omits `resumeToken`.
+Spectators get `{ "role": "spectator", "spectatorId": "..." }`. A `game_state` always follows.
 
 ### `game_state`
 
 ```json
 {
   "type": "game_state",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty",
   "payload": {
-    "game": {}
-  },
-  "version": "1.0.0"
+    "game": {
+      "roomCode": "ABCD12",
+      "gameId": 1,
+      "boardVersion": 7,
+      "you": { "role": "player", "color": "b" },
+      "revealed": false,
+      "turn": "w",
+      "board": [[null, "..."]],
+      "moves": [{ "ply": 1, "color": "w", "san": null, "from": null, "to": null, "forfeit": false, "capture": null }],
+      "events": [{ "id": 12, "at": 1760000000000, "kind": "capture", "color": "w", "captured": "b", "square": "d5", "r": 3, "c": 3 }],
+      "captured": { "w": 0, "b": 1 },
+      "check": { "color": "b", "directions": ["diagonal"] },
+      "drawOffer": null,
+      "gameOver": false,
+      "winner": null,
+      "result": null,
+      "hardMode": false,
+      "spectatorView": "fog",
+      "waitingForStart": false,
+      "inProgress": true,
+      "players": [{ "color": "w", "nickname": "Wendy", "connected": true }],
+      "spectatorCount": 0
+    }
+  }
 }
 ```
 
-### `move_applied`
-
-```json
-{
-  "type": "move_applied",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty",
-  "payload": {
-    "move": {
-      "from": { "r": 6, "c": 4 },
-      "to": { "r": 4, "c": 4 },
-      "piece": "P",
-      "capture": false,
-      "castling": null,
-      "enPassant": false,
-      "promotion": null
-    },
-    "san": "e4",
-    "nextTurn": "b",
-    "game": {},
-    "moveNumber": 1,
-    "boardVersion": 1,
-    "repetitionCount": 1
-  },
-  "version": "1.0.0"
-}
-```
+- `boardVersion` only ever increases, even across new games, so clients drop anything older than what they hold.
+- `result`: `checkmate`, `resign`, `stalemate`, `mutualDraw`, `threefold`, `fivefold`, `fiftyMove`, `seventyFiveMove`, `insufficientMaterial`.
+- Event kinds: `move`, `capture`, `check`, `illegal`, `forfeit`, `draw_offer`, `draw_declined`, `resign`, `game_over`, `presence`, `options`, `new_game`. Event `id`s increase, so a client can tell which ones are new.
+- `check.directions`: any of `file`, `rank`, `diagonal`, `knight`.
 
 ### `move_rejected`
 
-```json
-{
-  "type": "move_rejected",
-  "roomCode": "ABCD12",
-  "playerId": "player-id",
-  "payload": {
-    "reasonCode": "ILLEGAL_MOVE",
-    "forfeited": false,
-    "game": {},
-    "moveIntent": {}
-  },
-  "version": "1.0.0"
-}
-```
-
-Notes:
-- `forfeited` is optional and set for hard-mode forfeits.
-- `game` is included for forfeits.
-- `moveIntent` echoes the submitted payload on rejections.
-
-### `draw_result`
-
-```json
-{
-  "type": "draw_result",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty",
-  "payload": {
-    "reason": "threefold|fiftyMove|seventyFiveMove|fivefold|insufficientMaterial",
-    "winner": null,
-    "game": {}
-  },
-  "version": "1.0.0"
-}
-```
-
-### `resign_result`
-
-```json
-{
-  "type": "resign_result",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty",
-  "payload": {
-    "winner": "White|Black",
-    "game": {}
-  },
-  "version": "1.0.0"
-}
-```
+Sent only to the actor. Carries `reasonCode`, `forfeited` (hard mode), and the actor's fresh `game` view.
+It is also used for refused `set_options`, `new_game`, `claim_draw` and `resign` requests.
 
 ### `error`
 
-```json
-{
-  "type": "error",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty",
-  "payload": {
-    "errorCode": "ROOM_FULL",
-    "message": "Room is already full"
-  },
-  "version": "1.0.0"
-}
-```
+`payload.errorCode` is one of `INVALID_PAYLOAD`, `UNKNOWN_ROOM`, `ROOM_FULL`, `NOT_YOUR_TURN`, `WRONG_COLOR`,
+`ILLEGAL_MOVE`, `GAME_OVER`, `GAME_IN_PROGRESS`, `ROOM_NOT_READY`, `RATE_LIMIT`, `PLAYER_NOT_FOUND`,
+`INVALID_DRAW_CLAIM`, `VERSION_MISMATCH`, plus a human-readable `message`.
 
-### `pong`
+## Limits (both backends)
 
-```json
-{
-  "type": "pong",
-  "roomCode": "ABCD12",
-  "playerId": "player-id-or-empty",
-  "payload": { "ts": 1700000000000 },
-  "version": "1.0.0"
-}
-```
-
-## `game` snapshot payload schema
-
-`game_state`, `room_created.game`, `move_applied.game`, `draw_result.game`, and `resign_result.game` use this shape:
-
-```json
-{
-  "roomCode": "ABCD12",
-  "turn": "w|b",
-  "board": [],
-  "enPassant": null,
-  "moveNumber": 1,
-  "movePairs": [],
-  "events": [],
-  "captured": { "w": 0, "b": 0 },
-  "winner": null,
-  "result": null,
-  "gameOver": false,
-  "boardVersion": 0,
-  "hardMode": false,
-  "halfMoveClock": 0,
-  "positionCounts": {},
-  "waitingForStart": true,
-  "players": [],
-  "spectators": [],
-  "spectatorCount": 0
-}
-```
-
-Notes:
-- `board` is 8x8 with `null` or piece objects `{ type, color, hasMoved }`.
-- `spectatorCount` is present in Worker snapshots.
-- `spectatorCount` is currently absent in Node snapshots.
-
-## Runtime behavioral semantics
-
-- Illegal move attempts never mutate authoritative position.
-- Offending player receives `move_rejected`.
-- On illegal attempt, non-offending peers receive a fresh `game_state`.
-- In hard mode, illegal moves usually forfeit turn, except when the mover is in check; those in-check illegal attempts are rejected without forfeit.
-- If an active game has a disconnected player seat, non-resume `join_room` is rejected (`PLAYER_NOT_FOUND`) and the seat stays reserved for resume token reclaim.
-- Spectators are read-only and receive room/game updates.
-
-## Error codes
-
-- `INVALID_PAYLOAD`
-- `UNKNOWN_ROOM`
-- `ROOM_FULL`
-- `NOT_YOUR_TURN`
-- `WRONG_COLOR`
-- `ILLEGAL_MOVE`
-- `GAME_OVER`
-- `ROOM_NOT_READY`
-- `RATE_LIMIT`
-- `PLAYER_NOT_FOUND`
-- `INVALID_DRAW_CLAIM`
-- `VERSION_MISMATCH`
-
-## Implementation notes
-
-- Node protocol enum contains `game_over`, but it is currently not emitted.
-- Worker protocol enum does not include `game_over`.
-- Treat `game_over` as reserved/unused for now.
+- 16 KiB per message, 40 messages per second per socket.
+- Nicknames: 16 characters, markup stripped.
+- Node: up to 10,000 rooms in memory. Worker: up to 64 sockets per room.
+- Idle rooms with nobody connected are deleted after an hour (Worker: Durable Object alarm).

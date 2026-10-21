@@ -1,3944 +1,1989 @@
 (() => {
   const core = window.ChessCore;
-  if (!core) {
-    throw new Error('Chess core is required. Load chess-core.js before app.js.');
-  }
-  const sharedProtocol = window.BlendChessProtocol;
-  if (!sharedProtocol) {
-    throw new Error('Protocol is required. Load shared/protocol.js before app.js.');
-  }
-
-  const PIECE_SYMBOLS = {
-    w: { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙' },
-    b: { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' },
-  };
-
-  // SVG piece set (Cburnett/Wikipedia style) — inline for zero dependencies
-  const PIECE_SVG = {
-    wK: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 11.63V6M20 8h5" stroke-linejoin="miter"/><path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5" fill="#fff" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-6.5-13.5-3.5-16 4V27v-3.5c-3.5-7.5-13-10.5-16-4-3 6 5 10 5 10V37z" fill="#fff"/><path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0"/></g></svg>`,
-    wQ: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linejoin="round"><circle cx="6" cy="12" r="2"/><circle cx="14" cy="9" r="2"/><circle cx="22.5" cy="8" r="2"/><circle cx="31" cy="9" r="2"/><circle cx="39" cy="12" r="2"/><path d="M9 26c8.5-1.5 21-1.5 27 0l2.5-12.5L31 25l-.3-14.1-5.2 13.6-3-14.5-3 14.5-5.2-13.6L14 25 6.5 13.5 9 26z" stroke-linecap="butt"/><path d="M9 26c0 2 1.5 2 2.5 4 1 1.5 1 1 .5 3.5-1.5 1-1.5 2.5-1.5 2.5-1.5 1.5.5 2.5.5 2.5 6.5 1 16.5 1 23 0 0 0 1.5-1 0-2.5 0 0 .5-1.5-1-2.5-.5-2.5-.5-2 .5-3.5 1-2 2.5-2 2.5-4-8.5-1.5-18.5-1.5-27 0z" stroke-linecap="butt"/><path d="M11.5 30c3.5-1 18.5-1 22 0M12 33.5c6-1 15-1 21 0" fill="none"/></g></svg>`,
-    wR: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 39h27v-3H9v3zm3-3v-4h21v4H12zm-1-22V9h4v2h5V9h5v2h5V9h4v5" stroke-linecap="butt"/><path d="M34 14l-3 3H14l-3-3"/><path d="M15 17v7h15v-7" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M14 29.5v2.5h17v-2.5" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M14 29.5L11 14h23l-3 15.5H14z" stroke-linecap="butt"/><path d="M14 17v-3h17v3H14z" fill="none" stroke-linejoin="miter"/></g></svg>`,
-    wB: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#fff" stroke-linecap="butt"><path d="M9 36c3.39-.97 10.11.43 13.5-2 3.39 2.43 10.11 1.03 13.5 2 0 0 1.65.54 3 2-.68.97-1.65.99-3 .5-3.39-.97-10.11.46-13.5-1-3.39 1.46-10.11.03-13.5 1-1.354.49-2.323.47-3-.5 1.354-1.94 3-2 3-2z"/><path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/><path d="M25 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0z"/></g><path d="M17.5 26h10M15 30h15m-7.5-14.5v5M20 18h5" stroke-linejoin="miter"/></g></svg>`,
-    wN: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21" fill="#fff"/><path d="M24 18c.38 2.91-5.55 7.37-8 9-3 2-2.82 4.34-5 4-1.042-.94 1.41-3.04 0-3-1 0 .19 1.23-1 2-1 0-4.003 1-4-4 0-2 6-12 6-12s1.89-1.9 2-3.5c-.73-.994-.5-2-.5-3 1-1 3 2.5 3 2.5h2s.78-1.992 2.5-3c1 0 1 3 1 3" fill="#fff"/><path d="M9.5 25.5a.5.5 0 1 1-1 0 .5.5 0 1 1 1 0zm5.433-9.75a.5 1.5 30 1 1-.866-.5.5 1.5 30 1 1 .866.5z" fill="#000"/></g></svg>`,
-    wP: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03C15.41 27.09 11 31.58 11 39.5H34c0-7.92-4.41-12.41-7.41-13.47C28.06 24.84 29 23.03 29 21c0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z" fill="#fff" stroke="#000" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-    bK: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22.5 11.63V6" stroke-linejoin="miter"/><path d="M22.5 25s4.5-7.5 3-10.5c0 0-1-2.5-3-2.5s-3 2.5-3 2.5c-1.5 3 3 10.5 3 10.5" fill="#000" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M11.5 37c5.5 3.5 15.5 3.5 21 0v-7s9-4.5 6-10.5c-4-6.5-13.5-3.5-16 4V27v-3.5c-3.5-7.5-13-10.5-16-4-3 6 5 10 5 10V37z" fill="#000"/><path d="M20 8h5" stroke-linejoin="miter"/><path d="M32 29.5s8.5-4 6.03-9.65C34.15 14 25 18 22.5 24.5l.01 2.1-.01-2.1C20 18 9.906 14 6.997 19.85 4.5 25.5 11.85 29.5 11.85 29.5" fill="none" stroke="#fff"/><path d="M11.5 30c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0m-21 3.5c5.5-3 15.5-3 21 0" stroke="#fff"/></g></svg>`,
-    bQ: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#000" stroke="none"><circle cx="6" cy="12" r="2.75"/><circle cx="14" cy="9" r="2.75"/><circle cx="22.5" cy="8" r="2.75"/><circle cx="31" cy="9" r="2.75"/><circle cx="39" cy="12" r="2.75"/></g><path d="M9 26c8.5-1.5 21-1.5 27 0l2.5-12.5L31 25l-.3-14.1-5.2 13.6-3-14.5-3 14.5-5.2-13.6L14 25 6.5 13.5 9 26z" fill="#000" stroke-linecap="butt"/><path d="M9 26c0 2 1.5 2 2.5 4 1 1.5 1 1 .5 3.5-1.5 1-1.5 2.5-1.5 2.5-1.5 1.5.5 2.5.5 2.5 6.5 1 16.5 1 23 0 0 0 1.5-1 0-2.5 0 0 .5-1.5-1-2.5-.5-2.5-.5-2 .5-3.5 1-2 2.5-2 2.5-4-8.5-1.5-18.5-1.5-27 0z" fill="#000" stroke-linecap="butt"/><path d="M11 38.5a35 35 1 0 0 23 0" fill="none" stroke-linecap="butt"/><path d="M11 29a35 35 1 0 1 23 0m-21.5 2.5h20m-21 3h21" fill="none" stroke="#fff"/></g></svg>`,
-    bR: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 39h27v-3H9v3zm3.5-7l1.5-2.5h17l1.5 2.5h-20zm-.5 4v-4h21v4H12z" stroke-linecap="butt"/><path d="M14 29.5v-13h17v13H14z" stroke-linecap="butt" stroke-linejoin="miter"/><path d="M14 16.5L11 14h23l-3 2.5H14zM11 14V9h4v2h5V9h5v2h5V9h4v5H11z" stroke-linecap="butt"/><path d="M12 35.5h21m-20-4h19m-18-2h17m-17-13h17M11 14h23" fill="none" stroke="#fff" stroke-width="1" stroke-linejoin="miter"/></g></svg>`,
-    bB: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><g fill="#000" stroke-linecap="butt"><path d="M9 36c3.39-.97 10.11.43 13.5-2 3.39 2.43 10.11 1.03 13.5 2 0 0 1.65.54 3 2-.68.97-1.65.99-3 .5-3.39-.97-10.11.46-13.5-1-3.39 1.46-10.11.03-13.5 1-1.354.49-2.323.47-3-.5 1.354-1.94 3-2 3-2z"/><path d="M15 32c2.5 2.5 12.5 2.5 15 0 .5-1.5 0-2 0-2 0-2.5-2.5-4-2.5-4 5.5-1.5 6-11.5-5-15.5-11 4-10.5 14-5 15.5 0 0-2.5 1.5-2.5 4 0 0-.5.5 0 2z"/><path d="M25 8a2.5 2.5 0 1 1-5 0 2.5 2.5 0 1 1 5 0z"/></g><path d="M17.5 26h10M15 30h15m-7.5-14.5v5M20 18h5" stroke="#fff" stroke-linejoin="miter"/></g></svg>`,
-    bN: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><g fill="none" fill-rule="evenodd" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10c10.5 1 16.5 8 16 29H15c0-9 10-6.5 8-21" fill="#000"/><path d="M24 18c.38 2.91-5.55 7.37-8 9-3 2-2.82 4.34-5 4-1.042-.94 1.41-3.04 0-3-1 0 .19 1.23-1 2-1 0-4.003 1-4-4 0-2 6-12 6-12s1.89-1.9 2-3.5c-.73-.994-.5-2-.5-3 1-1 3 2.5 3 2.5h2s.78-1.992 2.5-3c1 0 1 3 1 3" fill="#000"/><path d="M9.5 25.5a.5.5 0 1 1-1 0 .5.5 0 1 1 1 0z" fill="#fff" stroke="#fff"/><circle cx="14.5" cy="15.5" r="1" fill="#fff" stroke="none"/><path d="M24.55 10.4l-.45 1.45.5.15c3.15 1 5.65 2.49 7.9 6.75M24.55 10.4z" fill="none" stroke="#fff" stroke-width=".75"/></g></svg>`,
-    bP: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45"><path d="M22.5 9c-2.21 0-4 1.79-4 4 0 .89.29 1.71.78 2.38C17.33 16.5 16 18.59 16 21c0 2.03.94 3.84 2.41 5.03C15.41 27.09 11 31.58 11 39.5H34c0-7.92-4.41-12.41-7.41-13.47C28.06 24.84 29 23.03 29 21c0-2.41-1.33-4.5-3.28-5.62.49-.67.78-1.49.78-2.38 0-2.21-1.79-4-4-4z" fill="#000" stroke="#000" stroke-width="1.5" stroke-linecap="round"/></svg>`,
-  };
-
-  function getPieceSvgKey(color, type) {
-    return `${color}${type}`;
+  const protocol = window.BlendChessProtocol;
+  const rl = window.BlendChessRoomLogic;
+  const guards = window.BlendChessStateGuards;
+  const sprites = window.BlendChessSprites;
+  const sfx = window.BlendChessSfx;
+  const fx = window.BlendChessFx;
+  if (!core || !protocol || !rl || !guards || !sprites || !sfx || !fx) {
+    throw new Error('Load chess-core.js, shared/*.js and client/*.js before app.js.');
   }
 
-  function createPieceSvgElement(color, type) {
-    const key = getPieceSvgKey(color, type);
-    const svgStr = PIECE_SVG[key];
-    if (!svgStr) return null;
-    const wrapper = document.createElement('span');
-    wrapper.innerHTML = svgStr;
-    const svg = wrapper.firstChild;
-    if (svg) {
-      svg.classList.add('piece-svg');
-      svg.setAttribute('aria-label', `${color === 'w' ? 'White' : 'Black'} ${type}`);
+  const { TYPES, ERROR_CODES } = protocol;
+  const $ = (id) => document.getElementById(id);
+
+  function el(tag, props = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (value == null || value === false) continue;
+      if (key === 'class') node.className = value;
+      else if (key === 'text') node.textContent = value;
+      else if (key === 'dataset') Object.assign(node.dataset, value);
+      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value === true ? '' : value);
     }
-    return svg;
+    for (const child of children.flat()) {
+      if (child == null || child === false) continue;
+      node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    }
+    return node;
   }
-  const stateGuards = window.BlendChessStateGuards;
-  if (!stateGuards) {
-    throw new Error('State guards are required. Load client/stateGuards.js before app.js.');
+
+  // ---------------------------------------------------------------------------
+  // Storage and settings
+  // ---------------------------------------------------------------------------
+
+  const STORAGE = {
+    settings: 'blendchess.settings.v2',
+    session: 'blendchess.session.v2',
+    local: 'blendchess.localGame.v2',
+    archive: 'blendchess.archive.v2',
+  };
+  const ARCHIVE_MAX = 30;
+  const isLocalHost = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
+  const DEFAULT_SERVER_URL = window.BLENDCHESS_SERVER_URL
+    || (isLocalHost ? 'ws://localhost:3000' : 'wss://blendchess-ws.omertalib42.workers.dev');
+
+  function load(key, fallback) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch {
+      return fallback;
+    }
   }
-  const {
-    normalizeHistorySnapshot: normalizeStateHistorySnapshot,
-    shouldHydrateSnapshotVersion,
-  } = stateGuards;
 
-  const WEBSOCKET_TYPES = sharedProtocol.TYPES;
-  const PROTOCOL_VERSION = sharedProtocol.PROTOCOL_VERSION;
-  const ERROR_CODES = sharedProtocol.ERROR_CODES;
+  function save(key, value) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // storage can be full or blocked; the game still works without it
+    }
+  }
 
-  const ERROR_TEXT = {
-    INVALID_PAYLOAD: 'Server could not parse that move request.',
-    UNKNOWN_ROOM: 'Room does not exist.',
-    ROOM_FULL: 'That room already has two players.',
-    NOT_YOUR_TURN: 'It is not your turn.',
-    WRONG_COLOR: 'Your connection is not mapped to this room.',
-    ILLEGAL_MOVE: 'That move is illegal.',
-    GAME_OVER: 'The game is already over.',
-    ROOM_NOT_READY: 'Waiting for the second player.',
-    RATE_LIMIT: 'Server is throttling requests.',
-    PLAYER_NOT_FOUND: 'Could not find player in room.',
-    INVALID_DRAW_CLAIM: 'Draw claim is not currently valid.',
-    VERSION_MISMATCH: 'Client/server protocol mismatch. Refresh and reconnect.',
+  function remove(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+  }
+
+  function isWsUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'ws:' || url.protocol === 'wss:';
+    } catch {
+      return false;
+    }
+  }
+
+  const settings = {
+    sound: true,
+    music: false,
+    crt: true,
+    fx: true,
+    hints: true,
+    theme: 'arcade',
+    nickname: '',
+    serverUrl: DEFAULT_SERVER_URL,
+    ...load(STORAGE.settings, {}),
+  };
+  if (!isWsUrl(settings.serverUrl)) settings.serverUrl = DEFAULT_SERVER_URL;
+
+  function saveSettings() {
+    save(STORAGE.settings, settings);
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  function applySettings() {
+    const root = document.documentElement;
+    root.dataset.theme = settings.theme;
+    root.dataset.crt = settings.crt ? 'on' : 'off';
+    root.style.setProperty('--fog-url', `url("${sprites.fogTexture(settings.theme === 'paper' ? '#241a12' : '#ffffff')}")`);
+    sfx.setSound(settings.sound);
+    fx.setEnabled(settings.fx);
+    $('soundBtn').setAttribute('aria-pressed', String(settings.sound));
+    $('musicBtn').setAttribute('aria-pressed', String(settings.music));
+    document.querySelectorAll('[data-theme-choice]').forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.themeChoice === settings.theme));
+    });
+    $('crtInput').checked = settings.crt;
+    $('fxInput').checked = settings.fx;
+    $('hintsInput').checked = settings.hints;
+    $('serverUrlInput').value = settings.serverUrl;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', cssVar('--bg') || '#140b2b');
+  }
+
+  // ---------------------------------------------------------------------------
+  // App state
+  // ---------------------------------------------------------------------------
+
+  const app = {
+    mode: null, // 'local' | 'online' | 'archive'
+    view: null,
+    prevView: null,
+    selected: null,
+    cursor: { r: 7, c: 4 },
+    keyboard: false,
+    replay: null,
+    seenEventId: 0,
+    marks: { boom: null, took: null },
+    animate: null,
+    revealing: false,
+    gameOverShown: '',
+    archiveTitle: null,
   };
 
-  const boardEl = document.getElementById('board');
-  const statusEl = document.getElementById('status');
-  const modeText = document.getElementById('modeText');
-  const capturesEl = document.getElementById('captures');
-  const eventsEl = document.getElementById('events');
-  const moveListInlineEl = document.getElementById('moveListInline');
-  const moveBody = moveListInlineEl; // backward compat alias
-  const replayFirstEl = document.getElementById('replayFirst');
-  const replayPrevEl = document.getElementById('replayPrev');
-  const replayNextEl = document.getElementById('replayNext');
-  const replayFinalEl = document.getElementById('replayFinal');
-  const replayBannerEl = document.getElementById('replayBanner');
-  const checkAlertEl = document.getElementById('checkAlert');
-  const flashBannerEl = document.getElementById('flashBanner');
-  const exportPgnEl = document.getElementById('exportPgn');
-  const hardModeEl = document.getElementById('hardMode');
-  const newGameEl = document.getElementById('newGame');
-  const multiplayerStatusEl = document.getElementById('multiplayerStatus');
-  const multiplayerInfoEl = document.getElementById('multiplayerInfo');
-  const roomCodeBadge = document.getElementById('roomCodeBadge');
-  const playerRoster = document.getElementById('playerRoster');
-  const setupHintEl = document.getElementById('setupHint');
-  const playModeEl = document.getElementById('playMode');
-  const serverUrlEl = document.getElementById('serverUrl');
-  const connectServerEl = document.getElementById('connectServer');
-  const createRoomEl = document.getElementById('createRoom');
-  const joinRoomCodeEl = document.getElementById('joinRoomCode');
-  const joinRoomEl = document.getElementById('joinRoom');
-  const spectateRoomEl = document.getElementById('spectateRoom');
-  const copyRoomCodeEl = document.getElementById('copyRoomCode');
-  const leaveRoomEl = document.getElementById('leaveRoom');
-  const claimDrawEl = document.getElementById('claimDraw');
-  const resignEl = document.getElementById('resign');
-  const historyGamesEl = document.getElementById('historyGames');
-  const loadHistoryGameEl = document.getElementById('loadHistoryGame');
-  const clearHistoryGamesEl = document.getElementById('clearHistoryGames');
-  const uiThemeEl = document.getElementById('uiTheme');
-  const boardThemeEl = document.getElementById('boardTheme');
-  const illegalOverlayEl = document.getElementById('illegalOverlay');
+  const local = {
+    state: null,
+    viewer: 'w',
+    curtain: false,
+    handoff: false,
+    seen: { w: 0, b: 0 },
+  };
 
-  // New UI elements
-  const gameLobbyOverlay = document.getElementById('gameLobbyOverlay');
-  const lobbyStep1 = document.getElementById('lobbyStep1');
-  const lobbyStep2 = document.getElementById('lobbyStep2');
-  const lobbyLocalBtn = document.getElementById('lobbyLocal');
-  const lobbyOnlineBtn = document.getElementById('lobbyOnline');
-  const lobbyBackBtn = document.getElementById('lobbyBack');
-  const lobbyCloseBtn = document.getElementById('lobbyClose');
-  const lobbyHardModeEl = document.getElementById('lobbyHardMode');
-  const openLobbyBtn = document.getElementById('openLobby');
-  const lobbyResumeSectionEl = document.getElementById('lobbyResumeSection');
-  const lobbyResumeInfoEl = document.getElementById('lobbyResumeInfo');
-  const lobbyResumeBtnEl = document.getElementById('lobbyResumeBtn');
-  const lobbyStartFreshBtnEl = document.getElementById('lobbyStartFreshBtn');
-  const ingameToolbar = document.getElementById('ingameToolbar');
-  const promotionPickerEl = document.getElementById('promotionPicker');
-  const promotionPiecesEl = document.getElementById('promotionPieces');
-  const topPlayerNameEl = document.getElementById('topPlayerName');
-  const topPlayerMaterialEl = document.getElementById('topPlayerMaterial');
-  const topPlayerCapturesEl = document.getElementById('topPlayerCaptures');
-  const bottomPlayerNameEl = document.getElementById('bottomPlayerName');
-  const bottomPlayerMaterialEl = document.getElementById('bottomPlayerMaterial');
-  const bottomPlayerCapturesEl = document.getElementById('bottomPlayerCaptures');
-  const uiThemeHeaderEl = document.getElementById('uiThemeHeader');
-  const boardThemeHeaderEl = document.getElementById('boardThemeHeader');
-
-  // Drag-and-drop state
-  let dragState = null;
-
-  const {
-    createInitialState,
-    generateLegalMoves,
-    applyMove,
-    isInCheck,
-    squareName,
-    colorName,
-    otherColor,
-    moveToSAN,
-    cloneBoard,
-    recordCurrentPosition,
-    isThreefoldRepetition,
-    isFivefoldRepetition,
-    isFiftyMoveRule,
-    isSeventyFiveMoveRule,
-    isInsufficientMaterial,
-    moveRejectionReason: coreMoveRejectionReason,
-    evaluateTerminalState: coreEvaluateTerminalState,
-  } = core;
-
-  const DEFAULT_SERVER_URL = window.BLENDCHESS_SERVER_URL
-    || (
-      window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-        ? 'ws://localhost:3000'
-        : 'wss://blendchess-ws.omertalib42.workers.dev'
-    );
-  const SERVER_URL_STORAGE_KEY = 'blendchess.serverUrl';
-  const ONLINE_SESSION_STORAGE_KEY = 'blendchess.onlineSession';
-  const PLAY_MODE_STORAGE_KEY = 'blendchess.playMode';
-  const HISTORY_STORAGE_KEY = 'blendchess.history';
-  const HISTORY_MAX_ITEMS = 40;
-  const UI_THEME_STORAGE_KEY = 'blendchess.uiTheme';
-  const BOARD_THEME_STORAGE_KEY = 'blendchess.boardTheme';
-  const AUTO_RECONNECT_MAX_ATTEMPTS = 20;
-  const AUTO_RECONNECT_BASE_DELAY_MS = 1200;
-  const SOCKET_HEARTBEAT_INTERVAL_MS = 9000;
-  const ROOM_ACTION_TIMEOUT_MS = 9000;
-  const DRAW_CLAIM_REASONS = ['threefold', 'fiftyMove', 'seventyFiveMove', 'fivefold', 'insufficientMaterial'];
-  const MASKED_MOVE_TEXT = '****';
-  const DRAW_REASON_ALIASES = sharedProtocol.DRAW_REASON_ALIASES;
-
-  const multiplayer = {
-    mode: 'local',
-    connected: false,
-    socket: null,
-    connectPromise: null,
-    socketUrl: DEFAULT_SERVER_URL,
+  const net = {
+    ws: null,
+    status: 'offline',
     roomCode: '',
-    playerId: null,
-    resumeToken: null,
+    role: null,
     color: null,
-    role: 'player',
-    spectatorId: null,
-    players: [],
-    spectators: [],
-    awaitingStateSync: false,
+    playerId: '',
+    resumeToken: '',
+    intentionalClose: false,
     reconnectAttempts: 0,
     reconnectTimer: null,
-    roomAction: null,
-    roomActionTimer: null,
     heartbeatTimer: null,
-    waitingForPong: false,
-    resumeInFlight: false,
-    intentionalLeave: false,
+    lastMessageAt: 0,
+    pending: null,
+    pendingTimer: null,
+    spectatorNickname: '',
   };
 
-  let audioContext = null;
-  let state = newGameState();
-  let replayHistory = [];
-  let pendingServerAttempt = null;
-  const replay = { active: false, ply: 0 };
-  const illegalAttemptsByPly = {};
-  const captureMarkersByPly = {};
-  const moveHighlightsByPly = {};
-  let bannerTimer = null;
-  let historyCache = [];
+  const RECONNECT_MAX_ATTEMPTS = 30;
+  const HEARTBEAT_MS = 10_000;
+  const STALE_SOCKET_MS = 25_000;
+  const PENDING_TIMEOUT_MS = 9_000;
 
-  function getAudioContext() {
-    if (audioContext) {
-      return audioContext;
-    }
+  const PIECE_NAMES = { P: 'pawn', N: 'knight', B: 'bishop', R: 'rook', Q: 'queen', K: 'king' };
+  const RESULT_TEXT = {
+    checkmate: 'by checkmate',
+    resign: 'by resignation',
+    stalemate: 'Stalemate.',
+    mutualDraw: 'Draw agreed.',
+    threefold: 'Draw by threefold repetition.',
+    fivefold: 'Draw by fivefold repetition.',
+    fiftyMove: 'Draw by the 50-move rule.',
+    seventyFiveMove: 'Draw by the 75-move rule.',
+    insufficientMaterial: 'Draw: nobody can checkmate any more.',
+    kingCaptured: 'king captured',
+  };
+  const REASON_TEXT = {
+    NOT_YOUR_TURN: "It's not your turn.",
+    ROOM_NOT_READY: 'Waiting for your opponent.',
+    GAME_OVER: 'This game is over.',
+    GAME_IN_PROGRESS: 'Not while a game is in progress.',
+    ROOM_FULL: 'That room is full. Try WATCH instead.',
+    UNKNOWN_ROOM: 'No room with that code.',
+    PLAYER_NOT_FOUND: 'That seat is reserved for a player who is reconnecting.',
+    RATE_LIMIT: 'Whoa there, slow down.',
+    VERSION_MISMATCH: 'The server runs a different version. Refresh the page.',
+    INVALID_PAYLOAD: 'The server did not understand that.',
+    WRONG_COLOR: "You can't do that right now.",
+    INVALID_DRAW_CLAIM: 'No draw available.',
+  };
 
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) {
-      return null;
-    }
+  const colorName = (color) => (color === 'w' ? 'White' : 'Black');
+  const same = (a, b) => Boolean(a && b && a.r === b.r && a.c === b.c);
+  const squareName = (pos) => core.squareName(pos);
 
-    audioContext = new Ctx();
-    return audioContext;
+  // ---------------------------------------------------------------------------
+  // Small UI helpers: toast, dialogs, umpire
+  // ---------------------------------------------------------------------------
+
+  let toastTimer = null;
+  function toast(text, tone = '') {
+    const node = $('toast');
+    node.textContent = text;
+    node.dataset.tone = tone;
+    node.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => node.classList.remove('show'), 2600);
+    if (tone === 'bad') sfx.play('error');
   }
 
-  function unlockAudio() {
-    const ctx = getAudioContext();
-    if (!ctx) {
-      return;
-    }
-
-    if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
-  }
-
-  function scheduleTone(ctx, options) {
-    const {
-      frequency,
-      delay = 0,
-      duration = 0.08,
-      gain = 0.06,
-      type = 'triangle',
-    } = options;
-    const startTime = ctx.currentTime + delay;
-    const endTime = startTime + duration;
-    const oscillator = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(frequency, startTime);
-
-    gainNode.gain.setValueAtTime(0.0001, startTime);
-    gainNode.gain.exponentialRampToValueAtTime(gain, startTime + 0.01);
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, endTime);
-
-    oscillator.connect(gainNode);
-    gainNode.connect(ctx.destination);
-    oscillator.start(startTime);
-    oscillator.stop(endTime + 0.02);
-  }
-
-  function playMoveSound() {
-    const ctx = getAudioContext();
-    if (!ctx) {
-      return;
-    }
-
-    unlockAudio();
-    scheduleTone(ctx, {
-      frequency: 420,
-      duration: 0.045,
-      gain: 0.045,
-      type: 'square',
-    });
-    scheduleTone(ctx, {
-      frequency: 320,
-      delay: 0.05,
-      duration: 0.055,
-      gain: 0.05,
-      type: 'triangle',
+  let dialogResolve = null;
+  function dialog({ title, body, buttons }) {
+    return new Promise((resolve) => {
+      closeDialog(null);
+      dialogResolve = resolve;
+      $('dialogTitle').textContent = title;
+      $('dialogBody').replaceChildren(typeof body === 'string' ? el('p', { text: body }) : body);
+      $('dialogButtons').replaceChildren(...buttons.map((button) => el('button', {
+        class: `px-btn ${button.kind || ''}`,
+        type: 'button',
+        text: button.label,
+        onclick: () => closeDialog(button.value),
+      })));
+      $('dialog').classList.remove('hidden');
+      const primary = $('dialogButtons').querySelector('.primary, .danger') || $('dialogButtons').lastElementChild;
+      if (primary) primary.focus();
     });
   }
 
-  function playCaptureSound(role) {
-    const ctx = getAudioContext();
-    if (!ctx) {
-      return;
+  function closeDialog(value) {
+    $('dialog').classList.add('hidden');
+    if (dialogResolve) {
+      const resolve = dialogResolve;
+      dialogResolve = null;
+      resolve(value);
     }
+  }
 
-    unlockAudio();
-    if (role === 'loser') {
-      scheduleTone(ctx, {
-        frequency: 260,
-        duration: 0.09,
-        gain: 0.065,
-        type: 'sawtooth',
-      });
-      scheduleTone(ctx, {
-        frequency: 170,
-        delay: 0.05,
-        duration: 0.13,
-        gain: 0.06,
-        type: 'sawtooth',
-      });
-      return;
-    }
-
-    scheduleTone(ctx, {
-      frequency: 620,
-      duration: 0.06,
-      gain: 0.055,
-      type: 'triangle',
-    });
-    scheduleTone(ctx, {
-      frequency: 760,
-      delay: 0.03,
-      duration: 0.08,
-      gain: 0.055,
-      type: 'triangle',
+  function confirmDialog(title, body, okLabel = 'YES', kind = 'primary') {
+    return dialog({
+      title,
+      body,
+      buttons: [
+        { label: 'CANCEL', kind: 'ghost', value: false },
+        { label: okLabel, kind, value: true },
+      ],
     });
   }
 
-  function playIllegalMoveSound() {
-    const ctx = getAudioContext();
-    if (!ctx) {
-      return;
-    }
-
-    unlockAudio();
-    scheduleTone(ctx, {
-      frequency: 250,
-      duration: 0.1,
-      gain: 0.06,
-      type: 'sawtooth',
-    });
-    scheduleTone(ctx, {
-      frequency: 170,
-      delay: 0.05,
-      duration: 0.12,
-      gain: 0.06,
-      type: 'square',
-    });
-  }
-
-  function playMoveFeedback(options = {}) {
-    const {
-      capture = false,
-      moverColor = null,
-      capturedColor = null,
-    } = options;
-
-    if (!capture) {
-      playMoveSound();
-      return;
-    }
-
-    if (!isOnlineMode() || !multiplayer.color) {
-      playCaptureSound('taker');
-      return;
-    }
-
-    if (moverColor && moverColor === multiplayer.color) {
-      playCaptureSound('taker');
-      return;
-    }
-
-    if (capturedColor && capturedColor === multiplayer.color) {
-      playCaptureSound('loser');
-      return;
-    }
-
-    playCaptureSound('taker');
-  }
-
-  function getCurrentPly() {
-    let ply = 0;
-    for (const pair of state.movePairs) {
-      if (pair.white) {
-        ply += 1;
-      }
-      if (pair.black) {
-        ply += 1;
-      }
-    }
-    return ply;
-  }
-
-  function normalizeEventColor(color) {
-    return color === 'w' || color === 'b' ? color : null;
-  }
-
-  function getViewerColorForMasking() {
-    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
-      return null;
-    }
-    if (isOnlineMode()) {
-      return normalizeEventColor(multiplayer.color);
-    }
-    return state.turn === 'w' || state.turn === 'b' ? state.turn : null;
-  }
-
-  function inferEventColor(text) {
-    const viewerColor = getViewerColorForMasking();
-    if (/^White\b/i.test(text)) {
-      return 'w';
-    }
-    if (/^Black\b/i.test(text)) {
-      return 'b';
-    }
-    if (/^You\b/i.test(text)) {
-      return viewerColor;
-    }
-    if (/^Opponent\b/i.test(text) && viewerColor) {
-      return otherColor(viewerColor);
-    }
-    return null;
-  }
-
-  function normalizeEventEntry(entry) {
-    if (entry && typeof entry === 'object' && typeof entry.text === 'string') {
-      return {
-        time: typeof entry.time === 'string' && entry.time ? entry.time : '--:--',
-        move: Number.isInteger(entry.move) ? entry.move : getCurrentPly(),
-        text: entry.text,
-        color: normalizeEventColor(entry.color) || inferEventColor(entry.text),
-      };
-    }
-
-    if (typeof entry === 'string') {
-      const match = entry.match(/^\[(\d{1,2}:\d{2})(?:\s*\|\s*M(\d+))?\]\s*(.*)$/);
-      if (match) {
-        const move = Number.isInteger(Number(match[2])) ? Number(match[2]) : getCurrentPly();
-        return {
-          time: match[1],
-          move,
-          text: match[3],
-          color: inferEventColor(match[3]),
-        };
-      }
-      return {
-        time: '--:--',
-        move: getCurrentPly(),
-        text: entry,
-        color: inferEventColor(entry),
-      };
-    }
-
-    return {
-      time: '--:--',
-      move: getCurrentPly(),
-      text: String(entry || ''),
-      color: null,
-    };
-  }
-
-  function clearIllegalAttempts() {
-    Object.keys(illegalAttemptsByPly).forEach((key) => {
-      delete illegalAttemptsByPly[key];
+  let umpireCancel = null;
+  let mouthTimer = null;
+  function umpireSay(text, tone = '') {
+    if (!text) return;
+    const textEl = $('umpireText');
+    const box = textEl.closest('.umpire');
+    if (umpireCancel) umpireCancel();
+    clearInterval(mouthTimer);
+    textEl.dataset.tone = tone;
+    box.classList.add('talking');
+    let open = false;
+    mouthTimer = setInterval(() => {
+      open = !open;
+      $('umpireFace').src = sprites.umpire(open ? 'talk' : 'idle');
+    }, 110);
+    umpireCancel = fx.typewriter(textEl, text, {
+      speed: 2,
+      onTick: () => sfx.play('type'),
+      onDone: () => {
+        clearInterval(mouthTimer);
+        $('umpireFace').src = sprites.umpire('idle');
+        box.classList.remove('talking');
+      },
     });
   }
 
-  function clearCaptureMarkers() {
-    Object.keys(captureMarkersByPly).forEach((key) => {
-      delete captureMarkersByPly[key];
-    });
+  // ---------------------------------------------------------------------------
+  // Menu
+  // ---------------------------------------------------------------------------
+
+  const MENU_PANELS = ['menuMain', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
+  let setupMode = 'local';
+
+  function showScreen(name) {
+    $('menuScreen').classList.toggle('hidden', name !== 'menu');
+    $('gameScreen').classList.toggle('hidden', name !== 'game');
   }
 
-  function clearMoveHighlights() {
-    Object.keys(moveHighlightsByPly).forEach((key) => {
-      delete moveHighlightsByPly[key];
-    });
+  function showMenuPanel(panel) {
+    showScreen('menu');
+    $('pressStart').classList.toggle('hidden', panel !== 'title');
+    $('logoBoard').classList.toggle('hidden', panel !== 'title' && panel !== 'menuMain');
+    for (const id of MENU_PANELS) $(id).classList.toggle('hidden', id !== panel);
+    if (panel === 'menuMain') refreshContinue();
+    if (panel === 'menuArchive') renderArchiveList();
+    const first = panel === 'title' ? $('pressStart') : $(panel).querySelector('input, .menu-item:not([hidden]), .px-btn.primary');
+    if (first) setTimeout(() => first.focus(), 0);
   }
 
-  function setMoveHighlightForPly(ply, highlight) {
-    if (!Number.isInteger(ply) || ply <= 0 || !highlight) {
-      return;
+  function refreshContinue() {
+    const session = load(STORAGE.session, null);
+    const localSave = load(STORAGE.local, null);
+    const item = $('continueItem');
+    if (session && session.roomCode) {
+      item.hidden = false;
+      item.dataset.kind = 'online';
+      $('continueHint').textContent = `online room ${session.roomCode}`;
+    } else if (localSave && localSave.state && !localSave.state.gameOver) {
+      item.hidden = false;
+      item.dataset.kind = 'local';
+      $('continueHint').textContent = `local duel, move ${Math.floor(localSave.state.log.length / 2) + 1}`;
+    } else {
+      item.hidden = true;
     }
-
-    moveHighlightsByPly[String(ply)] = {
-      from: highlight.from ? { ...highlight.from } : null,
-      to: highlight.to ? { ...highlight.to } : null,
-      san: typeof highlight.san === 'string' ? highlight.san : '',
-    };
   }
 
-  function getMoveHighlightForPly(ply) {
-    if (!Number.isInteger(ply) || ply <= 0) {
-      return null;
+  function openSetup(mode) {
+    setupMode = mode;
+    $('setupTitle').textContent = mode === 'local' ? 'LOCAL DUEL' : 'CREATE ROOM';
+    $('nicknameField').classList.toggle('hidden', mode === 'local');
+    $('openSpectatorsField').classList.toggle('hidden', mode === 'local');
+    $('nicknameInput').value = settings.nickname;
+    $('setupGo').textContent = mode === 'local' ? 'START' : 'CREATE';
+    showMenuPanel('menuSetup');
+  }
+
+  function rememberNickname(value) {
+    settings.nickname = rl.cleanNickname(value, '');
+    saveSettings();
+    return settings.nickname || 'Player';
+  }
+
+  function onMenuAction(action) {
+    sfx.play('click');
+    if (action === 'back') showMenuPanel('menuMain');
+    else if (action === 'local') openSetup('local');
+    else if (action === 'create') openSetup('create');
+    else if (action === 'join') {
+      $('joinNicknameInput').value = settings.nickname;
+      showMenuPanel('menuJoin');
+    } else if (action === 'archive') showMenuPanel('menuArchive');
+    else if (action === 'help') showMenuPanel('menuHelp');
+    else if (action === 'continue') {
+      if ($('continueItem').dataset.kind === 'online') resumeOnline(load(STORAGE.session, null));
+      else continueLocal();
     }
-    return moveHighlightsByPly[String(ply)] || null;
   }
 
-  function findKingSquare(board, color) {
+  // Decorative title board: pieces flicker in and out of the fog.
+  let logoTimer = null;
+  function initLogoBoard() {
+    const board = $('logoBoard');
+    const initial = core.createInitialBoard();
     for (let r = 0; r < 8; r += 1) {
       for (let c = 0; c < 8; c += 1) {
-        const piece = board[r][c];
-        if (piece && piece.type === 'K' && piece.color === color) {
-          return { r, c };
-        }
+        const square = el('div', { class: `sq ${(r + c) % 2 ? 'dark' : 'light'} fog` });
+        square.style.setProperty('--fog-delay', `${-Math.random() * 9}s`);
+        const piece = initial[r][c];
+        if (piece) square.append(el('img', { class: 'piece', src: sprites.piece(piece.color, piece.type), alt: '' }));
+        board.append(square);
       }
+    }
+    const squares = [...board.children];
+    clearInterval(logoTimer);
+    logoTimer = setInterval(() => {
+      if (board.classList.contains('hidden') || document.hidden) return;
+      const square = squares[Math.floor(Math.random() * squares.length)];
+      const img = square.querySelector('img');
+      if (img) img.style.visibility = img.style.visibility === 'hidden' ? 'visible' : 'hidden';
+    }, 260);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Board
+  // ---------------------------------------------------------------------------
+
+  const boardEl = $('board');
+  const squareEls = [];
+
+  function initBoard() {
+    boardEl.tabIndex = 0;
+    for (let i = 0; i < 64; i += 1) {
+      const square = el('div', { class: 'sq', role: 'gridcell' });
+      square.style.setProperty('--fog-delay', `${-Math.random() * 9}s`);
+      square.style.setProperty('--reveal-delay', `${Math.random() * 0.9}s`);
+      squareEls.push(square);
+      boardEl.append(square);
+    }
+  }
+
+  function myColor() {
+    if (app.mode === 'local') return local.viewer;
+    if (app.mode === 'online' && app.view && app.view.you.role === 'player') return app.view.you.color;
+    return null;
+  }
+
+  function bottomColor() {
+    return myColor() || 'w';
+  }
+
+  function displayBoard() {
+    if (app.replay) return app.replay.positions[app.replay.index].board;
+    return app.view ? app.view.board : core.createInitialBoard();
+  }
+
+  function canAct() {
+    const view = app.view;
+    if (!view || app.replay || view.gameOver) return false;
+    if (app.mode === 'local') return !local.curtain && !local.handoff;
+    if (app.mode === 'online') {
+      return view.you.role === 'player'
+        && view.turn === view.you.color
+        && !view.waitingForStart
+        && net.status === 'online';
+    }
+    return false;
+  }
+
+  function lastVisibleMove() {
+    if (app.replay) return app.replay.positions[app.replay.index].lastMove;
+    // In the fog the latest visible move is usually your own, which is the one worth remembering.
+    const moves = app.view ? app.view.moves : [];
+    for (let i = moves.length - 1; i >= 0; i -= 1) {
+      if (moves[i].from && moves[i].to && !moves[i].forfeit) return moves[i];
     }
     return null;
   }
 
-  function showTransientBanner(text) {
-    if (!flashBannerEl) {
-      return;
-    }
-    flashBannerEl.textContent = text;
-    flashBannerEl.classList.add('visible');
-    if (bannerTimer) {
-      window.clearTimeout(bannerTimer);
-    }
-    bannerTimer = window.setTimeout(() => {
-      flashBannerEl.classList.remove('visible');
-    }, 1800);
-  }
-
-  function showIllegalOverlay(reason, from, to) {
-    if (!illegalOverlayEl) return;
-    const text = (from && to)
-      ? `${squareName(from)} → ${squareName(to)}: ${reason}`
-      : `Illegal move: ${reason}`;
-    const textEl = illegalOverlayEl.querySelector('.illegal-text');
-    if (textEl) textEl.textContent = text;
-    illegalOverlayEl.hidden = false;
-    illegalOverlayEl.classList.add('visible');
-    if (boardEl && !boardEl.classList.contains('shake')) {
-      boardEl.classList.add('shake');
-      window.setTimeout(() => boardEl.classList.remove('shake'), 420);
-    }
-    if (illegalOverlayTimer) window.clearTimeout(illegalOverlayTimer);
-    illegalOverlayTimer = window.setTimeout(() => {
-      illegalOverlayEl.classList.remove('visible');
-      illegalOverlayTimer = null;
-      window.setTimeout(() => { illegalOverlayEl.hidden = true; }, 260);
-    }, 2200);
-  }
-
-  let illegalOverlayTimer = null;
-
-  function showIllegalMoveBanner(from, to, reason, nextTurnColor = null) {
-    const nextTurnSuffix = nextTurnColor
-      ? ` Turn forfeited. ${colorName(nextTurnColor)} to move.`
-      : '';
-    showTransientBanner(`Illegal: ${squareName(from)} → ${squareName(to)} (${reason}).${nextTurnSuffix}`);
-    showIllegalOverlay(reason, from, to);
-    playIllegalMoveSound();
-  }
-
-  function getPgnResult() {
-    if (state.winner === 'White') {
-      return '1-0';
-    }
-    if (state.winner === 'Black') {
-      return '0-1';
-    }
-    if (state.gameOver) {
-      return '1/2-1/2';
-    }
-    return '*';
-  }
-
-  function buildPgnText() {
-    const resultTag = getPgnResult();
-    const date = new Date();
-    const dateTag = `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
-    const headers = [
-      '[Event "BlendChess Game"]',
-      `[Site "${window.location.origin}"]`,
-      `[Date "${dateTag}"]`,
-      '[White "White"]',
-      '[Black "Black"]',
-      `[Result "${resultTag}"]`,
-    ];
-
-    const tokens = [];
-    for (const pair of state.movePairs) {
-      tokens.push(`${pair.num}.`);
-      if (pair.white) {
-        tokens.push(pair.white);
-      }
-      if (pair.black) {
-        tokens.push(pair.black);
-      }
-    }
-    tokens.push(resultTag);
-
-    return `${headers.join('\n')}\n\n${tokens.join(' ').trim()}\n`;
-  }
-
-  async function handleExportPgn() {
-    if (!state.gameOver) {
-      showTransientBanner('PGN export is available after the game ends.');
-      return;
-    }
-
-    const pgnText = buildPgnText();
-    const filename = `blendchess-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.pgn`;
-    try {
-      const blob = new Blob([pgnText], { type: 'application/x-chess-pgn;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      showTransientBanner(`PGN exported: ${filename}`);
-    } catch {
-      try {
-        await navigator.clipboard.writeText(pgnText);
-        showTransientBanner('PGN copied to clipboard.');
-      } catch {
-        showTransientBanner('Could not export PGN.');
-      }
-    }
-  }
-
-  function setCaptureMarkerForPly(ply, marker) {
-    if (!Number.isInteger(ply) || ply <= 0 || !marker) {
-      return;
-    }
-
-    captureMarkersByPly[String(ply)] = {
-      square: marker.square ? { ...marker.square } : null,
-      moverColor: normalizeEventColor(marker.moverColor),
-      capturedColor: normalizeEventColor(marker.capturedColor),
-    };
-  }
-
-  function getCaptureMarkerForPly(ply) {
-    if (!Number.isInteger(ply) || ply <= 0) {
-      return null;
-    }
-    return captureMarkersByPly[String(ply)] || null;
-  }
-
-  function resolveCaptureMarkerClass(marker, perspectiveColor) {
-    if (!marker?.square) {
-      return '';
-    }
-
-    if (perspectiveColor && marker.moverColor === perspectiveColor) {
-      return 'capture-win';
-    }
-
-    if (perspectiveColor && marker.capturedColor === perspectiveColor) {
-      return 'capture-loss';
-    }
-
-    return '';
-  }
-
-  function deriveCaptureSquare(from, to, enPassantCapture) {
-    if (!from || !to) {
-      return null;
-    }
-    if (enPassantCapture) {
-      return { r: from.r, c: to.c };
-    }
-    return { ...to };
-  }
-
-  function buildReplaySnapshotFromState(ply) {
-    return {
-      ply,
-      board: cloneBoard(state.board),
-      turn: state.turn,
-    };
-  }
-
-  function getReplaySnapshot(targetPly) {
-    return replayHistory.find((entry) => entry.ply === targetPly) || null;
-  }
-
-  function syncReplayHistoryWithState() {
-    const ply = getCurrentPly();
-    if (ply === 0 && replayHistory.length && replayHistory[replayHistory.length - 1].ply > 0) {
-      clearIllegalAttempts();
-      clearCaptureMarkers();
-      clearMoveHighlights();
-      replayHistory = [];
-      replay.active = false;
-      replay.ply = 0;
-      pendingServerAttempt = null;
-    }
-
-    const snapshot = buildReplaySnapshotFromState(ply);
-    const existing = getReplaySnapshot(ply);
-    if (existing) {
-      existing.board = snapshot.board;
-      existing.turn = snapshot.turn;
-    } else {
-      replayHistory.push(snapshot);
-      replayHistory.sort((a, b) => a.ply - b.ply);
-    }
-
-    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
-    if (!state.gameOver) {
-      replay.active = false;
-      replay.ply = maxPly;
-    } else if (!replay.active) {
-      replay.ply = maxPly;
-    } else if (replay.ply > maxPly) {
-      replay.ply = maxPly;
-    }
-  }
-
-  function describePly(ply) {
-    if (ply <= 0) {
-      return 'initial position';
-    }
-    const side = ply % 2 === 1 ? 'White' : 'Black';
-    const fullMove = Math.ceil(ply / 2);
-    return `${side} move ${fullMove}`;
-  }
-
-  function getIllegalAttemptsForPly(ply) {
-    const key = String(ply);
-    return illegalAttemptsByPly[key] || [];
-  }
-
-  function recordIllegalAttempt(from, to, reason, color, forcedPly = null) {
-    const ply = Number.isInteger(forcedPly) ? forcedPly : (getCurrentPly() + 1);
-    const key = String(ply);
-    if (!illegalAttemptsByPly[key]) {
-      illegalAttemptsByPly[key] = [];
-    }
-    illegalAttemptsByPly[key].push({
-      from: { ...from },
-      to: { ...to },
-      reason: String(reason || '').trim(),
-      color: normalizeEventColor(color),
-    });
-  }
-
-  function updateReplayBannerAndControls() {
-    if (!replayFirstEl || !replayPrevEl || !replayNextEl || !replayFinalEl || !replayBannerEl) {
-      return;
-    }
-
-    const hasReplay = state.gameOver && replayHistory.length > 1;
-    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
-    replayFirstEl.disabled = !hasReplay || replay.ply <= 0;
-    replayPrevEl.disabled = !hasReplay || replay.ply <= 0;
-    replayNextEl.disabled = !hasReplay || replay.ply >= maxPly;
-    replayFinalEl.disabled = !hasReplay || replay.ply === maxPly;
-
-    if (!hasReplay) {
-      replayBannerEl.textContent = state.gameOver
-        ? 'No replay states available for this game.'
-        : 'Replay becomes available when the game ends.';
-      return;
-    }
-
-    const highlight = getMoveHighlightForPly(replay.ply);
-    const attempts = getIllegalAttemptsForPly(replay.ply);
-    const sanText = highlight?.san ? ` SAN: ${highlight.san}.` : '';
-    if (!attempts.length) {
-      replayBannerEl.textContent = `Viewing ${describePly(replay.ply)}.${sanText} No illegal attempts recorded on this turn.`;
-      return;
-    }
-
-    const details = attempts
-      .map((attempt) => `${colorName(attempt.color || 'w')} tried ${squareName(attempt.from)} to ${squareName(attempt.to)} (${attempt.reason || 'illegal'})`)
-      .join('  |  ');
-    replayBannerEl.textContent = `Viewing ${describePly(replay.ply)}. Illegal attempts: ${details}`;
-  }
-
-  function setReplayPly(nextPly) {
-    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
-    const normalized = Math.max(0, Math.min(maxPly, nextPly));
-    replay.active = true;
-    replay.ply = normalized;
-    render();
-  }
-
-  function setReplayFinal() {
-    const maxPly = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
-    replay.active = true;
-    replay.ply = maxPly;
-    render();
-  }
-
-  function setReplayFirst() {
-    replay.active = true;
-    replay.ply = 0;
-    render();
-  }
-
-  function stepReplay(delta) {
-    setReplayPly(replay.ply + delta);
-  }
-
-  function readSavedServerUrl() {
-    try {
-      const saved = window.localStorage.getItem(SERVER_URL_STORAGE_KEY);
-      return saved ? saved.trim() : '';
-    } catch {
-      return '';
-    }
-  }
-
-  function saveServerUrl(value) {
-    try {
-      const normalized = String(value || '').trim();
-      if (!normalized) {
-        return;
-      }
-      window.localStorage.setItem(SERVER_URL_STORAGE_KEY, normalized);
-    } catch {
-      // no-op
-    }
-  }
-
-  function readSavedPlayMode() {
-    try {
-      const saved = window.localStorage.getItem(PLAY_MODE_STORAGE_KEY);
-      return saved === 'online' ? 'online' : 'local';
-    } catch {
-      return 'local';
-    }
-  }
-
-  function savePlayMode(mode) {
-    try {
-      window.localStorage.setItem(PLAY_MODE_STORAGE_KEY, mode === 'online' ? 'online' : 'local');
-    } catch {
-      // no-op
-    }
-  }
-
-  function cloneReplayHistory(source) {
-    return source.map((entry) => ({
-      ply: entry.ply,
-      board: cloneBoard(entry.board),
-      turn: entry.turn,
-    }));
-  }
-
-  function cloneMapOfObjects(source) {
-    return JSON.parse(JSON.stringify(source || {}));
-  }
-
-  function normalizeHistoryEntry(raw) {
-    if (!raw || typeof raw !== 'object') {
-      return null;
-    }
-    const snapshot = normalizeStateHistorySnapshot(raw.snapshot, cloneBoard, PIECE_SYMBOLS);
-    if (!snapshot) {
-      return null;
-    }
-    const finishedAt = Number.isFinite(raw.finishedAt) ? Number(raw.finishedAt) : Date.now();
-    const finishedAtText = typeof raw.finishedAtText === 'string' && raw.finishedAtText.trim()
-      ? raw.finishedAtText
-      : new Date(finishedAt).toLocaleString();
-    const id = typeof raw.id === 'string' && raw.id.trim()
-      ? raw.id
-      : `${finishedAt}-${Math.random().toString(36).slice(2, 8)}`;
-    return {
-      ...raw,
-      id,
-      finishedAt,
-      finishedAtText,
-      mode: raw.mode === 'online' ? 'online' : 'local',
-      winner: raw.winner || null,
-      result: raw.result || null,
-      snapshot,
-      replayHistory: Array.isArray(raw.replayHistory) ? raw.replayHistory : [],
-      illegalAttemptsByPly: raw.illegalAttemptsByPly || {},
-      captureMarkersByPly: raw.captureMarkersByPly || {},
-      moveHighlightsByPly: raw.moveHighlightsByPly || {},
-      fingerprint: typeof raw.fingerprint === 'string' ? raw.fingerprint : '',
-    };
-  }
-
-  function buildHistoryLabel(entry) {
-    const prefix = entry.mode === 'online' ? 'Online' : 'Local';
-    const resultText = entry.winner
-      ? `${entry.winner} won`
-      : entry.result
-        ? `Draw (${entry.result})`
-        : 'Game';
-    return `${entry.finishedAtText} · ${prefix} · ${resultText}`;
-  }
-
-  function persistHistory() {
-    try {
-      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyCache.slice(0, HISTORY_MAX_ITEMS)));
-    } catch {
-      // no-op
-    }
-  }
-
-  function refreshHistoryControls() {
-    if (!historyGamesEl || !loadHistoryGameEl || !clearHistoryGamesEl) {
-      return;
-    }
-
-    historyGamesEl.replaceChildren();
-    if (!historyCache.length) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = 'No saved games';
-      historyGamesEl.appendChild(option);
-      historyGamesEl.disabled = true;
-      loadHistoryGameEl.disabled = true;
-      clearHistoryGamesEl.disabled = true;
-      return;
-    }
-
-    for (const entry of historyCache) {
-      const option = document.createElement('option');
-      option.value = entry.id;
-      option.textContent = buildHistoryLabel(entry);
-      historyGamesEl.appendChild(option);
-    }
-    historyGamesEl.disabled = false;
-    loadHistoryGameEl.disabled = false;
-    clearHistoryGamesEl.disabled = false;
-  }
-
-  function loadHistoryCache() {
-    try {
-      const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
-      if (!raw) {
-        historyCache = [];
-      } else {
-        const parsed = JSON.parse(raw);
-        historyCache = Array.isArray(parsed)
-          ? parsed
-            .map((entry) => normalizeHistoryEntry(entry))
-            .filter(Boolean)
-            .slice(0, HISTORY_MAX_ITEMS)
-          : [];
-      }
-    } catch {
-      historyCache = [];
-    }
-    refreshHistoryControls();
-  }
-
-  function createHistoryEntryFromCurrentGame() {
-    const finishedAt = Date.now();
-    return {
-      id: `${finishedAt}-${Math.random().toString(36).slice(2, 8)}`,
-      finishedAt,
-      finishedAtText: new Date(finishedAt).toLocaleString(),
-      mode: isOnlineMode() ? 'online' : 'local',
-      winner: state.winner || null,
-      result: state.result || null,
-      snapshot: {
-        board: cloneBoard(state.board),
-        turn: state.turn,
-        enPassant: state.enPassant ? { ...state.enPassant } : null,
-        moveNumber: state.moveNumber,
-        movePairs: state.movePairs.map((pair) => ({ ...pair })),
-        events: state.events.map((entry) => normalizeEventEntry(entry)),
-        captured: { ...state.captured },
-        winner: state.winner,
-        result: state.result,
-        gameOver: state.gameOver,
-        halfMoveClock: state.halfMoveClock,
-        boardVersion: state.boardVersion,
-        positionCounts: { ...state.positionCounts },
-        hardMode: Boolean(state.hardMode),
-      },
-      replayHistory: cloneReplayHistory(replayHistory),
-      illegalAttemptsByPly: cloneMapOfObjects(illegalAttemptsByPly),
-      captureMarkersByPly: cloneMapOfObjects(captureMarkersByPly),
-      moveHighlightsByPly: cloneMapOfObjects(moveHighlightsByPly),
-    };
-  }
-
-  function buildGameFingerprint() {
-    const replayMax = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
-    const moveToken = state.movePairs
-      .map((pair) => `${pair.num}:${pair.white || ''}:${pair.black || ''}`)
-      .join('|');
-    return `${state.result || ''}|${state.winner || ''}|${state.movePairs.length}|${replayMax}|${moveToken}`;
-  }
-
-  function saveCompletedGameToHistory() {
-    if (!state.gameOver || !state.movePairs.length) {
-      return;
-    }
-    if (isOnlineMode() && multiplayer.role === 'spectator') {
-      return;
-    }
-
-    const gameFingerprint = buildGameFingerprint();
-    const alreadySaved = historyCache.some((entry) => entry.fingerprint === gameFingerprint);
-    if (alreadySaved) {
-      return;
-    }
-
-    const entry = createHistoryEntryFromCurrentGame();
-    entry.fingerprint = gameFingerprint;
-    historyCache.unshift(entry);
-    historyCache = historyCache.slice(0, HISTORY_MAX_ITEMS);
-    persistHistory();
-    refreshHistoryControls();
-  }
-
-  function replaceMapValues(target, source) {
-    Object.keys(target).forEach((key) => delete target[key]);
-    if (!source || typeof source !== 'object') {
-      return;
-    }
-    for (const [key, value] of Object.entries(source)) {
-      target[key] = JSON.parse(JSON.stringify(value));
-    }
-  }
-
-  function loadHistoryEntryById(id) {
-    const entry = historyCache.find((item) => item.id === id);
-    if (!entry) {
-      return false;
-    }
-
-    playModeEl.value = 'local';
-    savePlayMode('local');
-    setMode('local');
-
-    const snapshot = normalizeStateHistorySnapshot(entry.snapshot, cloneBoard, PIECE_SYMBOLS);
-    if (!snapshot) {
-      return false;
-    }
-    const base = newGameState();
-    state = {
-      ...base,
-      board: snapshot.board ? cloneBoard(snapshot.board) : base.board,
-      turn: snapshot.turn || 'w',
-      enPassant: snapshot.enPassant ? { ...snapshot.enPassant } : null,
-      moveNumber: snapshot.moveNumber || 1,
-      movePairs: Array.isArray(snapshot.movePairs) ? snapshot.movePairs.map((pair) => ({ ...pair })) : [],
-      events: Array.isArray(snapshot.events) ? snapshot.events.map((event) => normalizeEventEntry(event)) : [],
-      captured: snapshot.captured ? { ...snapshot.captured } : { w: 0, b: 0 },
-      winner: snapshot.winner || null,
-      result: snapshot.result || null,
-      gameOver: Boolean(snapshot.gameOver),
-      halfMoveClock: Number.isInteger(snapshot.halfMoveClock) ? snapshot.halfMoveClock : 0,
-      boardVersion: Number.isInteger(snapshot.boardVersion) ? snapshot.boardVersion : 0,
-      positionCounts: snapshot.positionCounts ? { ...snapshot.positionCounts } : {},
-      hardMode: Boolean(snapshot.hardMode),
-      selected: null,
-    };
-
-    replayHistory = Array.isArray(entry.replayHistory) ? cloneReplayHistory(entry.replayHistory) : [];
-    replaceMapValues(illegalAttemptsByPly, entry.illegalAttemptsByPly || {});
-    replaceMapValues(captureMarkersByPly, entry.captureMarkersByPly || {});
-    replaceMapValues(moveHighlightsByPly, entry.moveHighlightsByPly || {});
-    replay.active = true;
-    replay.ply = replayHistory.length ? replayHistory[replayHistory.length - 1].ply : 0;
-    state.hardMode = Boolean(snapshot.hardMode);
-    hardModeEl.checked = state.hardMode;
-    addEvent(`Loaded saved game from ${entry.finishedAtText}.`);
-    render();
-    return true;
-  }
-
-  function clearHistoryGames() {
-    historyCache = [];
-    persistHistory();
-    refreshHistoryControls();
-    showTransientBanner('Saved history cleared.');
-  }
-
-  function clearReconnectTimer() {
-    if (multiplayer.reconnectTimer) {
-      window.clearTimeout(multiplayer.reconnectTimer);
-      multiplayer.reconnectTimer = null;
-    }
-  }
-
-  function clearRoomActionTimer() {
-    if (multiplayer.roomActionTimer) {
-      window.clearTimeout(multiplayer.roomActionTimer);
-      multiplayer.roomActionTimer = null;
-    }
-  }
-
-  function clearPendingRoomAction() {
-    clearRoomActionTimer();
-    multiplayer.roomAction = null;
-  }
-
-  function markPendingRoomAction(actionType, roomCode = '') {
-    clearPendingRoomAction();
-    multiplayer.roomAction = {
-      type: actionType,
-      roomCode: normalizeRoomCode(roomCode || multiplayer.roomCode || ''),
-      startedAt: Date.now(),
-    };
-    multiplayer.roomActionTimer = window.setTimeout(() => {
-      const pending = multiplayer.roomAction;
-      if (!pending || pending.type !== actionType) {
-        return;
-      }
-
-      const targetRoom = pending.roomCode || normalizeRoomCode(multiplayer.roomCode || '');
-      clearPendingRoomAction();
-      if (actionType === 'resume_join') {
-        addEvent(targetRoom
-          ? `Reconnect to room ${targetRoom} timed out. Retrying...`
-          : 'Reconnect timed out. Retrying...');
-        render();
-        if (multiplayer.socket && (
-          multiplayer.socket.readyState === WebSocket.OPEN
-          || multiplayer.socket.readyState === WebSocket.CONNECTING
-        )) {
-          try {
-            multiplayer.socket.close();
-          } catch {
-            // no-op
-          }
-        } else {
-          scheduleAutoReconnect();
-        }
-        return;
-      }
-
-      addEvent(targetRoom
-        ? `Timed out waiting for room response (${targetRoom}). Please retry.`
-        : 'Timed out waiting for room response. Please retry.');
-      resetLobbyActionButtons();
-      syncMultiplayerControlState();
-      render();
-    }, ROOM_ACTION_TIMEOUT_MS);
-  }
-
-  function clearHeartbeatTimer() {
-    if (multiplayer.heartbeatTimer) {
-      window.clearInterval(multiplayer.heartbeatTimer);
-      multiplayer.heartbeatTimer = null;
-    }
-    multiplayer.waitingForPong = false;
-  }
-
-  function markSocketActivity() {
-    multiplayer.waitingForPong = false;
-  }
-
-  function startHeartbeatLoop() {
-    clearHeartbeatTimer();
-    if (!multiplayer.socket || !multiplayer.connected) {
-      return;
-    }
-
-    multiplayer.heartbeatTimer = window.setInterval(() => {
-      if (!multiplayer.socket || multiplayer.socket.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      if (!isOnlineMode() || multiplayer.intentionalLeave || !multiplayer.roomCode) {
-        return;
-      }
-
-      if (multiplayer.waitingForPong) {
-        addEvent('Connection heartbeat timed out. Reconnecting...');
-        render();
-        clearHeartbeatTimer();
-        try {
-          multiplayer.socket.close();
-        } catch {
-          // no-op
-        }
-        return;
-      }
-
-      multiplayer.waitingForPong = true;
-      multiplayer.socket.send(JSON.stringify({
-        type: WEBSOCKET_TYPES.PING,
-        roomCode: multiplayer.roomCode,
-        playerId: multiplayer.playerId || '',
-        payload: {},
-        version: PROTOCOL_VERSION,
-      }));
-    }, SOCKET_HEARTBEAT_INTERVAL_MS);
-  }
-
-  function readSavedOnlineSession() {
-    try {
-      const raw = window.localStorage.getItem(ONLINE_SESSION_STORAGE_KEY);
-      if (!raw) {
-        return null;
-      }
-
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') {
-        return null;
-      }
-
-      const roomCode = normalizeRoomCode(parsed.roomCode);
-      const playerId = typeof parsed.playerId === 'string' ? parsed.playerId.trim() : '';
-      const resumeToken = typeof parsed.resumeToken === 'string' ? parsed.resumeToken.trim() : '';
-      const socketUrl = typeof parsed.socketUrl === 'string' ? parsed.socketUrl.trim() : '';
-      const color = parsed.color === 'w' || parsed.color === 'b' ? parsed.color : null;
-
-      if (!roomCode || !playerId || !resumeToken) {
-        return null;
-      }
-
-      return {
-        roomCode,
-        playerId,
-        resumeToken,
-        socketUrl: socketUrl || DEFAULT_SERVER_URL,
-        color,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  function clearSavedOnlineSession() {
-    try {
-      window.localStorage.removeItem(ONLINE_SESSION_STORAGE_KEY);
-    } catch {
-      // no-op
-    }
-  }
-
-  function saveOnlineSession() {
-    if (
-      multiplayer.role !== 'player'
-      || !multiplayer.roomCode
-      || !multiplayer.playerId
-      || !multiplayer.resumeToken
-    ) {
-      return;
-    }
-
-    const session = {
-      roomCode: normalizeRoomCode(multiplayer.roomCode),
-      playerId: multiplayer.playerId,
-      resumeToken: multiplayer.resumeToken,
-      color: multiplayer.color || null,
-      socketUrl: (serverUrlEl.value.trim() || multiplayer.socketUrl || DEFAULT_SERVER_URL),
-    };
-
-    try {
-      window.localStorage.setItem(ONLINE_SESSION_STORAGE_KEY, JSON.stringify(session));
-    } catch {
-      // no-op
-    }
-  }
-
-  function updateOnlineSessionPersistence() {
-    if (
-      isOnlineMode()
-      && multiplayer.role === 'player'
-      && multiplayer.roomCode
-      && multiplayer.playerId
-      && multiplayer.resumeToken
-    ) {
-      saveOnlineSession();
-      return;
-    }
-    clearSavedOnlineSession();
-  }
-
-  function scheduleAutoReconnect() {
-    clearPendingRoomAction();
-    if (
-      multiplayer.intentionalLeave
-      || !isOnlineMode()
-      || multiplayer.role !== 'player'
-      || !multiplayer.roomCode
-      || !multiplayer.playerId
-      || multiplayer.resumeInFlight
-    ) {
-      return;
-    }
-
-    if (multiplayer.reconnectAttempts >= AUTO_RECONNECT_MAX_ATTEMPTS) {
-      addEvent('Reconnect attempts exhausted. Click Connect to retry.');
-      syncMultiplayerPanel();
-      syncMultiplayerControlState();
-      return;
-    }
-
-    multiplayer.reconnectAttempts += 1;
-    const attempt = multiplayer.reconnectAttempts;
-    const delay = Math.min(7000, AUTO_RECONNECT_BASE_DELAY_MS * attempt);
-    syncMultiplayerPanel();
-    syncMultiplayerControlState();
-    clearReconnectTimer();
-    multiplayer.reconnectTimer = window.setTimeout(() => {
-      resumeOnlineSession(`Reconnect attempt ${attempt}`);
-    }, delay);
-  }
-
-  function newGameState() {
-    return createInitialState();
-  }
-
-  function normalizeRoomCode(value) {
-    return String(value || '').trim().toUpperCase();
-  }
-
-  function buildInviteUrl(roomCode) {
-    const invite = new URL(window.location.href);
-    invite.searchParams.set('mode', 'online');
-    invite.searchParams.set('room', roomCode);
-    invite.searchParams.set('ws', serverUrlEl.value.trim() || DEFAULT_SERVER_URL);
-    return invite.toString();
-  }
-
-  function syncAllThemeSelectors(uiTheme, boardTheme) {
-    const allUiSelects = [uiThemeEl, uiThemeHeaderEl];
-    const allBoardSelects = [boardThemeEl, boardThemeHeaderEl];
-    for (const sel of allUiSelects) {
-      if (sel && [...sel.options].some((o) => o.value === uiTheme)) {
-        sel.value = uiTheme;
-      }
-    }
-    for (const sel of allBoardSelects) {
-      if (sel && [...sel.options].some((o) => o.value === boardTheme)) {
-        sel.value = boardTheme;
-      }
-    }
-  }
-
-  function applyThemes() {
-    const uiTheme = (uiThemeEl && uiThemeEl.value) || (uiThemeHeaderEl && uiThemeHeaderEl.value) || 'classic';
-    const boardTheme = (boardThemeEl && boardThemeEl.value) || (boardThemeHeaderEl && boardThemeHeaderEl.value) || 'chesscom';
-    document.documentElement.setAttribute('data-ui-theme', uiTheme);
-    document.documentElement.setAttribute('data-board-theme', boardTheme);
-    syncAllThemeSelectors(uiTheme, boardTheme);
-    try {
-      window.localStorage.setItem(UI_THEME_STORAGE_KEY, uiTheme);
-      window.localStorage.setItem(BOARD_THEME_STORAGE_KEY, boardTheme);
-    } catch {}
-  }
-
-  function loadSavedThemes() {
-    try {
-      const savedUi = window.localStorage.getItem(UI_THEME_STORAGE_KEY);
-      const savedBoard = window.localStorage.getItem(BOARD_THEME_STORAGE_KEY);
-      if (savedUi) {
-        syncAllThemeSelectors(savedUi, null);
-        if (uiThemeEl) uiThemeEl.value = savedUi;
-        if (uiThemeHeaderEl) uiThemeHeaderEl.value = savedUi;
-      }
-      if (savedBoard) {
-        syncAllThemeSelectors(null, savedBoard);
-        if (boardThemeEl) boardThemeEl.value = savedBoard;
-        if (boardThemeHeaderEl) boardThemeHeaderEl.value = savedBoard;
-      }
-    } catch {}
-    applyThemes();
-  }
-
-  function applyUrlPrefill() {
-    const params = new URLSearchParams(window.location.search);
-    const ws = params.get('ws');
-    const room = params.get('room');
-    const mode = params.get('mode');
-
-    if (ws && ws.trim()) {
-      serverUrlEl.value = ws.trim();
-      saveServerUrl(ws.trim());
-    } else {
-      const saved = readSavedServerUrl();
-      serverUrlEl.value = saved || DEFAULT_SERVER_URL;
-    }
-
-    if (room && room.trim()) {
-      joinRoomCodeEl.value = normalizeRoomCode(room);
-    }
-
-    if (mode) {
-      const normalizedMode = mode.toLowerCase() === 'online' ? 'online' : 'local';
-      playModeEl.value = normalizedMode;
-      setMode(normalizedMode);
-      if (normalizedMode === 'online') {
-        addEvent('Invite link detected. Click Connect, then Join room.');
-      }
-      render();
-    }
-  }
-
-  async function resumeOnlineSession(contextText = 'Refreshing session') {
-    if (multiplayer.resumeInFlight) {
-      return;
-    }
-
-    const saved = readSavedOnlineSession();
-    if (!saved) {
-      return;
-    }
-
-    multiplayer.resumeInFlight = true;
-    multiplayer.intentionalLeave = false;
-    clearReconnectTimer();
-
-    multiplayer.roomCode = saved.roomCode;
-    multiplayer.playerId = saved.playerId;
-    multiplayer.resumeToken = saved.resumeToken;
-    multiplayer.color = multiplayer.color || saved.color || null;
-    multiplayer.role = 'player';
-    multiplayer.spectatorId = null;
-    multiplayer.socketUrl = saved.socketUrl || DEFAULT_SERVER_URL;
-    serverUrlEl.value = multiplayer.socketUrl;
-    joinRoomCodeEl.value = saved.roomCode;
-    saveServerUrl(multiplayer.socketUrl);
-
-    if (!isOnlineMode()) {
-      playModeEl.value = 'online';
-      setMode('online');
-    }
-
-    syncMultiplayerControlState();
-    syncMultiplayerPanel();
-    addEvent(`${contextText}. Rejoining room ${saved.roomCode}...`);
-    render();
-
-    try {
-      await connectSocket();
-      const sent = sendSocketMessage(
-        WEBSOCKET_TYPES.JOIN_ROOM,
-        { nickname: 'Player', resume: true, resumeToken: multiplayer.resumeToken },
-        saved.roomCode,
-      );
-      if (!sent) {
-        throw new Error('Failed to send resume request.');
-      }
-      markPendingRoomAction('resume_join', saved.roomCode);
-    } catch (error) {
-      clearPendingRoomAction();
-      addEvent(`Reconnect failed: ${error.message}`);
-      render();
-    } finally {
-      multiplayer.resumeInFlight = false;
-      if (
-        !multiplayer.connected
-        && !multiplayer.intentionalLeave
-        && isOnlineMode()
-        && multiplayer.role === 'player'
-        && multiplayer.roomCode
-        && multiplayer.playerId
-      ) {
-        scheduleAutoReconnect();
-      }
-      syncMultiplayerControlState();
-    }
-  }
-
-  function tryResumeOnlineSessionOnLoad() {
-    if (!isOnlineMode()) {
-      return;
-    }
-
-    const saved = readSavedOnlineSession();
-    if (!saved) {
-      return;
-    }
-
-    multiplayer.roomCode = saved.roomCode;
-    multiplayer.playerId = saved.playerId;
-    multiplayer.resumeToken = saved.resumeToken;
-    multiplayer.color = saved.color || null;
-    multiplayer.role = 'player';
-    multiplayer.spectatorId = null;
-    multiplayer.socketUrl = saved.socketUrl || DEFAULT_SERVER_URL;
-    joinRoomCodeEl.value = saved.roomCode;
-    serverUrlEl.value = multiplayer.socketUrl;
-    syncMultiplayerPanel();
-    syncMultiplayerControlState();
-    resumeOnlineSession('Recovered room from last session');
-  }
-
-  function isOnlineMode() {
-    return playModeEl.value === 'online';
-  }
-
-  function isSpectatorMode() {
-    return isOnlineMode() && multiplayer.role === 'spectator';
-  }
-
-  function getActiveColor() {
-    if (!isOnlineMode()) {
-      return state.turn;
-    }
-    if (!multiplayer.connected || !multiplayer.roomCode) {
-      return state.turn;
-    }
-    if (isSpectatorMode()) {
-      return null;
-    }
-    return multiplayer.color || null;
-  }
-
-  function getPerspectiveColor() {
-    if (isSpectatorMode()) {
-      return 'w';
-    }
-    if (isOnlineMode()) {
-      return multiplayer.color || state.turn;
-    }
-    return state.turn;
-  }
-
-  function shouldRevealBoardAndHistory() {
-    return state.gameOver;
-  }
-
-  function shouldMaskOpponentMoves() {
-    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
-      return false;
-    }
-    if (isOnlineMode()) {
-      return multiplayer.role === 'player';
-    }
-    return Boolean(getViewerColorForMasking());
-  }
-
-  function moveColorFromPly(ply) {
-    if (!Number.isInteger(ply) || ply <= 0) {
-      return null;
-    }
-    return ply % 2 === 1 ? 'w' : 'b';
-  }
-
-  function shouldShowMoveHighlightForPly(ply) {
-    if (state.hardMode && !shouldRevealBoardAndHistory() && !replay.active) {
-      return false;
-    }
-
-    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
-      return true;
-    }
-
-    const moverColor = moveColorFromPly(ply);
-    if (!moverColor) {
-      return false;
-    }
-    const viewerColor = getViewerColorForMasking();
-    if (viewerColor) {
-      return moverColor === viewerColor;
-    }
-    return !isOnlineMode();
-  }
-
-  function shouldShowCaptureMarker(marker) {
-    if (!marker?.square) {
-      return false;
-    }
-    if (shouldRevealBoardAndHistory() || replay.active || isSpectatorMode()) {
-      return true;
-    }
-    if (!shouldMaskOpponentMoves()) {
-      return true;
-    }
-    const viewerColor = getViewerColorForMasking();
-    // Show to the taker (green circle) AND to the player who lost the piece (X)
-    return viewerColor
-      ? (marker.moverColor === viewerColor || marker.capturedColor === viewerColor)
-      : !isOnlineMode();
-  }
-
-  function shouldShowCheckSquareHighlight(turnForBoard) {
-    if (!turnForBoard) {
-      return false;
-    }
-    // Always show check to the player whose king is in check (even in hard mode)
-    if (shouldRevealBoardAndHistory() || replay.active) {
-      return true;
-    }
-    if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
-      // Local mode: only show to the player whose turn it is (they are the one in check)
-      return true;
-    }
-    if (isSpectatorMode()) {
-      return true;
-    }
-    if (!multiplayer.color) {
-      return false;
-    }
-    // Online: only show check highlight to the player whose king is in check
-    return turnForBoard === multiplayer.color;
-  }
-
-  function maskMoveText(text) {
-    if (!text) {
-      return '';
-    }
-    return MASKED_MOVE_TEXT;
-  }
-
-  function formatMoveForViewer(text, color) {
-    if (!text) {
-      return '';
-    }
-    if (!shouldMaskOpponentMoves()) {
-      return text;
-    }
-    const viewerColor = getViewerColorForMasking();
-    if (!viewerColor) {
-      return MASKED_MOVE_TEXT;
-    }
-    return color === viewerColor ? text : MASKED_MOVE_TEXT;
-  }
-
-  function maskBoardSquareText(text) {
-    return String(text || '').replace(/\b[a-h][1-8]\b/gi, MASKED_MOVE_TEXT);
-  }
-
-  function formatEventForViewer(entry, eventColor = null) {
-    if (!shouldMaskOpponentMoves()) {
-      return entry;
-    }
-    const viewerColor = getViewerColorForMasking();
-    if (!viewerColor) {
-      return isOnlineMode() ? maskBoardSquareText(entry) : entry;
-    }
-    const body = entry;
-    const normalizedEventColor = normalizeEventColor(eventColor) || inferEventColor(body);
-
-    if (/^You played\s+/i.test(body) || /^Opponent moved/i.test(body)) {
-      return entry;
-    }
-
-    const playedByColor = body.match(/^(White|Black) played\s+(.+)$/);
-    if (playedByColor) {
-      const moverColor = playedByColor[1] === 'White' ? 'w' : 'b';
-      if (moverColor === viewerColor) {
-        return entry;
-      }
-      return `${playedByColor[1]} played ${maskMoveText(playedByColor[2])}`;
-    }
-
-    const genericPlayed = body.match(/^Move played:\s+(.+)$/);
-    if (genericPlayed) {
-      return `Move played: ${maskMoveText(genericPlayed[1])}`;
-    }
-
-    const illegalAttemptByColor = body.match(/^(White|Black) attempted illegal move\s+([a-h][1-8])\s+to\s+([a-h][1-8])(.*)$/i);
-    if (illegalAttemptByColor) {
-      const moverColor = illegalAttemptByColor[1] === 'White' ? 'w' : 'b';
-      if (moverColor !== viewerColor) {
-        return `${illegalAttemptByColor[1]} attempted illegal move ${MASKED_MOVE_TEXT} to ${MASKED_MOVE_TEXT}${illegalAttemptByColor[4] || ''}`;
-      }
-      return entry;
-    }
-
-    if (normalizedEventColor && normalizedEventColor !== viewerColor) {
-      return maskBoardSquareText(body);
-    }
-
-    return entry;
-  }
-
-  // Board frame labels are now integrated as coordinate labels inside edge squares.
-  // This function is kept as a no-op for backward compatibility.
-  function updateBoardFrameLabels() {}
-
-  function toMoveColorFromState() {
-    return colorName(state.turn);
-  }
-
-  function evaluateTerminalState() {
-    const outcome = coreEvaluateTerminalState(state);
-    if (!outcome.isTerminal) {
-      return;
-    }
-
-    state.gameOver = true;
-    state.winner = outcome.winner;
-    state.result = outcome.result;
-    addEvent(outcome.eventText);
-  }
-
-  function moveRejectionReason(from, to) {
-    return coreMoveRejectionReason(state, from, to);
-  }
-
-  function addMoveRecord(color, san) {
-    if (color === 'w') {
-      state.movePairs.push({
-        num: state.moveNumber,
-        white: san,
-        black: '',
-      });
-    } else {
-      if (!state.movePairs.length || state.movePairs[state.movePairs.length - 1].black !== '') {
-        state.movePairs.push({
-          num: state.moveNumber,
-          white: '',
-          black: san,
-        });
-      } else {
-        state.movePairs[state.movePairs.length - 1].black = san;
-      }
-      state.moveNumber += 1;
-    }
-  }
-
-  function addEvent(text, options = {}) {
-    const prefix = new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' });
-    const event = normalizeEventEntry({
-      time: prefix,
-      move: Number.isInteger(options.move) ? options.move : getCurrentPly(),
-      color: normalizeEventColor(options.color) || inferEventColor(text),
-      text,
-    });
-    state.events.unshift(event);
-  }
-
-  function setMode(mode, options = {}) {
-    const { preserveSession = false } = options;
-    savePlayMode(mode);
-    multiplayer.mode = mode;
-    if (mode === 'local') {
-      clearRoomSession({ clearSavedSession: !preserveSession });
-      state = newGameState();
-      state.hardMode = hardModeEl.checked;
-      replayHistory = [];
-      replay.active = false;
-      replay.ply = 0;
-      clearIllegalAttempts();
-      clearCaptureMarkers();
-      clearMoveHighlights();
-      pendingServerAttempt = null;
-    } else if (mode === 'online') {
-      state = newGameState();
-      state.hardMode = hardModeEl.checked;
-      replayHistory = [];
-      replay.active = false;
-      replay.ply = 0;
-      clearIllegalAttempts();
-      clearCaptureMarkers();
-      clearMoveHighlights();
-      pendingServerAttempt = null;
-    }
-    syncMultiplayerControlState();
-    syncMultiplayerPanel();
-    render();
-  }
-
-  function syncMultiplayerPanel() {
-    if (isOnlineMode()) {
-      const playerColor = isSpectatorMode()
-        ? 'spectator'
-        : multiplayer.color
-          ? `${multiplayer.color === 'w' ? 'White' : 'Black'}`
-          : 'waiting';
-      const roomReady = multiplayer.roomCode ? `Room ${multiplayer.roomCode}` : 'No room';
-      let connectionText = multiplayer.connected ? 'Connected' : 'Not connected';
-      if (multiplayer.resumeInFlight) {
-        connectionText = 'Reconnecting...';
-      } else if (
-        !multiplayer.connected
-        && multiplayer.reconnectAttempts > 0
-        && multiplayer.reconnectAttempts <= AUTO_RECONNECT_MAX_ATTEMPTS
-        && multiplayer.roomCode
-        && !multiplayer.intentionalLeave
-      ) {
-        connectionText = `Reconnecting (${multiplayer.reconnectAttempts}/${AUTO_RECONNECT_MAX_ATTEMPTS})`;
-      }
-      const connectedCount = multiplayer.players.filter((player) => player.connected !== false).length;
-      const connectedSpectators = multiplayer.spectators.filter((spectator) => spectator.connected !== false).length;
-      multiplayerStatusEl.textContent = `Online mode · ${connectionText} · ${roomReady} · You are ${playerColor}.`;
-      multiplayerInfoEl.textContent = `Players connected: ${connectedCount}/2 · Spectators: ${connectedSpectators}`;
-      if (multiplayer.roomCode && multiplayer.playerId && multiplayer.resumeToken) {
-        multiplayerInfoEl.textContent += ' · Refresh-safe session enabled.';
-      }
-      const playerRosterText = multiplayer.players
-        .map((player) => {
-          const connectionState = player.connected === false ? 'disconnected' : 'connected';
-          return `${player.nickname || 'Player'} (${player.color === 'w' ? 'White' : 'Black'}, ${connectionState})`;
-        })
-        .join('  |  ');
-
-      if (playerRosterText && connectedSpectators > 0) {
-        playerRoster.textContent = `${playerRosterText}  ||  Spectators: ${connectedSpectators}`;
-      } else if (playerRosterText) {
-        playerRoster.textContent = playerRosterText;
-      } else if (connectedSpectators > 0) {
-        playerRoster.textContent = `Spectators: ${connectedSpectators}`;
-      } else {
-        playerRoster.textContent = 'No players yet.';
-      }
-      roomCodeBadge.textContent = multiplayer.roomCode
-        ? `Room: ${multiplayer.roomCode}`
-        : 'Room: not active';
-    } else {
-      multiplayerStatusEl.textContent = 'Local mode only.';
-      multiplayerInfoEl.textContent = 'You are playing locally.';
-      roomCodeBadge.textContent = 'Room: not active';
-      playerRoster.textContent = '';
-    }
-    updateSetupHint();
-  }
-
-  function updateSetupHint() {
-    if (!setupHintEl) {
-      return;
-    }
-
-    if (!isOnlineMode()) {
-      setupHintEl.textContent = 'Local mode active. Switch to Online Friend to create or join a room.';
-      return;
-    }
-
-    if (!multiplayer.connected) {
-      setupHintEl.textContent = 'Step 1: Click Connect.';
-      return;
-    }
-
-    if (!multiplayer.roomCode) {
-      setupHintEl.textContent = 'Step 2: Create a room or paste a room code to join.';
-      return;
-    }
-
-    if (isSpectatorMode()) {
-      setupHintEl.textContent = `Spectating room ${multiplayer.roomCode}.`;
-      return;
-    }
-
-    const connectedPlayers = multiplayer.players.filter((player) => player.connected !== false).length;
-    if (connectedPlayers < 2) {
-      setupHintEl.textContent = `Room ${multiplayer.roomCode} is ready. Share invite and wait (${connectedPlayers}/2 connected).`;
-      return;
-    }
-
-    if (state.gameOver) {
-      setupHintEl.textContent = `Game ended in room ${multiplayer.roomCode}. Start a new game or leave room.`;
-      return;
-    }
-
-    if (isMyTurn()) {
-      setupHintEl.textContent = `Your turn as ${colorName(multiplayer.color || state.turn)}.`;
-      return;
-    }
-
-    setupHintEl.textContent = `Waiting for opponent move in room ${multiplayer.roomCode}.`;
-  }
-
-  function syncMultiplayerControlState() {
-    const online = isOnlineMode();
-    const spectator = isSpectatorMode();
-    const inRoom = Boolean(multiplayer.roomCode);
-    connectServerEl.disabled = !online || multiplayer.connected || multiplayer.resumeInFlight;
-    createRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
-    joinRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
-    if (spectateRoomEl) {
-      spectateRoomEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
-    }
-    joinRoomCodeEl.disabled = !online || !multiplayer.connected || multiplayer.resumeInFlight || (inRoom && !state.gameOver);
-    copyRoomCodeEl.disabled = !online || !multiplayer.roomCode;
-    leaveRoomEl.disabled = !online;
-    serverUrlEl.disabled = multiplayer.connected || multiplayer.resumeInFlight;
-    claimDrawEl.disabled = online ? (!multiplayer.connected || spectator) : false;
-    resignEl.disabled = spectator || multiplayer.resumeInFlight || state.gameOver;
-    const onlineGameActive = isOnlineMode() && multiplayer.connected && Boolean(multiplayer.roomCode);
-    const hardModeLocked = onlineGameActive && (multiplayer.color === 'b' || getCurrentPly() > 0);
-    hardModeEl.disabled = spectator || multiplayer.resumeInFlight || hardModeLocked;
-  }
-
-  function updateModeText() {
-    if (isOnlineMode()) {
-      if (isSpectatorMode()) {
-        modeText.textContent = 'Spectator mode: watching live game. Moves are disabled.';
-        return;
-      }
-      if (state.hardMode) {
-        modeText.textContent = 'Online hard mode: illegal moves forfeit turn; while in check, illegal moves are rejected.';
-      } else {
-        modeText.textContent = 'Online strict mode: illegal moves are rejected by server.';
-      }
-      return;
-    }
-
-    if (state.hardMode) {
-      modeText.textContent = 'Hard mode: illegal moves lose turn; while in check, illegal moves are rejected.';
-    } else {
-      modeText.textContent = 'Strict mode: illegal moves are rejected.';
-    }
-  }
-
-  function clearRoomSession(options = {}) {
-    const { clearSavedSession = false } = options;
-    if (!isOnlineMode()) {
-      // reset server state and return to local rules
-      disconnectSocket();
-    }
-    clearReconnectTimer();
-    clearPendingRoomAction();
-    clearHeartbeatTimer();
-    multiplayer.reconnectAttempts = 0;
-    multiplayer.resumeInFlight = false;
-    multiplayer.connected = false;
-    multiplayer.playerId = null;
-    multiplayer.spectatorId = null;
-    multiplayer.resumeToken = null;
-    multiplayer.color = null;
-    multiplayer.role = 'player';
-    multiplayer.roomCode = '';
-    multiplayer.players = [];
-    multiplayer.spectators = [];
-    multiplayer.awaitingStateSync = false;
-    multiplayer.intentionalLeave = false;
-    if (clearSavedSession) {
-      clearSavedOnlineSession();
-    }
+  function squareElFor(pos) {
+    if (!pos) return null;
+    return boardEl.querySelector(`.sq[data-r="${pos.r}"][data-c="${pos.c}"]`);
   }
 
   function renderBoard() {
-    boardEl.replaceChildren();
-    const perspectiveColor = getPerspectiveColor();
-    const revealAll = shouldRevealBoardAndHistory();
-    const showAllPieces = revealAll || isSpectatorMode();
-    const visibleColor = showAllPieces ? null : perspectiveColor;
-    const flipped = perspectiveColor === 'b';
-    const replaySnapshot = replay.active ? getReplaySnapshot(replay.ply) : null;
-    const boardState = replaySnapshot ? replaySnapshot.board : state.board;
-    const markerPly = replay.active ? replay.ply : getCurrentPly();
-    const captureMarker = getCaptureMarkerForPly(markerPly);
-    const captureMarkerClass = resolveCaptureMarkerClass(captureMarker, perspectiveColor);
-    const moveHighlight = getMoveHighlightForPly(markerPly);
-    const turnForBoard = replaySnapshot ? replaySnapshot.turn : state.turn;
-    const showMoveMarkers = shouldShowMoveHighlightForPly(markerPly);
-    const showCaptureMarkers = shouldShowCaptureMarker(captureMarker);
-    const inCheckForBoard = turnForBoard
-      ? isInCheck(boardState, turnForBoard) && (!state.gameOver || replay.active)
-      : false;
-    const showCheckSquareHighlight = shouldShowCheckSquareHighlight(turnForBoard);
-    const checkedKingSquare = showCheckSquareHighlight && inCheckForBoard && turnForBoard
-      ? findKingSquare(boardState, turnForBoard)
-      : null;
-    const canEmphasizeTurn = !state.gameOver
-      && !replay.active
-      && !isSpectatorMode()
-      && (
-        !isOnlineMode()
-        || (multiplayer.connected && Boolean(multiplayer.roomCode) && Boolean(multiplayer.color))
-      );
-    const showTurnEmphasis = canEmphasizeTurn && isMyTurn() && !inCheckForBoard;
-
-    const files = flipped
-      ? ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a']
-      : ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-    const ranks = flipped
-      ? ['1', '2', '3', '4', '5', '6', '7', '8']
-      : ['8', '7', '6', '5', '4', '3', '2', '1'];
-
-    boardEl.classList.toggle('revealed', revealAll);
-    boardEl.classList.toggle('turn-emphasis', showTurnEmphasis);
-    boardEl.classList.toggle('check-emphasis', inCheckForBoard);
-
-    for (let displayR = 0; displayR < 8; displayR += 1) {
-      for (let displayC = 0; displayC < 8; displayC += 1) {
-        const r = flipped ? 7 - displayR : displayR;
-        const c = flipped ? 7 - displayC : displayC;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'square';
-        const isLight = (displayR + displayC) % 2 === 0;
-        button.classList.add(isLight ? 'light' : 'dark');
-        button.dataset.r = String(r);
-        button.dataset.c = String(c);
-
-        // Integrated coordinate labels
-        if (displayR === 7) {
-          const fileLabel = document.createElement('span');
-          fileLabel.className = 'coord-label coord-file';
-          fileLabel.textContent = files[displayC];
-          button.appendChild(fileLabel);
-        }
-        if (displayC === 0) {
-          const rankLabel = document.createElement('span');
-          rankLabel.className = 'coord-label coord-rank';
-          rankLabel.textContent = ranks[displayR];
-          button.appendChild(rankLabel);
-        }
-
-        const piece = boardState[r][c];
-        let hasPiece = false;
-        if (piece && (showAllPieces || piece.color === visibleColor)) {
-          hasPiece = true;
-          button.classList.add('visible');
-          const svgEl = createPieceSvgElement(piece.color, piece.type);
-          if (svgEl) {
-            button.appendChild(svgEl);
-          } else {
-            // Fallback to text
-            button.classList.add('piece', piece.color === 'w' ? 'white' : 'black');
-            button.textContent = PIECE_SYMBOLS[piece.color][piece.type];
-          }
-        } else {
-          button.classList.add('hidden');
-        }
-
-        if (!replay.active && state.selected && state.selected.r === r && state.selected.c === c) {
-          button.classList.add('selected');
-        }
-
-        if (
-          showCaptureMarkers
-          && captureMarkerClass
-          && captureMarker?.square
-          && captureMarker.square.r === r
-          && captureMarker.square.c === c
-        ) {
-          button.classList.add(captureMarkerClass);
-        }
-        if (
-          showMoveMarkers
-          && moveHighlight?.from
-          && moveHighlight.from.r === r
-          && moveHighlight.from.c === c
-        ) {
-          button.classList.add('last-move-from');
-        }
-        if (
-          showMoveMarkers
-          && moveHighlight?.to
-          && moveHighlight.to.r === r
-          && moveHighlight.to.c === c
-        ) {
-          button.classList.add('last-move-to');
-        }
-        if (checkedKingSquare && checkedKingSquare.r === r && checkedKingSquare.c === c) {
-          button.classList.add('check-king');
-        }
-
-        // Click handler (also used by drag-and-drop end)
-        button.addEventListener('click', () => handleSquareClick(r, c));
-
-        // Drag-and-drop: start drag on pointerdown for pieces
-        if (hasPiece && !replay.active && !state.gameOver) {
-          button.addEventListener('pointerdown', (e) => {
-            if (e.button !== 0) return;
-            startDrag(e, r, c, piece);
-          });
-        }
-
-        boardEl.appendChild(button);
+    const view = app.view;
+    const board = displayBoard();
+    const mine = myColor();
+    const flipped = bottomColor() === 'b';
+    const revealed = Boolean(app.replay) || Boolean(view && view.revealed);
+    const fogAll = view && !revealed && !mine; // fog spectators
+    const hints = new Map();
+    if (app.selected && settings.hints && canAct()) {
+      for (const move of core.generatePlausibleMovesForPiece(board, app.selected.r, app.selected.c)) {
+        const key = `${move.to.r},${move.to.c}`;
+        const isTry = move.capture && board[app.selected.r][app.selected.c].type === 'P';
+        hints.set(key, isTry ? 'try' : 'dot');
       }
     }
+    const last = lastVisibleMove();
+    const checkSquare = view && view.check && !app.replay ? core.findKing(board, view.check.color) : null;
+    const replayCapture = app.replay ? app.replay.positions[app.replay.index].capture : null;
 
-    renderPlayerBars(boardState, perspectiveColor);
+    boardEl.classList.toggle('revealing', app.revealing);
+
+    for (let i = 0; i < 64; i += 1) {
+      const displayR = Math.floor(i / 8);
+      const displayC = i % 8;
+      const r = flipped ? 7 - displayR : displayR;
+      const c = flipped ? 7 - displayC : displayC;
+      const square = squareEls[i];
+      const piece = board[r][c];
+      const own = Boolean(piece && mine && piece.color === mine);
+      const fogged = !revealed && (fogAll || !own) && Boolean(view);
+      const key = `${r},${c}`;
+
+      square.dataset.r = r;
+      square.dataset.c = c;
+      square.className = `sq ${(r + c) % 2 ? 'dark' : 'light'}`;
+      if (fogged || (app.revealing && !own)) square.classList.add('fog');
+      if (own) square.classList.add('mine', 'has-own');
+      if (same(app.selected, { r, c })) square.classList.add('selected');
+      if (last && (same(last.from, { r, c }))) square.classList.add('last-from');
+      if (last && (same(last.to, { r, c }))) square.classList.add('last-to');
+      if (same(checkSquare, { r, c })) square.classList.add('check');
+      if (app.marks.boom === key || (replayCapture && replayCapture.r === r && replayCapture.c === c)) square.classList.add('boom');
+      if (app.marks.took === key) square.classList.add('took');
+      if (app.keyboard && same(app.cursor, { r, c })) square.classList.add('cursor');
+      square.setAttribute('aria-label', `${squareName({ r, c })}${piece ? `, ${colorName(piece.color)} ${PIECE_NAMES[piece.type]}` : ''}`);
+
+      const children = [];
+      if (piece) {
+        const img = el('img', { class: 'piece', src: sprites.piece(piece.color, piece.type), alt: '', draggable: 'false' });
+        if (app.animate && same(app.animate.to, { r, c })) {
+          const fromDisplayR = flipped ? 7 - app.animate.from.r : app.animate.from.r;
+          const fromDisplayC = flipped ? 7 - app.animate.from.c : app.animate.from.c;
+          img.style.setProperty('--dx', `${(fromDisplayC - displayC) * 100}%`);
+          img.style.setProperty('--dy', `${(fromDisplayR - displayR) * 100}%`);
+          img.classList.add('arrive');
+        }
+        children.push(img);
+      }
+      const hint = hints.get(key);
+      if (hint) children.push(el('span', { class: `hint ${hint === 'try' ? 'try' : ''}` }));
+      if (displayR === 7) children.push(el('span', { class: 'coord file', text: 'abcdefgh'[c] }));
+      if (displayC === 0) children.push(el('span', { class: 'coord rank', text: String(8 - r) }));
+      square.replaceChildren(...children);
+    }
+    app.animate = null;
   }
 
-  // Drag-and-drop implementation
-  function startDrag(e, r, c, piece) {
-    const activeColor = getActiveColor();
-    if (!activeColor || piece.color !== activeColor) return;
-    if (isOnlineMode() && !isMyTurn()) return;
-
-    // Select the piece
-    state.selected = { r, c };
+  function markSquare(kind, pos) {
+    const key = `${pos.r},${pos.c}`;
+    app.marks[kind] = key;
+    const other = kind === 'boom' ? 'took' : 'boom';
+    if (app.marks[other] === key) app.marks[other] = null;
     renderBoard();
-
-    const svgHtml = PIECE_SVG[getPieceSvgKey(piece.color, piece.type)];
-    if (!svgHtml) return;
-
-    const ghost = document.createElement('div');
-    ghost.className = 'drag-ghost';
-    ghost.innerHTML = svgHtml;
-    document.body.appendChild(ghost);
-
-    const boardRect = boardEl.getBoundingClientRect();
-    const sqSize = boardRect.width / 8;
-    ghost.style.width = sqSize + 'px';
-    ghost.style.height = sqSize + 'px';
-    ghost.style.left = (e.clientX - sqSize / 2) + 'px';
-    ghost.style.top = (e.clientY - sqSize / 2) + 'px';
-
-    // Mark source square
-    const srcSquare = boardEl.querySelector(`[data-r="${r}"][data-c="${c}"]`);
-    if (srcSquare) srcSquare.classList.add('drag-source');
-
-    dragState = { fromR: r, fromC: c, ghost, sqSize };
-
-    const onPointerMove = (ev) => {
-      ghost.style.left = (ev.clientX - sqSize / 2) + 'px';
-      ghost.style.top = (ev.clientY - sqSize / 2) + 'px';
-    };
-
-    const onPointerUp = (ev) => {
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-      ghost.remove();
-
-      // Determine target square from pointer position
-      const targetBoardRect = boardEl.getBoundingClientRect();
-      const col = Math.floor((ev.clientX - targetBoardRect.left) / (targetBoardRect.width / 8));
-      const row = Math.floor((ev.clientY - targetBoardRect.top) / (targetBoardRect.height / 8));
-
-      if (col >= 0 && col < 8 && row >= 0 && row < 8) {
-        const perspectiveColor = getPerspectiveColor();
-        const flipped = perspectiveColor === 'b';
-        const targetR = flipped ? 7 - row : row;
-        const targetC = flipped ? 7 - col : col;
-
-        if (targetR !== r || targetC !== c) {
-          handleSquareClick(targetR, targetC);
-        }
+    setTimeout(() => {
+      if (app.marks[kind] === key) {
+        app.marks[kind] = null;
+        renderBoard();
       }
-
-      dragState = null;
-    };
-
-    document.addEventListener('pointermove', onPointerMove);
-    document.addEventListener('pointerup', onPointerUp);
+    }, 2400);
   }
 
-  // Player bars rendering
-  function renderPlayerBars(boardState, perspectiveColor) {
-    const flipped = perspectiveColor === 'b';
-    const topColor = flipped ? 'w' : 'b';
-    const bottomColor = flipped ? 'b' : 'w';
+  // ---------------------------------------------------------------------------
+  // Input: pointer, drag and keyboard
+  // ---------------------------------------------------------------------------
 
-    // Names
-    const getPlayerName = (color) => {
-      if (isOnlineMode()) {
-        const player = multiplayer.players.find((p) => p.color === color);
-        if (player) return player.nickname || (color === 'w' ? 'White' : 'Black');
+  function selectSquare(pos) {
+    app.selected = pos;
+    sfx.play(pos ? 'select' : 'deselect');
+    renderBoard();
+  }
+
+  function clickSquare(r, c) {
+    if (!app.view) return;
+    if (app.view.you && app.view.you.role === 'spectator' && app.mode === 'online') {
+      toast('Spectating: sit back and enjoy the fog.');
+      return;
+    }
+    if (!canAct()) {
+      if (app.mode === 'online' && app.view && !app.view.gameOver && app.view.turn !== myColor()) toast('Wait for your turn.');
+      return;
+    }
+    const board = displayBoard();
+    const piece = board[r][c];
+    if (piece && piece.color === myColor()) {
+      selectSquare(same(app.selected, { r, c }) ? null : { r, c });
+      return;
+    }
+    if (app.selected) attemptMove(app.selected, { r, c });
+  }
+
+  function choosePromotion(color) {
+    return new Promise((resolve) => {
+      const choices = $('promotionChoices');
+      choices.replaceChildren(...core.PROMOTION_OPTIONS.map((type) => el('button', {
+        type: 'button',
+        'aria-label': PIECE_NAMES[type],
+        onclick: () => {
+          $('promotion').classList.add('hidden');
+          resolve(type);
+        },
+      }, el('img', { src: sprites.piece(color, type), alt: '' }))));
+      $('promotionCancel').onclick = () => {
+        $('promotion').classList.add('hidden');
+        resolve(null);
+      };
+      $('promotion').classList.remove('hidden');
+      choices.firstElementChild.focus();
+    });
+  }
+
+  async function attemptMove(from, to) {
+    const board = displayBoard();
+    const piece = board[from.r][from.c];
+    if (!piece) return;
+    const candidates = core.generatePlausibleMovesForPiece(board, from.r, from.c).filter((move) => same(move.to, to));
+    if (!candidates.length) {
+      // Impossible even if the fog were empty: catch it here so a misclick never costs a hard-mode turn.
+      sfx.play('illegal');
+      fx.shake($('boardFrame'));
+      umpireSay(`A ${PIECE_NAMES[piece.type]} can't move like that.`, 'bad');
+      app.selected = null;
+      renderBoard();
+      return;
+    }
+    let promotion = null;
+    if (candidates.some((move) => move.promotion)) {
+      promotion = await choosePromotion(piece.color);
+      if (!promotion) return;
+    }
+    app.selected = null;
+    sendMove({ from: { ...from }, to: { ...to }, promotion });
+  }
+
+  function sendMove(intent) {
+    if (app.mode === 'local') localAction(TYPES.MOVE_INTENT, intent);
+    else if (app.mode === 'online') netSend(TYPES.MOVE_INTENT, intent);
+    renderBoard();
+  }
+
+  let drag = null;
+  function onBoardPointerDown(event) {
+    const square = event.target.closest('.sq');
+    if (!square || event.button > 0) return;
+    sfx.unlock();
+    app.keyboard = false;
+    const r = Number(square.dataset.r);
+    const c = Number(square.dataset.c);
+    const piece = displayBoard()[r][c];
+    if (!(canAct() && piece && piece.color === myColor())) {
+      clickSquare(r, c);
+      return;
+    }
+    event.preventDefault();
+    const wasSelected = same(app.selected, { r, c });
+    if (!wasSelected) selectSquare({ r, c });
+    drag = { r, c, startX: event.clientX, startY: event.clientY, ghost: null, wasSelected, piece, pointerId: event.pointerId };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragEnd, { once: true });
+    window.addEventListener('pointercancel', onDragCancel, { once: true });
+  }
+
+  function onDragMove(event) {
+    if (!drag) return;
+    const moved = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (!drag.ghost && moved > 6) {
+      const size = boardEl.getBoundingClientRect().width / 8;
+      drag.ghost = el('img', { class: 'drag-ghost', src: sprites.piece(drag.piece.color, drag.piece.type), alt: '' });
+      drag.ghost.style.width = `${size}px`;
+      drag.ghost.style.height = `${size}px`;
+      document.body.append(drag.ghost);
+      const origin = squareElFor(drag);
+      if (origin) origin.classList.add('dragging');
+    }
+    if (drag.ghost) {
+      drag.ghost.style.left = `${event.clientX}px`;
+      drag.ghost.style.top = `${event.clientY}px`;
+    }
+  }
+
+  function endDrag() {
+    window.removeEventListener('pointermove', onDragMove);
+    if (drag && drag.ghost) drag.ghost.remove();
+    const finished = drag;
+    drag = null;
+    return finished;
+  }
+
+  function onDragCancel() {
+    endDrag();
+    renderBoard();
+  }
+
+  function onDragEnd(event) {
+    const finished = endDrag();
+    if (!finished) return;
+    if (!finished.ghost) {
+      if (finished.wasSelected) selectSquare(null);
+      return;
+    }
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    const square = target && target.closest ? target.closest('#board .sq') : null;
+    if (!square) {
+      renderBoard();
+      return;
+    }
+    const to = { r: Number(square.dataset.r), c: Number(square.dataset.c) };
+    if (same(to, finished)) {
+      renderBoard();
+      return;
+    }
+    attemptMove({ r: finished.r, c: finished.c }, to);
+  }
+
+  function onBoardKey(event) {
+    const deltas = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    if (deltas[event.key]) {
+      event.preventDefault();
+      const flip = bottomColor() === 'b' ? -1 : 1;
+      const [dr, dc] = deltas[event.key];
+      if (!app.keyboard) {
+        app.keyboard = true;
+        app.cursor = app.selected ? { ...app.selected } : { ...app.cursor };
+      } else {
+        app.cursor = {
+          r: Math.max(0, Math.min(7, app.cursor.r + dr * flip)),
+          c: Math.max(0, Math.min(7, app.cursor.c + dc * flip)),
+        };
       }
-      return color === 'w' ? 'White' : 'Black';
-    };
+      sfx.play('hover');
+      renderBoard();
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      app.keyboard = true;
+      clickSquare(app.cursor.r, app.cursor.c);
+    } else if (event.key === 'Escape' && app.selected) {
+      selectSquare(null);
+    }
+  }
 
-    topPlayerNameEl.textContent = getPlayerName(topColor);
-    bottomPlayerNameEl.textContent = getPlayerName(bottomColor);
+  // ---------------------------------------------------------------------------
+  // Events -> umpire lines and effects
+  // ---------------------------------------------------------------------------
 
-    // Material count
-    const PIECE_VALUES = { P: 1, N: 3, B: 3, R: 5, Q: 9, K: 0 };
-    let whiteMaterial = 0;
-    let blackMaterial = 0;
-    const capturedByWhite = []; // pieces black lost (white captured)
-    const capturedByBlack = []; // pieces white lost (black captured)
+  function playerName(color, view = app.view) {
+    if (app.mode === 'local') return colorName(color);
+    const seat = view && view.players.find((player) => player.color === color);
+    return seat && seat.nickname && seat.nickname !== 'Player' ? `${seat.nickname} (${colorName(color)})` : colorName(color);
+  }
 
-    // Count material on board
-    for (let rr = 0; rr < 8; rr++) {
-      for (let cc = 0; cc < 8; cc++) {
-        const p = boardState[rr][cc];
-        if (p) {
-          if (p.color === 'w') whiteMaterial += PIECE_VALUES[p.type] || 0;
-          else blackMaterial += PIECE_VALUES[p.type] || 0;
+  function directionText(directions = []) {
+    if (!directions.length) return '';
+    if (directions.length > 1) return `Double check: ${directions.join(' and ')}!`;
+    return directions[0] === 'knight' ? 'From a knight!' : `Along the ${directions[0]}!`;
+  }
+
+  function resultLine(event) {
+    if (event.winner) return `${event.winner} wins ${RESULT_TEXT[event.result] || ''}.`.replace(' .', '.');
+    return RESULT_TEXT[event.result] || 'Game drawn.';
+  }
+
+  // Describe one event from the viewer's seat. Returns { text, tone, sound, effect, square }.
+  function describeEvent(event, viewer, view = app.view) {
+    const mine = viewer && event.color === viewer;
+    const who = playerName(event.color, view);
+    switch (event.kind) {
+      case 'move':
+        if (mine) return { text: `You played ${event.san}.`, sound: 'move' };
+        return { text: event.san ? `${who} played ${event.san}.` : `${who} moved.`, sound: 'opponentMove' };
+      case 'capture': {
+        const square = { r: event.r, c: event.c };
+        if (mine) return { text: `You captured something on ${event.square}!`, tone: 'good', sound: 'capture', effect: 'took', square };
+        if (viewer && event.captured === viewer) {
+          const before = app.prevView && app.prevView.board[event.r] && app.prevView.board[event.r][event.c];
+          const name = before && before.color === viewer ? PIECE_NAMES[before.type] : 'piece';
+          return { text: `Your ${name} on ${event.square} was captured!`, tone: 'bad', sound: 'lost', effect: 'boom', square };
+        }
+        return { text: `${who} captured on ${event.square}.`, sound: 'capture', effect: 'took', square };
+      }
+      case 'check':
+        if (viewer && event.color === viewer) return { text: `CHECK! ${directionText(event.directions)}`, tone: 'bad', sound: 'check', effect: 'check' };
+        return { text: `${playerName(event.color, view)} is in check. ${directionText(event.directions)}`, tone: 'warn', sound: 'check' };
+      case 'illegal':
+        if (mine) {
+          const squares = event.fromSquare ? ` ${event.fromSquare}-${event.toSquare}` : '';
+          return { text: `No!${squares} isn't legal. Try again.`, tone: 'bad', sound: 'illegal', effect: 'illegal' };
+        }
+        return { text: `${who} tried an illegal move.`, tone: 'warn', sound: 'opponentIllegal' };
+      case 'forfeit':
+        if (mine) return { text: `Illegal${event.fromSquare ? ` (${event.fromSquare}-${event.toSquare})` : ''}! You lose the turn.`, tone: 'bad', sound: 'forfeit', effect: 'forfeit' };
+        return { text: `${who} tried an illegal move and lost the turn!`, tone: 'good', sound: 'opponentIllegal', effect: 'opponentForfeit' };
+      case 'draw_offer':
+        if (mine) return { text: 'You offered a draw. It stands until your opponent moves.', sound: 'drawOffer' };
+        return { text: `${who} offers a draw. Press DRAW to accept, or just move to decline.`, tone: 'warn', sound: 'drawOffer', effect: 'drawOffer' };
+      case 'draw_declined':
+        return { text: mine ? 'Your draw offer was declined.' : 'Draw offer declined.', tone: 'warn' };
+      case 'resign':
+        return { text: mine ? 'You resigned.' : `${who} resigned!`, tone: mine ? 'bad' : 'good' };
+      case 'game_over':
+        return { text: resultLine(event), tone: 'warn' };
+      case 'presence':
+        if (app.mode === 'local') return null;
+        return {
+          text: `${event.nickname} (${colorName(event.color)}) ${event.online ? 'joined the table.' : 'left the table.'}`,
+          tone: event.online ? 'good' : 'warn',
+          sound: event.online ? 'join' : 'leave',
+        };
+      case 'options':
+        return {
+          text: `Rules updated: hard mode ${event.hardMode ? 'ON' : 'OFF'}, spectators ${event.spectatorView === 'open' ? 'see everything' : 'in the fog'}.`,
+          tone: 'warn',
+        };
+      case 'new_game':
+        return { text: `New game!${event.swapped ? ' Colours swapped.' : ''} White moves first.`, tone: 'good', sound: 'start' };
+      default:
+        return null;
+    }
+  }
+
+  const SOUND_PRIORITY = ['lost', 'check', 'capture', 'forfeit', 'illegal', 'drawOffer', 'opponentIllegal', 'start', 'join', 'leave', 'opponentMove', 'move'];
+
+  function runEffect(line) {
+    const boardFrame = $('boardFrame');
+    const target = line.square ? squareElFor(line.square) : null;
+    switch (line.effect) {
+      case 'took':
+        if (line.square) markSquare('took', line.square);
+        fx.burst(target, [cssVar('--good'), cssVar('--warn'), cssVar('--text')], 26);
+        break;
+      case 'boom':
+        if (line.square) markSquare('boom', line.square);
+        fx.burst(target, [cssVar('--bad'), cssVar('--warn'), '#000000'], 40, 3.2);
+        fx.flash('bad');
+        fx.shake($('app'), true);
+        break;
+      case 'check':
+        fx.banner('CHECK!', 'bad');
+        fx.flash('bad');
+        fx.shake(boardFrame);
+        break;
+      case 'illegal':
+        fx.banner('NO!', 'bad', 700);
+        fx.shake(boardFrame);
+        break;
+      case 'forfeit':
+        fx.banner('TURN LOST', 'bad');
+        fx.flash('bad');
+        fx.shake($('app'), true);
+        break;
+      case 'opponentForfeit':
+        fx.banner('THEY FUMBLED!', 'good');
+        break;
+      case 'drawOffer':
+        fx.banner('DRAW?', 'warn');
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Announce events the viewer hasn't seen yet. `quiet` just catches up (first view after joining).
+  function processEvents(view, viewer, seenId, { quiet = false } = {}) {
+    const fresh = view.events.filter((event) => event.id > seenId);
+    const maxId = view.events.reduce((max, event) => Math.max(max, event.id), seenId);
+    if (quiet || !fresh.length) return maxId;
+
+    const lines = fresh.map((event) => describeEvent(event, viewer, view)).filter(Boolean);
+    if (!lines.length) return maxId;
+
+    const sound = SOUND_PRIORITY.find((name) => lines.some((line) => line.sound === name));
+    if (sound && !view.gameOver) sfx.play(sound);
+    requestAnimationFrame(() => lines.forEach(runEffect));
+
+    const spoken = lines.filter((line) => line.tone || line.effect).slice(-2);
+    const say = (spoken.length ? spoken : lines.slice(-1));
+    umpireSay(say.map((line) => line.text).join(' '), say[say.length - 1].tone || '');
+    return maxId;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Views
+  // ---------------------------------------------------------------------------
+
+  function setView(view, { viewer, seenId, quiet = false }) {
+    const previous = app.view;
+    if (previous && previous.gameId !== view.gameId) {
+      app.selected = null;
+      app.replay = null;
+      app.gameOverShown = '';
+      $('gameOver').classList.add('hidden');
+    }
+    app.prevView = previous;
+    app.view = view;
+
+    // Animate your own new move sliding into place.
+    const last = view.moves[view.moves.length - 1];
+    const prevCount = previous && previous.gameId === view.gameId ? previous.moves.length : view.moves.length;
+    if (!quiet && last && view.moves.length > prevCount && last.from && last.to && !last.forfeit) {
+      app.animate = { from: last.from, to: last.to };
+    }
+
+    const nextSeen = processEvents(view, viewer, seenId, { quiet });
+
+    if (!quiet && previous && !previous.revealed && view.revealed && view.gameOver) startReveal();
+    render();
+    if (view.gameOver) onGameOver(view);
+    return nextSeen;
+  }
+
+  function startReveal() {
+    app.revealing = true;
+    sfx.play('reveal');
+    setTimeout(() => {
+      app.revealing = false;
+      renderBoard();
+    }, 1500);
+  }
+
+  function onGameOver(view) {
+    const key = `${app.mode}:${view.roomCode}:${view.gameId}`;
+    archiveGame(view, key);
+    if (app.gameOverShown === key || app.mode === 'archive') return;
+    app.gameOverShown = key;
+    const viewer = app.mode === 'online' && view.you.role === 'player' ? view.you.color : null;
+    const winnerColor = view.winner === 'White' ? 'w' : view.winner === 'Black' ? 'b' : null;
+    let title;
+    let tone;
+    if (!winnerColor) {
+      title = 'DRAW';
+      tone = 'warn';
+    } else if (viewer) {
+      title = winnerColor === viewer ? 'VICTORY!' : 'DEFEAT';
+      tone = winnerColor === viewer ? 'good' : 'bad';
+    } else {
+      title = `${view.winner.toUpperCase()} WINS!`;
+      tone = 'good';
+    }
+
+    setTimeout(() => {
+      if (!app.view || app.view.gameId !== view.gameId) return;
+      if (tone === 'good') {
+        sfx.play('win');
+        fx.confetti([cssVar('--accent'), cssVar('--accent-2'), cssVar('--warn'), cssVar('--good')]);
+      } else if (tone === 'bad') {
+        sfx.play('lose');
+        fx.rain([cssVar('--muted'), cssVar('--accent-2')]);
+      } else {
+        sfx.play('draw');
+      }
+      $('gameOverKicker').textContent = 'GAME OVER';
+      $('gameOverTitle').textContent = title;
+      $('gameOverTitle').dataset.tone = tone;
+      $('gameOverReason').textContent = winnerColor ? `${playerName(winnerColor)} wins ${RESULT_TEXT[view.result] || ''}. The fog has lifted.` : `${RESULT_TEXT[view.result] || 'Draw.'} The fog has lifted.`;
+      const buttons = [
+        el('button', { class: 'px-btn ghost', type: 'button', text: 'SEE BOARD', onclick: () => $('gameOver').classList.add('hidden') }),
+        el('button', { class: 'px-btn', type: 'button', text: 'REPLAY', onclick: () => { $('gameOver').classList.add('hidden'); startReplay(0); } }),
+        el('button', { class: 'px-btn', type: 'button', text: 'PGN', onclick: exportPgn }),
+      ];
+      if (app.mode === 'local' || (app.mode === 'online' && view.you.role === 'player')) {
+        buttons.push(el('button', { class: 'px-btn primary', type: 'button', text: app.mode === 'local' ? 'NEW GAME' : 'REMATCH', onclick: () => { $('gameOver').classList.add('hidden'); newGame(); } }));
+      }
+      $('gameOverButtons').replaceChildren(...buttons);
+      $('gameOver').classList.remove('hidden');
+      buttons[buttons.length - 1].focus();
+    }, app.revealing ? 1300 : 500);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Local pass-and-play
+  // ---------------------------------------------------------------------------
+
+  function localView() {
+    return rl.createView(local.state, { role: 'player', color: local.viewer });
+  }
+
+  function saveLocal() {
+    save(STORAGE.local, { state: local.state, seen: local.seen, startedAt: local.startedAt });
+  }
+
+  function enterGame(mode) {
+    app.mode = mode;
+    app.view = null;
+    app.prevView = null;
+    app.selected = null;
+    app.replay = null;
+    app.marks = { boom: null, took: null };
+    app.gameOverShown = '';
+    app.seenEventId = 0;
+    app.archiveDate = null;
+    $('gameOver').classList.add('hidden');
+    showScreen('game');
+    boardEl.focus({ preventScroll: true });
+  }
+
+  function startLocal(hardMode) {
+    const state = rl.createRoomState('LOCAL', { hardMode });
+    rl.assignPlayer(state, 'white', 'White', () => '');
+    rl.assignPlayer(state, 'black', 'Black', () => '');
+    local.state = state;
+    local.seen = { w: 0, b: 0 };
+    local.startedAt = Date.now();
+    local.viewer = 'w';
+    enterGame('local');
+    sfx.play('start');
+    showCurtain('w', true);
+  }
+
+  function continueLocal() {
+    const saved = load(STORAGE.local, null);
+    if (!saved || !saved.state) {
+      toast('No saved local game.');
+      return;
+    }
+    local.state = saved.state;
+    local.seen = saved.seen || { w: 0, b: 0 };
+    local.startedAt = saved.startedAt || Date.now();
+    enterGame('local');
+    showCurtain(local.state.turn);
+  }
+
+  function showCurtain(color, first = false) {
+    local.viewer = color;
+    local.curtain = true;
+    local.handoff = false;
+    app.selected = null;
+    app.view = localView();
+    const news = app.view.events
+      .filter((event) => event.id > local.seen[color] && !(event.color === color && ['move', 'illegal', 'forfeit', 'draw_offer', 'resign'].includes(event.kind)))
+      .map((event) => describeEvent(event, color))
+      .filter(Boolean)
+      .slice(-5);
+    $('curtainTitle').textContent = first ? `${colorName(color).toUpperCase()} STARTS` : `PASS TO ${colorName(color).toUpperCase()}`;
+    $('curtainNews').replaceChildren(...news.map((line) => el('li', { text: line.text })));
+    $('curtainGo').textContent = `I'M ${colorName(color).toUpperCase()}`;
+    render();
+    umpireSay(first ? 'Welcome to the fog. White, you have the first move.' : `${colorName(color)}, your turn. No peeking, ${colorName(color === 'w' ? 'b' : 'w')}!`);
+    $('curtainGo').focus();
+  }
+
+  function liftCurtain() {
+    sfx.play('click');
+    local.curtain = false;
+    const view = localView();
+    local.seen[local.viewer] = setView(view, { viewer: local.viewer, seenId: local.seen[local.viewer] });
+    saveLocal();
+    boardEl.focus({ preventScroll: true });
+  }
+
+  function localAction(type, payload = {}) {
+    const state = local.state;
+    const actor = rl.getPlayerByColor(state, local.viewer);
+    let result;
+    if (type === TYPES.MOVE_INTENT) result = rl.applyMove(state, actor, payload);
+    else if (type === TYPES.CLAIM_DRAW) result = rl.claimDraw(state, actor, payload);
+    else if (type === TYPES.RESIGN) result = rl.resign(state, actor);
+    else return;
+
+    if (result.alreadyOffered) toast('Your draw offer already stands.');
+    if (!result.ok && !result.forfeited && !result.drawOffered && result.reason !== ERROR_CODES.ILLEGAL_MOVE) {
+      toast(REASON_TEXT[result.reason] || result.reason, 'bad');
+    }
+
+    local.seen[local.viewer] = setView(localView(), { viewer: local.viewer, seenId: local.seen[local.viewer] });
+    saveLocal();
+
+    const turnPassed = !state.gameOver && state.turn !== local.viewer;
+    if (turnPassed) {
+      local.handoff = true;
+      render();
+      setTimeout(() => {
+        if (app.mode === 'local' && local.state === state) showCurtain(state.turn);
+      }, result.forfeited ? 1600 : 1100);
+    }
+    if (state.gameOver) remove(STORAGE.local);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Online
+  // ---------------------------------------------------------------------------
+
+  function setNetStatus(status) {
+    net.status = status;
+    const node = $('netStatus');
+    node.dataset.status = status;
+    node.textContent = { online: 'ONLINE', connecting: 'CONNECTING', reconnecting: 'RECONNECTING', offline: 'OFFLINE' }[status];
+    renderActions();
+  }
+
+  function buildSocketUrl(params) {
+    const url = new URL(settings.serverUrl);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return url.toString();
+  }
+
+  function openSocket(params) {
+    closeSocket();
+    net.intentionalClose = false;
+    return new Promise((resolve, reject) => {
+      let ws;
+      try {
+        ws = new WebSocket(buildSocketUrl(params));
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      net.ws = ws;
+      setNetStatus(net.reconnectAttempts ? 'reconnecting' : 'connecting');
+      let opened = false;
+      ws.onopen = () => {
+        opened = true;
+        net.lastMessageAt = Date.now();
+        startHeartbeat();
+        resolve(ws);
+      };
+      ws.onmessage = (event) => {
+        if (ws !== net.ws) return;
+        net.lastMessageAt = Date.now();
+        onServerMessage(event.data);
+      };
+      ws.onclose = () => {
+        if (ws !== net.ws) return;
+        net.ws = null;
+        stopHeartbeat();
+        if (!opened) reject(new Error('Could not reach the game server.'));
+        onSocketClosed();
+      };
+    });
+  }
+
+  function closeSocket() {
+    stopHeartbeat();
+    if (net.ws) {
+      const ws = net.ws;
+      net.ws = null;
+      try {
+        ws.close(1000, 'bye');
+      } catch {
+        // already closed
+      }
+    }
+  }
+
+  function netSend(type, payload = {}) {
+    if (!net.ws || net.ws.readyState !== WebSocket.OPEN) {
+      toast('Not connected. Reconnecting...', 'bad');
+      return false;
+    }
+    net.ws.send(JSON.stringify(protocol.createMessage(type, net.roomCode, net.playerId || '', payload)));
+    return true;
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    net.heartbeatTimer = setInterval(() => {
+      if (!net.ws || net.ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - net.lastMessageAt > STALE_SOCKET_MS) {
+        net.ws.close();
+        return;
+      }
+      if (net.roomCode) net.ws.send(JSON.stringify(protocol.createMessage(TYPES.PING, net.roomCode, net.playerId || '', {})));
+    }, HEARTBEAT_MS);
+  }
+
+  function stopHeartbeat() {
+    clearInterval(net.heartbeatTimer);
+    net.heartbeatTimer = null;
+  }
+
+  function setPending(kind) {
+    net.pending = kind;
+    clearTimeout(net.pendingTimer);
+    net.pendingTimer = setTimeout(() => {
+      if (net.pending !== kind) return;
+      net.pending = null;
+      toast('The server took too long to answer.', 'bad');
+      if (app.mode !== 'online' || !app.view) {
+        net.intentionalClose = true;
+        closeSocket();
+        setNetStatus('offline');
+      }
+    }, PENDING_TIMEOUT_MS);
+  }
+
+  function clearPending() {
+    net.pending = null;
+    clearTimeout(net.pendingTimer);
+  }
+
+  function saveSession() {
+    if (net.role !== 'player' || !net.roomCode || !net.resumeToken) return;
+    save(STORAGE.session, {
+      roomCode: net.roomCode,
+      playerId: net.playerId,
+      resumeToken: net.resumeToken,
+      color: net.color,
+      serverUrl: settings.serverUrl,
+    });
+  }
+
+  function setRoomInUrl(code) {
+    const url = new URL(window.location.href);
+    url.search = '';
+    if (code) url.searchParams.set('room', code);
+    if (code && settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
+    window.history.replaceState(null, '', url);
+  }
+
+  function inviteUrl() {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('room', net.roomCode);
+    if (settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
+    return url.toString();
+  }
+
+  async function copyInvite() {
+    const link = inviteUrl();
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('Invite link copied!');
+      sfx.play('select');
+    } catch {
+      window.prompt('Copy this invite link:', link);
+    }
+  }
+
+  async function createRoom(options) {
+    net.role = null;
+    net.reconnectAttempts = 0;
+    try {
+      await openSocket({ create: '1' });
+    } catch (error) {
+      toast(error.message, 'bad');
+      setNetStatus('offline');
+      return;
+    }
+    setPending('create');
+    net.ws.send(JSON.stringify(protocol.createMessage(TYPES.CREATE_ROOM, '', '', options)));
+  }
+
+  async function joinRoom(code, { spectator = false, nickname = '', reconnect = false } = {}) {
+    const roomCode = protocol.normalizeRoomCode(code);
+    if (roomCode.length !== protocol.ROOM_CODE_LENGTH) {
+      toast('Room codes have 6 characters.', 'bad');
+      return;
+    }
+    if (!reconnect) {
+      net.role = null;
+      net.reconnectAttempts = 0;
+    }
+    net.roomCode = roomCode;
+    net.spectatorNickname = nickname;
+    try {
+      await openSocket({ room: roomCode });
+    } catch (error) {
+      if (!reconnect) toast(error.message, 'bad');
+      setNetStatus('offline');
+      return;
+    }
+    setPending(spectator ? 'watch' : 'join');
+    net.ws.send(JSON.stringify(protocol.createMessage(TYPES.JOIN_ROOM, roomCode, '', { nickname, spectator })));
+  }
+
+  async function resumeOnline(session, { auto = false } = {}) {
+    if (!session || !session.roomCode) return;
+    if (session.serverUrl && isWsUrl(session.serverUrl)) settings.serverUrl = session.serverUrl;
+    net.roomCode = session.roomCode;
+    net.playerId = session.playerId;
+    net.resumeToken = session.resumeToken;
+    net.color = session.color;
+    net.role = 'player';
+    if (app.mode !== 'online') enterGame('online');
+    renderRoomPanel();
+    try {
+      await openSocket({ room: session.roomCode });
+    } catch {
+      if (!auto) toast('Server unreachable. Retrying...', 'bad');
+      return; // onSocketClosed schedules the retry
+    }
+    setPending('resume');
+    net.ws.send(JSON.stringify(protocol.createMessage(TYPES.JOIN_ROOM, session.roomCode, session.playerId, {
+      resume: true,
+      resumeToken: session.resumeToken,
+      nickname: settings.nickname,
+    })));
+  }
+
+  function scheduleReconnect() {
+    clearTimeout(net.reconnectTimer);
+    if (net.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+      setNetStatus('offline');
+      umpireSay('Lost the connection. Use CONTINUE in the menu to try again.', 'bad');
+      return;
+    }
+    net.reconnectAttempts += 1;
+    setNetStatus('reconnecting');
+    const delay = Math.min(8000, 500 * 2 ** Math.min(net.reconnectAttempts, 4));
+    net.reconnectTimer = setTimeout(reconnectNow, delay);
+  }
+
+  function reconnectNow() {
+    clearTimeout(net.reconnectTimer);
+    if (app.mode !== 'online' || net.ws) return;
+    if (net.role === 'spectator') {
+      joinRoom(net.roomCode, { spectator: true, nickname: net.spectatorNickname, reconnect: true });
+    } else {
+      const session = load(STORAGE.session, null);
+      if (session) resumeOnline(session, { auto: true });
+    }
+  }
+
+  function onSocketClosed() {
+    setNetStatus('offline');
+    if (net.intentionalClose || app.mode !== 'online' || !net.roomCode) return;
+    if (net.role === 'player' || net.role === 'spectator') scheduleReconnect();
+  }
+
+  function leaveOnline() {
+    net.intentionalClose = true;
+    clearTimeout(net.reconnectTimer);
+    clearPending();
+    closeSocket();
+    setNetStatus('offline');
+    remove(STORAGE.session);
+    net.roomCode = '';
+    net.role = null;
+    net.playerId = '';
+    net.resumeToken = '';
+    setRoomInUrl('');
+  }
+
+  function onServerMessage(raw) {
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const payload = message.payload || {};
+
+    if (message.type === TYPES.ROOM_CREATED || message.type === TYPES.ROOM_JOINED) {
+      const wasResume = net.pending === 'resume';
+      clearPending();
+      net.roomCode = payload.roomCode || message.roomCode;
+      net.role = payload.role;
+      net.reconnectAttempts = 0;
+      if (payload.role === 'player') {
+        net.playerId = payload.playerId;
+        net.color = payload.color;
+        net.resumeToken = payload.resumeToken;
+        saveSession();
+      } else {
+        remove(STORAGE.session);
+      }
+      setRoomInUrl(net.roomCode);
+      if (app.mode !== 'online') enterGame('online');
+      setNetStatus('online');
+      if (message.type === TYPES.ROOM_CREATED) {
+        sfx.play('join');
+        umpireSay(`Room ${net.roomCode} is open. Send the invite link to your opponent.`);
+      } else if (payload.role === 'spectator') {
+        umpireSay('You are watching. Spectators see the fog unless the host turned on party mode.');
+      } else if (wasResume) {
+        umpireSay('Welcome back. Your seat was saved.', 'good');
+      }
+      return;
+    }
+
+    if (message.type === TYPES.GAME_STATE || message.type === TYPES.MOVE_REJECTED) {
+      if (message.type === TYPES.MOVE_REJECTED && payload.reasonCode && payload.reasonCode !== ERROR_CODES.ILLEGAL_MOVE) {
+        toast(REASON_TEXT[payload.reasonCode] || payload.reasonCode, 'bad');
+      }
+      const view = payload.game;
+      if (!view || app.mode !== 'online') return;
+      if (app.view && !guards.shouldHydrateSnapshotVersion(view.boardVersion, app.view.boardVersion)) return;
+      if (view.you.role === 'player' && view.you.color !== net.color) {
+        net.color = view.you.color;
+        saveSession();
+      }
+      const quiet = app.seenEventId === 0;
+      app.seenEventId = setView(view, { viewer: view.you.color, seenId: app.seenEventId, quiet });
+      if (quiet && !view.gameOver && view.you.role === 'player' && !view.waitingForStart) {
+        umpireSay(view.turn === view.you.color ? 'Your move.' : `Waiting for ${playerName(view.turn)}...`);
+      }
+      return;
+    }
+
+    if (message.type === TYPES.ERROR) {
+      const pending = net.pending;
+      clearPending();
+      toast(REASON_TEXT[payload.errorCode] || payload.message || 'Server error.', 'bad');
+      const fatal = [ERROR_CODES.UNKNOWN_ROOM, ERROR_CODES.PLAYER_NOT_FOUND, ERROR_CODES.ROOM_FULL, ERROR_CODES.VERSION_MISMATCH].includes(payload.errorCode);
+      if (fatal && (pending || !app.view)) {
+        const wasInGame = app.mode === 'online';
+        leaveOnline();
+        if (wasInGame) {
+          app.mode = null;
+          showMenuPanel('menuMain');
         }
       }
     }
-
-    const diff = whiteMaterial - blackMaterial;
-    topPlayerMaterialEl.textContent = (topColor === 'w' && diff > 0) || (topColor === 'b' && diff < 0)
-      ? `+${Math.abs(diff)}`
-      : '';
-    bottomPlayerMaterialEl.textContent = (bottomColor === 'w' && diff > 0) || (bottomColor === 'b' && diff < 0)
-      ? `+${Math.abs(diff)}`
-      : '';
-
-    // Clear capture displays
-    topPlayerCapturesEl.replaceChildren();
-    bottomPlayerCapturesEl.replaceChildren();
   }
 
-  function renderEvents() {
-    eventsEl.replaceChildren();
-    for (const entry of state.events) {
-      const normalized = normalizeEventEntry(entry);
-      const item = document.createElement('li');
-      const formattedText = formatEventForViewer(normalized.text, normalized.color);
-      item.textContent = `[${normalized.time} | M${normalized.move}] ${formattedText}`;
-      item.classList.add(`event-${normalized.color || 'neutral'}`);
-      eventsEl.appendChild(item);
+  // ---------------------------------------------------------------------------
+  // Game actions
+  // ---------------------------------------------------------------------------
+
+  function act(type, payload = {}) {
+    sfx.play('click');
+    if (app.mode === 'local') localAction(type, payload);
+    else if (app.mode === 'online') netSend(type, payload);
+  }
+
+  async function resignAction() {
+    if (await confirmDialog('RESIGN?', 'Throw in the towel? The fog will lift and your opponent wins.', 'RESIGN', 'danger')) {
+      act(TYPES.RESIGN);
     }
+  }
+
+  async function newGame() {
+    if (app.mode === 'local') {
+      const inProgress = local.state && !local.state.gameOver && local.state.log.length > 0;
+      if (inProgress && !(await confirmDialog('NEW GAME?', 'The current local game will be lost.', 'NEW GAME'))) return;
+      startLocal(local.state ? local.state.hardMode : false);
+      return;
+    }
+    if (app.mode === 'online') act(TYPES.NEW_GAME);
+  }
+
+  async function backToMenu() {
+    if (app.mode === 'online') {
+      const inGame = app.view && app.view.inProgress && app.view.you.role === 'player';
+      const ok = await confirmDialog(
+        'LEAVE ROOM?',
+        inGame ? 'Your seat stays reserved. Use CONTINUE in the menu to come back.' : 'You will leave this room.',
+        'LEAVE',
+      );
+      if (!ok) return;
+      if (inGame) {
+        // Keep the session so CONTINUE can resume the seat.
+        const session = load(STORAGE.session, null);
+        net.intentionalClose = true;
+        closeSocket();
+        setNetStatus('offline');
+        if (session) save(STORAGE.session, session);
+      } else {
+        leaveOnline();
+      }
+    }
+    if (app.mode === 'local') saveLocal();
+    app.mode = null;
+    app.view = null;
+    app.replay = null;
+    $('gameOver').classList.add('hidden');
+    setRoomInUrl('');
+    showMenuPanel('menuMain');
+  }
+
+  function exportPgn() {
+    const view = app.view;
+    if (!view || !view.gameOver) {
+      toast('PGN is available after the game.');
+      return;
+    }
+    const pgn = rl.buildPgn({
+      moves: view.moves,
+      winner: view.winner,
+      gameOver: view.gameOver,
+      result: view.result,
+      hardMode: view.hardMode,
+      white: playerName('w').replace(/ \(White\)$/, ''),
+      black: playerName('b').replace(/ \(Black\)$/, ''),
+      site: window.location.origin,
+      date: app.archiveDate || Date.now(),
+    });
+    const filename = `blendchess-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.pgn`;
+    try {
+      const url = URL.createObjectURL(new Blob([pgn], { type: 'application/x-chess-pgn' }));
+      const link = el('a', { href: url, download: filename });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('PGN saved.');
+    } catch {
+      navigator.clipboard.writeText(pgn).then(() => toast('PGN copied.'), () => toast('Could not export the PGN.', 'bad'));
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Replay and archive
+  // ---------------------------------------------------------------------------
+
+  function buildPositions(moves) {
+    let board = core.createInitialBoard();
+    let enPassant = null;
+    let turn = 'w';
+    const positions = [{ board, lastMove: null, capture: null }];
+    for (const ply of moves) {
+      if (ply.forfeit || !ply.from || !ply.to) {
+        enPassant = null;
+        turn = core.otherColor(turn);
+        positions.push({ board, lastMove: null, capture: null, forfeit: true });
+        continue;
+      }
+      const legal = core.generateLegalMoves(board, turn, enPassant).find((move) => same(move.from, ply.from)
+        && same(move.to, ply.to)
+        && (move.promotion || null) === (ply.promotion || null));
+      if (!legal) break;
+      const next = core.applyMove(board, legal, enPassant);
+      board = next.board;
+      enPassant = next.enPassant;
+      turn = core.otherColor(turn);
+      positions.push({ board, lastMove: { from: ply.from, to: ply.to }, capture: ply.capture });
+    }
+    return positions;
+  }
+
+  function startReplay(index = null) {
+    if (!app.view || !app.view.revealed) return;
+    const positions = buildPositions(app.view.moves);
+    app.replay = { positions, index: index == null ? positions.length - 1 : Math.max(0, Math.min(index, positions.length - 1)) };
+    app.selected = null;
+    render();
+  }
+
+  function stepReplay(where) {
+    if (!app.replay) return;
+    const last = app.replay.positions.length - 1;
+    const target = {
+      first: 0,
+      prev: app.replay.index - 1,
+      next: app.replay.index + 1,
+      last,
+    }[where];
+    const index = Math.max(0, Math.min(last, typeof where === 'number' ? where : target));
+    if (index === app.replay.index) return;
+    app.replay.index = index;
+    const position = app.replay.positions[index];
+    if (position.capture) sfx.play('capture');
+    else if (position.forfeit) sfx.play('illegal');
+    else sfx.play('move');
+    if (position.lastMove && where === 'next') app.animate = position.lastMove;
+    render();
+  }
+
+  function archiveGame(view, key) {
+    if (!view.revealed || !view.moves.length || app.mode === 'archive') return;
+    const archive = load(STORAGE.archive, []);
+    if (archive.some((entry) => entry.key === key && entry.plies === view.moves.length)) return;
+    const entry = {
+      key,
+      plies: view.moves.length,
+      at: Date.now(),
+      mode: app.mode,
+      white: playerName('w', view).replace(/ \(White\)$/, ''),
+      black: playerName('b', view).replace(/ \(Black\)$/, ''),
+      winner: view.winner,
+      result: view.result,
+      hardMode: view.hardMode,
+      moves: view.moves,
+    };
+    save(STORAGE.archive, [entry, ...archive.filter((item) => item.key !== key)].slice(0, ARCHIVE_MAX));
+  }
+
+  function renderArchiveList() {
+    const archive = load(STORAGE.archive, []);
+    const list = $('archiveList');
+    if (!archive.length) {
+      list.replaceChildren(el('li', { class: 'archive-empty', text: 'No finished games yet. Go make some history!' }));
+      return;
+    }
+    list.replaceChildren(...archive.map((entry) => el('li', {}, el('button', {
+      class: 'archive-item',
+      type: 'button',
+      onclick: () => openArchived(entry),
+    },
+    el('span', { class: 'archive-players', text: `${entry.white} vs ${entry.black}` }),
+    el('span', { class: 'archive-result', text: entry.winner === 'White' ? '1-0' : entry.winner === 'Black' ? '0-1' : '½-½' }),
+    el('span', {
+      class: 'archive-meta',
+      text: `${new Date(entry.at).toLocaleString()} · ${entry.mode === 'local' ? 'local' : 'online'} · ${Math.ceil(entry.plies / 2)} moves${entry.hardMode ? ' · hard' : ''}`,
+    })))));
+  }
+
+  function openArchived(entry) {
+    sfx.play('click');
+    const positions = buildPositions(entry.moves);
+    enterGame('archive');
+    app.archiveDate = entry.at;
+    app.view = {
+      roomCode: 'ARCHIVE',
+      gameId: 0,
+      boardVersion: 0,
+      you: { role: 'spectator', color: null },
+      revealed: true,
+      turn: entry.moves.length % 2 ? 'b' : 'w',
+      board: positions[positions.length - 1].board,
+      moves: entry.moves,
+      events: [],
+      captured: {
+        w: entry.moves.filter((ply) => ply.capture && ply.color === 'b').length,
+        b: entry.moves.filter((ply) => ply.capture && ply.color === 'w').length,
+      },
+      check: null,
+      drawOffer: null,
+      gameOver: true,
+      winner: entry.winner,
+      result: entry.result,
+      hardMode: entry.hardMode,
+      spectatorView: 'open',
+      waitingForStart: false,
+      inProgress: false,
+      players: [
+        { color: 'w', nickname: entry.white, connected: true },
+        { color: 'b', nickname: entry.black, connected: true },
+      ],
+      spectatorCount: 0,
+    };
+    app.replay = { positions, index: 0 };
+    render();
+    umpireSay(`${entry.white} vs ${entry.black}. ${entry.winner ? `${entry.winner} won ${RESULT_TEXT[entry.result] || ''}.` : RESULT_TEXT[entry.result] || 'Drawn.'} Step through with the arrows.`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rendering: bars, side panel, actions, overlays
+  // ---------------------------------------------------------------------------
+
+  function renderBar(node, color) {
+    const view = app.view;
+    if (!view) {
+      node.replaceChildren();
+      return;
+    }
+    const seat = view.players.find((player) => player.color === color);
+    const isMe = myColor() === color && app.mode !== 'local';
+    const toMove = !view.gameOver && !view.waitingForStart && view.turn === color && !app.replay;
+    let name = app.mode === 'local' ? colorName(color).toUpperCase() : (seat ? seat.nickname : 'Waiting...');
+    if (isMe) name += ' (YOU)';
+    const sub = [];
+    if (app.mode === 'online') {
+      sub.push(el('span', { class: `presence ${seat && seat.connected ? '' : 'off'}`, 'aria-hidden': 'true' }));
+      sub.push(seat ? (seat.connected ? colorName(color) : `${colorName(color)}, disconnected`) : `${colorName(color)}, empty seat`);
+    } else {
+      sub.push(app.mode === 'local' && color === local.viewer && !local.curtain ? 'your pieces' : colorName(color));
+    }
+    const lost = view.captured[color] || 0;
+    node.classList.toggle('to-move', toMove);
+    node.replaceChildren(...[
+      el('img', { class: 'avatar', src: sprites.piece(color, 'K'), alt: '' }),
+      el('div', { class: 'player-info' }, el('span', { class: 'player-name', text: name }), el('span', { class: 'player-sub' }, sub)),
+      toMove ? el('span', { class: 'turn-badge', text: myColor() === color ? 'YOUR MOVE' : 'TO MOVE' }) : null,
+      lost ? el('span', { class: 'taken', title: `${lost} ${colorName(color)} piece${lost > 1 ? 's' : ''} captured` }, el('img', { src: sprites.piece(color, 'P'), alt: '' }), `-${lost}`) : null,
+    ].filter(Boolean));
   }
 
   function renderMoves() {
-    moveListInlineEl.replaceChildren();
-    const activePly = replay.active ? replay.ply : getCurrentPly();
-    for (const move of state.movePairs) {
-      const whitePly = ((move.num - 1) * 2) + 1;
-      const blackPly = whitePly + 1;
-
-      // Move number
-      const numSpan = document.createElement('span');
-      numSpan.className = 'move-number';
-      numSpan.textContent = `${move.num}.`;
-      moveListInlineEl.appendChild(numSpan);
-
-      // White move
-      if (move.white) {
-        const whiteSpan = document.createElement('span');
-        whiteSpan.className = 'move-cell';
-        whiteSpan.textContent = formatMoveForViewer(move.white, 'w');
-        if (whiteSpan.textContent === MASKED_MOVE_TEXT) {
-          whiteSpan.classList.add('masked');
-        }
-        if (state.gameOver) {
-          whiteSpan.classList.add('clickable');
-          whiteSpan.addEventListener('click', () => setReplayPly(whitePly));
-        }
-        if (activePly === whitePly) {
-          whiteSpan.classList.add('active');
-        }
-        moveListInlineEl.appendChild(whiteSpan);
-      }
-
-      // Black move
-      if (move.black) {
-        const blackSpan = document.createElement('span');
-        blackSpan.className = 'move-cell';
-        blackSpan.textContent = formatMoveForViewer(move.black, 'b');
-        if (blackSpan.textContent === MASKED_MOVE_TEXT) {
-          blackSpan.classList.add('masked');
-        }
-        if (state.gameOver) {
-          blackSpan.classList.add('clickable');
-          blackSpan.addEventListener('click', () => setReplayPly(blackPly));
-        }
-        if (activePly === blackPly) {
-          blackSpan.classList.add('active');
-        }
-        moveListInlineEl.appendChild(blackSpan);
-      }
-    }
-
-    // Auto-scroll to bottom
-    moveListInlineEl.scrollTop = moveListInlineEl.scrollHeight;
-
-    if (exportPgnEl) {
-      exportPgnEl.disabled = !state.gameOver;
-    }
-    updateReplayBannerAndControls();
-  }
-
-  function renderStatus() {
-    updateModeText();
-    let status = '';
-    const replaySnapshot = replay.active ? getReplaySnapshot(replay.ply) : null;
-    const boardState = replaySnapshot ? replaySnapshot.board : state.board;
-    const boardTurn = replaySnapshot ? replaySnapshot.turn : state.turn;
-    const inCheckNow = boardTurn
-      ? isInCheck(boardState, boardTurn) && (!state.gameOver || replay.active)
-      : false;
-    if (state.gameOver) {
-      if (state.result === 'resign') {
-        status = `${state.winner} wins by resignation.`;
-      } else if (state.result === 'illegalForfeit') {
-        status = `${state.winner} wins by hard-mode forfeit.`;
-      } else if (state.result === 'kingCaptured') {
-        status = state.winner
-          ? `${state.winner} wins by king capture.`
-          : 'Game ended: king missing from board.';
-      } else if (state.result === 'stalemate') {
-        status = 'Game ended in stalemate.';
-      } else if (state.result === 'seventyFiveMove') {
-        status = 'Game ended in a 75-move draw.';
-      } else if (state.result === 'fivefold') {
-        status = 'Game ended in a fivefold repetition draw.';
-      } else if (state.result === 'fiftyMove') {
-        status = 'Game ended in a 50-move draw.';
-      } else if (state.result === 'threefold') {
-        status = 'Game ended in a threefold repetition draw.';
-      } else if (state.result === 'insufficientMaterial') {
-        status = 'Game ended in an insufficient material draw.';
-      } else if (state.result) {
-        status = `Game ended in a draw (${state.result}).`;
-      } else if (state.winner) {
-        status = `${state.winner} wins by checkmate.`;
-      } else {
-        status = 'Game over.';
-      }
-    } else if (isOnlineMode()) {
-      if (isSpectatorMode()) {
-        status = 'Spectating live game.';
-      } else if (inCheckNow && multiplayer.color && boardTurn === multiplayer.color) {
-        status = `CHECK. Your ${colorName(boardTurn)} king is under attack.`;
-      } else if (isMyTurn()) {
-        status = `${toMoveColorFromState()} to move.`;
-      } else if (multiplayer.color) {
-        status = `You are ${colorName(multiplayer.color)}. Waiting for opponent move.`;
-      } else {
-        status = 'Waiting for seat assignment.';
-      }
-    } else if (inCheckNow) {
-      status = `${toMoveColorFromState()} is in check.`;
-    } else {
-      status = `${toMoveColorFromState()} to move.`;
-    }
-    statusEl.textContent = status;
-    statusEl.classList.remove('status-check', 'status-turn', 'status-waiting');
-    const canShowTurnStatus = !state.gameOver
-      && !replay.active
-      && !isSpectatorMode()
-      && (
-        !isOnlineMode()
-        || (multiplayer.connected && Boolean(multiplayer.roomCode) && Boolean(multiplayer.color))
-      );
-    if (inCheckNow) {
-      statusEl.classList.add('status-check');
-    } else if (canShowTurnStatus && isMyTurn()) {
-      statusEl.classList.add('status-turn');
-    } else if (isOnlineMode() && !state.gameOver && !isSpectatorMode()) {
-      statusEl.classList.add('status-waiting');
-    }
-
-    if (checkAlertEl) {
-      checkAlertEl.classList.remove('turn-alert');
-      if (inCheckNow) {
-        checkAlertEl.hidden = false;
-        checkAlertEl.textContent = `CHECK: ${colorName(boardTurn)}`;
-      } else if (canShowTurnStatus && isMyTurn()) {
-        checkAlertEl.hidden = false;
-        checkAlertEl.classList.add('turn-alert');
-        checkAlertEl.textContent = `YOUR TURN: ${colorName(boardTurn)}`;
-      } else {
-        checkAlertEl.hidden = true;
-        checkAlertEl.textContent = 'CHECK';
-      }
-    }
-    capturesEl.textContent = `White pieces lost: ${state.captured.w}, Black pieces lost: ${state.captured.b}`;
-    syncMultiplayerPanel();
-  }
-
-  function isMyTurn() {
-    const activeColor = getActiveColor();
-    if (!activeColor) {
-      return false;
-    }
-    return state.turn === activeColor;
-  }
-
-  function evaluateAfterTurnChange() {
-    evaluateTerminalState();
-  }
-
-  function checkAfterLegalMove() {
-    const opponent = state.turn;
-    evaluateTerminalState();
-    if (state.gameOver) {
+    const view = app.view;
+    const list = $('movesList');
+    if (!view || !view.moves.length) {
+      list.replaceChildren(el('li', { class: 'empty-note', text: 'No moves yet.' }));
       return;
     }
-
-    if (isInCheck(state.board, opponent)) {
-      addEvent(`${colorName(opponent)} is in check.`, {
-        color: opponent,
-        move: getCurrentPly(),
-      });
-    }
-  }
-
-  function hydrateGameState(snapshot) {
-    if (!snapshot || typeof snapshot !== 'object') {
-      return false;
-    }
-
-    const base = newGameState();
-    const incomingVersion = Number.isInteger(snapshot.boardVersion) ? snapshot.boardVersion : null;
-    const currentVersion = Number.isInteger(state.boardVersion) ? state.boardVersion : null;
-
-    if (!shouldHydrateSnapshotVersion(incomingVersion, currentVersion)) {
-      return false;
-    }
-
-    if (Number.isInteger(incomingVersion) && Number.isInteger(currentVersion)) {
-      if (incomingVersion > currentVersion + 1 && isOnlineMode()) {
-        addEvent('Detected missed updates; applied latest server snapshot.');
-      }
-    }
-
-    if (isOnlineMode()) {
-      multiplayer.awaitingStateSync = false;
-    }
-
-    state = {
-      ...base,
-      board: snapshot.board ? cloneBoard(snapshot.board) : base.board,
-      turn: snapshot.turn || base.turn,
-      enPassant: snapshot.enPassant ? { ...snapshot.enPassant } : null,
-      moveNumber: snapshot.moveNumber || base.moveNumber,
-      movePairs: snapshot.movePairs
-        ? snapshot.movePairs.map((item) => ({ ...item }))
-        : base.movePairs,
-      events: snapshot.events
-        ? snapshot.events.map((entry) => normalizeEventEntry(entry))
-        : base.events,
-      captured: snapshot.captured ? { ...snapshot.captured } : base.captured,
-      winner: snapshot.winner || null,
-      result: snapshot.result || null,
-      gameOver: Boolean(snapshot.gameOver),
-      halfMoveClock: Number.isInteger(snapshot.halfMoveClock) ? snapshot.halfMoveClock : base.halfMoveClock,
-      boardVersion: Number.isInteger(snapshot.boardVersion) ? snapshot.boardVersion : base.boardVersion,
-      positionCounts: snapshot.positionCounts
-        ? { ...snapshot.positionCounts }
-        : base.positionCounts,
-      hardMode: typeof snapshot.hardMode === 'boolean'
-        ? snapshot.hardMode
-        : hardModeEl.checked,
-      selected: null,
-    };
-
-    hardModeEl.checked = state.hardMode;
-
-    return true;
-  }
-
-  function requestStateSync(reason = '') {
-    if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode || multiplayer.awaitingStateSync) {
-      return;
-    }
-
-    multiplayer.awaitingStateSync = true;
-    if (reason) {
-      addEvent(reason);
-      render();
-    }
-
-    const sent = sendSocketMessage(WEBSOCKET_TYPES.GAME_STATE, {}, multiplayer.roomCode);
-    if (!sent) {
-      multiplayer.awaitingStateSync = false;
-    }
-  }
-
-  function syncFromRoomPayload(messagePayload) {
-    if (!messagePayload?.game) {
-      return;
-    }
-    if (Array.isArray(messagePayload.players)) {
-      multiplayer.players = messagePayload.players;
-    }
-    if (Array.isArray(messagePayload.spectators)) {
-      multiplayer.spectators = messagePayload.spectators;
-    }
-    if (Array.isArray(messagePayload.game.players)) {
-      multiplayer.players = messagePayload.game.players;
-    }
-    if (Array.isArray(messagePayload.game.spectators)) {
-      multiplayer.spectators = messagePayload.game.spectators;
-    }
-    if (!hydrateGameState(messagePayload.game)) {
-      return;
-    }
-    render();
-  }
-
-  function applyRosterFromPayload(payload = {}) {
-    if (!payload || typeof payload !== 'object') {
-      return;
-    }
-    if (Array.isArray(payload.players)) {
-      multiplayer.players = payload.players;
-    } else if (Array.isArray(payload?.game?.players)) {
-      multiplayer.players = payload.game.players;
-    }
-
-    if (Array.isArray(payload.spectators)) {
-      multiplayer.spectators = payload.spectators;
-    } else if (Array.isArray(payload?.game?.spectators)) {
-      multiplayer.spectators = payload.game.spectators;
-    }
-  }
-
-  function getNormalizedDrawReason(input) {
-    const normalized = typeof input === 'string'
-      ? input.trim().toLowerCase().replace(/[^a-z]/g, '')
-      : '';
-    if (!normalized) {
-      return '';
-    }
-    return DRAW_REASON_ALIASES[normalized] || '';
-  }
-
-  function evaluateDrawEligibility(currentState, requestedReason = '') {
-    const claims = {
-      fivefold: isFivefoldRepetition(currentState),
-      seventyFiveMove: isSeventyFiveMoveRule(currentState),
-      threefold: isThreefoldRepetition(currentState),
-      fiftyMove: isFiftyMoveRule(currentState),
-      insufficientMaterial: isInsufficientMaterial(currentState.board),
-    };
-
-    if (requestedReason) {
-      return claims[requestedReason] ? requestedReason : '';
-    }
-
-    return claims.fivefold
-      ? 'fivefold'
-      : claims.seventyFiveMove
-        ? 'seventyFiveMove'
-        : claims.threefold
-          ? 'threefold'
-          : claims.fiftyMove
-            ? 'fiftyMove'
-            : claims.insufficientMaterial
-              ? 'insufficientMaterial'
-              : '';
-  }
-
-  function applyPlayerIdentity(message, payload = {}) {
-    if (payload.role === 'spectator') {
-      multiplayer.role = 'spectator';
-      multiplayer.color = null;
-      multiplayer.playerId = null;
-      multiplayer.spectatorId = payload.spectatorId || null;
-      multiplayer.resumeToken = null;
-    }
-
-    const nextPlayerId = payload.role === 'spectator' ? '' : (message?.playerId || payload.playerId);
-    if (nextPlayerId) {
-      multiplayer.playerId = nextPlayerId;
-    }
-
-    if (payload.color) {
-      multiplayer.color = payload.color;
-      multiplayer.role = 'player';
-      multiplayer.spectatorId = null;
-    }
-
-    if (payload.resumeToken) {
-      multiplayer.resumeToken = payload.resumeToken;
-    }
-
-    const roster = payload?.players || payload?.game?.players;
-    // Always trust the server's roster for color — overrides stale local cache
-    if (roster && multiplayer.playerId) {
-      const match = roster.find((player) => player.playerId === multiplayer.playerId);
-      if (match?.color) {
-        multiplayer.color = match.color;
-        multiplayer.role = 'player';
-        multiplayer.spectatorId = null;
-      }
-    }
-
-    applyRosterFromPayload(payload);
-
-    updateOnlineSessionPersistence();
-  }
-
-  function pickPromotionFromOptions(promotionMoves) {
-    return new Promise((resolve) => {
-      const options = [...new Set(promotionMoves.map((move) => move.promotion).filter(Boolean))];
-      const color = promotionMoves[0]?.piece?.color || state.turn;
-
-      promotionPiecesEl.replaceChildren();
-      for (const opt of options) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        const svgEl = createPieceSvgElement(color, opt);
-        if (svgEl) {
-          svgEl.style.width = '52px';
-          svgEl.style.height = '52px';
-          btn.appendChild(svgEl);
-        } else {
-          btn.textContent = PIECE_SYMBOLS[color][opt];
-        }
-        btn.addEventListener('click', () => {
-          promotionPickerEl.hidden = true;
-          promotionPickerEl.classList.remove('visible');
-          const chosen = promotionMoves.find((move) => move.promotion === opt);
-          resolve(chosen || null);
-        });
-        promotionPiecesEl.appendChild(btn);
-      }
-
-      // Position the picker near the promotion square
-      const toSquare = promotionMoves[0]?.to;
-      if (toSquare) {
-        const boardRect = boardEl.getBoundingClientRect();
-        const sqSize = boardRect.width / 8;
-        const perspectiveColor = getPerspectiveColor();
-        const flipped = perspectiveColor === 'b';
-        const displayC = flipped ? 7 - toSquare.c : toSquare.c;
-        const left = boardRect.left + displayC * sqSize;
-        const top = boardRect.top;
-        promotionPickerEl.style.left = left + 'px';
-        promotionPickerEl.style.top = top + 'px';
-      }
-
-      promotionPickerEl.hidden = false;
-      requestAnimationFrame(() => promotionPickerEl.classList.add('visible'));
+    const mine = myColor();
+    const replayIndex = app.replay ? app.replay.index : -1;
+    const rows = [];
+    view.moves.forEach((ply, index) => {
+      if (index % 2 === 0) rows.push(el('li', {}, el('span', { class: 'move-num', text: `${index / 2 + 1}.` })));
+      const classes = ['ply'];
+      if (ply.color === mine) classes.push('mine');
+      if (ply.forfeit) classes.push('forfeit');
+      if (replayIndex === index + 1) classes.push('current');
+      let content;
+      if (ply.forfeit) content = ['--'];
+      else if (ply.san) content = [ply.san];
+      else content = [el('span', { class: 'masked', title: 'hidden move' })];
+      if (ply.capture && !ply.san) content.push(el('span', { class: 'cap', text: `x${ply.capture.square}` }));
+      const cell = app.replay
+        ? el('button', { class: `${classes.join(' ')} ply-button`, type: 'button', onclick: () => stepReplay(index + 1) }, content)
+        : el('span', { class: classes.join(' ') }, content);
+      rows[rows.length - 1].append(cell);
     });
+    list.replaceChildren(...rows);
+    if (!app.replay) list.scrollTop = list.scrollHeight;
   }
 
-  function applyLocalMove(attempted) {
-    const movePly = getCurrentPly() + 1;
-    const beforeBoard = cloneBoard(state.board);
-    const beforeEnPassant = state.enPassant ? { ...state.enPassant } : null;
-    const outcome = applyMove(state.board, attempted, state.enPassant);
-    state.board = outcome.board;
-    state.enPassant = outcome.enPassant;
-    state.selected = null;
-    if (outcome.captured || attempted.piece.type === 'P') {
-      state.halfMoveClock = 0;
-    } else {
-      state.halfMoveClock += 1;
-    }
-    playMoveFeedback({
-      capture: Boolean(outcome.captured),
-      moverColor: attempted.piece.color,
-      capturedColor: outcome.captured?.color || null,
-    });
-
-    if (outcome.captured) {
-      state.captured[outcome.captured.color] += 1;
-      setCaptureMarkerForPly(movePly, {
-        square: deriveCaptureSquare(attempted.from, attempted.to, Boolean(attempted.enPassant)),
-        moverColor: attempted.piece.color,
-        capturedColor: outcome.captured.color,
-      });
-      addEvent(`${colorName(outcome.captured.color)} piece was taken.`, {
-        color: attempted.piece.color,
-        move: movePly,
-      });
-    }
-
-    const san = moveToSAN(beforeBoard, beforeEnPassant, attempted, state.board, state.enPassant);
-    setMoveHighlightForPly(movePly, {
-      from: attempted.from,
-      to: attempted.to,
-      san,
-    });
-    addMoveRecord(state.turn, san);
-    addEvent(`${toMoveColorFromState()} played ${san}`, {
-      color: attempted.piece.color,
-      move: getCurrentPly(),
-    });
-
-    state.turn = otherColor(state.turn);
-    recordCurrentPosition(state);
-    pendingServerAttempt = null;
-    checkAfterLegalMove();
+  function formatTime(at) {
+    const date = new Date(at);
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   }
 
-  function requestMoveToServer(attempted) {
-    if (!multiplayer.connected) {
-      addEvent('Server is not connected.');
-      render();
+  function renderNews() {
+    const view = app.view;
+    const list = $('newsList');
+    const viewer = myColor();
+    const lines = view ? view.events.map((event) => ({ event, line: describeEvent(event, viewer, view) })).filter((item) => item.line) : [];
+    if (!lines.length) {
+      list.replaceChildren(el('li', { class: 'empty-note', text: 'The umpire has nothing to report.' }));
       return;
     }
-    if (!multiplayer.roomCode || !multiplayer.color) {
-      addEvent('Join a room first.');
-      render();
-      return;
-    }
-    if (!isMyTurn()) {
-      addEvent('It is not your turn.');
-      render();
-      return;
-    }
-
-    const payload = {
-      from: attempted.from,
-      to: attempted.to,
-    };
-
-    if (attempted.promotion) {
-      payload.promotion = attempted.promotion;
-    }
-
-    pendingServerAttempt = {
-      from: { ...attempted.from },
-      to: { ...attempted.to },
-      color: attempted.piece.color,
-      ply: getCurrentPly() + 1,
-    };
-    sendSocketMessage(WEBSOCKET_TYPES.MOVE_INTENT, payload, multiplayer.roomCode);
-    addEvent('Move sent.');
-    state.selected = null;
+    list.replaceChildren(...lines.map(({ event, line }) => el('li', { dataset: { tone: line.tone || '' } },
+      el('span', { class: 'news-time', text: formatTime(event.at) }), line.text)));
+    list.scrollTop = list.scrollHeight;
   }
 
-  function requestRawMoveIntentToServer(from, to, color) {
-    if (!multiplayer.connected || !multiplayer.roomCode || !isMyTurn()) {
-      return false;
-    }
+  function optionToggle(label, checked, locked, onChange) {
+    const input = el('input', { type: 'checkbox' });
+    input.checked = checked;
+    input.disabled = locked;
+    input.addEventListener('change', () => onChange(input.checked));
+    return el('label', { class: `toggle ${locked ? 'locked' : ''}`, title: locked ? 'Locked while a game is in progress' : '' },
+      input, el('span', { class: 'toggle-box', 'aria-hidden': 'true' }), el('span', { class: 'toggle-text', text: label }));
+  }
 
-    pendingServerAttempt = {
-      from: { ...from },
-      to: { ...to },
-      color,
-      ply: getCurrentPly() + 1,
-    };
-    return sendSocketMessage(
-      WEBSOCKET_TYPES.MOVE_INTENT,
-      { from: { ...from }, to: { ...to } },
-      multiplayer.roomCode,
+  function renderRoomPanel() {
+    const panel = $('roomPanel');
+    panel.classList.toggle('hidden', app.mode !== 'online');
+    if (app.mode !== 'online') return;
+    $('roomCode').textContent = net.roomCode || '------';
+    const view = app.view;
+    $('watchers').textContent = view && view.spectatorCount ? `${view.spectatorCount} watching` : '';
+    const options = $('roomOptions');
+    if (!view) {
+      options.replaceChildren();
+      return;
+    }
+    const isPlayer = view.you.role === 'player';
+    const locked = !isPlayer || view.inProgress;
+    options.classList.toggle('hidden', !isPlayer);
+    options.replaceChildren(
+      optionToggle('HARD MODE', view.hardMode, locked, (on) => netSend(TYPES.SET_OPTIONS, { hardMode: on })),
+      optionToggle('PARTY MODE', view.spectatorView === 'open', locked, (on) => netSend(TYPES.SET_OPTIONS, { spectatorView: on ? 'open' : 'fog' })),
     );
   }
 
-  function sendHardModeUpdate(previousHardMode = state.hardMode) {
-    if (!isOnlineMode() || !multiplayer.connected || !multiplayer.roomCode) {
-      return;
-    }
-    if (isSpectatorMode()) {
-      state.hardMode = previousHardMode;
-      hardModeEl.checked = previousHardMode;
-      return;
-    }
-
-    sendSocketMessage(
-      WEBSOCKET_TYPES.SET_HARD_MODE,
-      { enabled: Boolean(state.hardMode) },
-      multiplayer.roomCode,
-    );
-  }
-
-  function handleClaimDraw() {
-    const response = window.prompt(
-      `Enter draw reason (${DRAW_CLAIM_REASONS.join(' | ')}). Leave blank for auto-check.`,
-      '',
-    );
-    if (response === null) {
-      return;
-    }
-
-    const requestedReason = getNormalizedDrawReason(response);
-    if (!isOnlineMode()) {
-      const drawReason = evaluateDrawEligibility(state, requestedReason);
-      if (!drawReason) {
-        addEvent('No valid draw claim available.');
-        render();
-        return;
-      }
-
-      state.gameOver = true;
-      state.winner = null;
-      state.result = drawReason;
-      addEvent(`Draw claimed: ${drawReason}.`);
-      render();
-      return;
-    }
-
-    if (!multiplayer.connected || !multiplayer.roomCode) {
-      addEvent('Join a room first.');
-      render();
-      return;
-    }
-
-    const payload = {
-      reason: requestedReason,
-    };
-    sendSocketMessage(WEBSOCKET_TYPES.CLAIM_DRAW, payload, multiplayer.roomCode);
-    addEvent('Draw requested.');
-    render();
-  }
-
-  function applyLocalResignation(resigningColor) {
-    if (state.gameOver) {
-      return;
-    }
-
-    const color = resigningColor === 'w' || resigningColor === 'b' ? resigningColor : state.turn;
-    const winnerColor = otherColor(color);
-    state.gameOver = true;
-    state.winner = colorName(winnerColor);
-    state.result = 'resign';
-    state.selected = null;
-    addEvent(`${colorName(color)} resigned. ${state.winner} wins.`, {
-      color,
-      move: getCurrentPly(),
+  function actionButton(label, onclick, { kind = '', disabled = false, pulse = false } = {}) {
+    return el('button', {
+      class: `px-btn ${kind} ${pulse ? 'pulse' : ''}`,
+      type: 'button',
+      text: label,
+      disabled,
+      onclick,
     });
   }
 
-  function handleResign() {
-    if (isSpectatorMode()) {
-      addEvent('Spectators cannot resign.');
-      render();
+  function renderActions() {
+    const container = $('actions');
+    const view = app.view;
+    if (!view) {
+      container.replaceChildren(actionButton('MENU', backToMenu, { kind: 'ghost' }));
       return;
     }
-
-    if (state.gameOver) {
-      render();
-      return;
+    const buttons = [];
+    const isPlayer = app.mode === 'local' || (app.mode === 'online' && view.you.role === 'player');
+    const opponentOffered = view.drawOffer && view.drawOffer !== myColor();
+    if (app.replay) {
+      if (app.mode !== 'archive') buttons.push(actionButton('BACK TO GAME', () => { app.replay = null; render(); }));
+      buttons.push(actionButton('PGN', exportPgn));
+    } else if (!view.gameOver && isPlayer) {
+      const playing = app.mode === 'local' ? !local.curtain : !view.waitingForStart;
+      buttons.push(actionButton(opponentOffered ? 'ACCEPT DRAW' : 'OFFER DRAW', () => act(TYPES.CLAIM_DRAW), {
+        disabled: !playing || (app.mode === 'online' && net.status !== 'online'),
+        pulse: Boolean(opponentOffered),
+        kind: opponentOffered ? 'primary' : '',
+      }));
+      buttons.push(actionButton('RESIGN', resignAction, { kind: 'danger', disabled: !playing }));
+      if (app.mode === 'local') buttons.push(actionButton('NEW GAME', newGame));
+    } else if (view.gameOver) {
+      buttons.push(actionButton('REPLAY', () => startReplay(0)));
+      buttons.push(actionButton('PGN', exportPgn));
+      if (isPlayer) buttons.push(actionButton(app.mode === 'local' ? 'NEW GAME' : 'REMATCH', newGame, { kind: 'primary', disabled: app.mode === 'online' && net.status !== 'online' }));
     }
-
-    const confirmed = window.confirm('Resign this game?');
-    if (!confirmed) {
-      return;
-    }
-
-    if (isOnlineMode() && multiplayer.connected && multiplayer.roomCode) {
-      sendSocketMessage(WEBSOCKET_TYPES.RESIGN, {}, multiplayer.roomCode);
-      return;
-    }
-
-    applyLocalResignation(getActiveColor() || state.turn);
-    render();
+    buttons.push(actionButton(app.mode === 'online' ? 'LEAVE' : 'MENU', backToMenu, { kind: 'ghost' }));
+    container.replaceChildren(...buttons);
   }
 
-  async function handleSquareClick(r, c) {
-    unlockAudio();
+  function renderOverlays() {
+    const view = app.view;
+    const waiting = $('waiting');
+    $('curtain').classList.toggle('hidden', !(app.mode === 'local' && local.curtain));
 
-    if (state.gameOver) {
-      showTransientBanner('Game over. Start a new game to continue.');
-      return;
-    }
-
-    const activeColor = getActiveColor();
-    if (!activeColor) {
-      if (isSpectatorMode()) {
-        showTransientBanner('Spectator mode: moves disabled.');
-        return;
-      }
-      addEvent(isOnlineMode() ? 'Join a room before moving.' : 'No playable color found.');
-      render();
-      return;
-    }
-
-    if (!isMyTurn() && isOnlineMode()) {
-      addEvent('Wait for your turn.');
-      state.selected = null;
-      render();
-      return;
-    }
-
-    const clickedPiece = state.board[r][c];
-    if (!state.selected) {
-      if (clickedPiece && clickedPiece.color === activeColor) {
-        state.selected = { r, c };
-        renderBoard();
-      }
-      return;
-    }
-
-    const from = state.selected;
-    if (from.r === r && from.c === c) {
-      state.selected = null;
-      renderBoard();
-      return;
-    }
-
-    if (clickedPiece && clickedPiece.color === activeColor && !(from.r === r && from.c === c)) {
-      state.selected = { r, c };
-      renderBoard();
-      return;
-    }
-
-    const legalMoves = generateLegalMoves(state.board, state.turn, state.enPassant);
-    const matchingMoves = legalMoves.filter(
-      (move) => move.from.r === from.r && move.from.c === from.c && move.to.r === r && move.to.c === c,
-    );
-    const promotionMoveSet = matchingMoves.filter((move) => move.promotion);
-    let attempted;
-    if (promotionMoveSet.length) {
-      attempted = await pickPromotionFromOptions(promotionMoveSet);
-    } else {
-      attempted = matchingMoves[0];
-    }
-    if (!attempted && promotionMoveSet.length) {
-      state.selected = null;
-      render();
-      return;
-    }
-
-    if (!attempted) {
-      const message = `${toMoveColorFromState()} attempted an illegal move ${squareName(from)} to ${squareName({ r, c })}`;
-      const reason = moveRejectionReason(from, { r, c });
-      const illegalPly = getCurrentPly() + 1;
-      const illegalColor = state.turn;
-      if (isOnlineMode()) {
-        const sent = requestRawMoveIntentToServer(from, { r, c }, illegalColor);
-        if (sent) {
-          showTransientBanner(`Checking ${squareName(from)} → ${squareName({ r, c })}...`);
-          addEvent(`${message}. Sent to server for validation.`, {
-            color: illegalColor,
-            move: illegalPly,
-          });
-        } else {
-          addEvent('Could not send move to server.', {
-            color: illegalColor,
-            move: illegalPly,
-          });
-        }
-        state.selected = null;
-        render();
-        return;
-      }
-
-      recordIllegalAttempt(from, { r, c }, reason, illegalColor, illegalPly);
-      if (state.hardMode) {
-        state.selected = null;
-        if (isInCheck(state.board, illegalColor)) {
-          addEvent(`${message}; ${reason} You are in check. Choose a legal move.`, {
-            color: illegalColor,
-            move: illegalPly,
-          });
-          showIllegalMoveBanner(from, { r, c }, reason);
-        } else {
-          addEvent(`${message}; ${reason} Turn forfeited.`, {
-            color: illegalColor,
-            move: illegalPly,
-          });
-          state.turn = otherColor(state.turn);
-          showIllegalMoveBanner(from, { r, c }, reason, state.turn);
-          evaluateAfterTurnChange();
-        }
-        render();
-      } else {
-        showIllegalMoveBanner(from, { r, c }, reason);
-        addEvent(`${message}. ${reason}`, {
-          color: illegalColor,
-          move: illegalPly,
-        });
-        state.selected = null;
-        render();
-      }
-      return;
-    }
-
-    state.selected = null;
-    if (isOnlineMode()) {
-      requestMoveToServer(attempted);
-      render();
-      return;
-    }
-
-    applyLocalMove(attempted);
-    render();
-  }
-
-  function sendSocketMessage(type, payload = {}, roomCode = '') {
-    if (!multiplayer.socket || multiplayer.socket.readyState !== WebSocket.OPEN) {
-      addEvent('Cannot send message: socket is not open.');
-      render();
-      return false;
-    }
-
-    const message = {
-      type,
-      roomCode: roomCode || multiplayer.roomCode,
-      playerId: multiplayer.playerId || '',
-      payload,
-      version: PROTOCOL_VERSION,
-    };
-
-    if (type === WEBSOCKET_TYPES.CREATE_ROOM) {
-      delete message.roomCode;
-      delete message.playerId;
-    }
-    multiplayer.socket.send(JSON.stringify(message));
-    return true;
-  }
-
-  function disconnectSocket() {
-    if (multiplayer.connectPromise) {
-      multiplayer.connectPromise = null;
-    }
-    clearPendingRoomAction();
-    clearHeartbeatTimer();
-    if (!multiplayer.socket) {
-      multiplayer.connected = false;
-      multiplayer.awaitingStateSync = false;
-      return;
-    }
-
-    const socket = multiplayer.socket;
-    multiplayer.socket = null;
-    socket.onopen = null;
-    socket.onmessage = null;
-    socket.onclose = null;
-    socket.onerror = null;
-    multiplayer.awaitingStateSync = false;
-    multiplayer.waitingForPong = false;
-    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
-      socket.close();
-    }
-    multiplayer.connected = false;
-  }
-
-  function connectSocket() {
-    if (multiplayer.connectPromise) {
-      return multiplayer.connectPromise;
-    }
-    if (
-      multiplayer.socket
-      && multiplayer.connected
-      && multiplayer.socket.readyState === WebSocket.OPEN
-    ) {
-      return Promise.resolve();
-    }
-
-    const nextServerUrl = serverUrlEl.value.trim() || DEFAULT_SERVER_URL;
-    if (!nextServerUrl) {
-      multiplayerStatusEl.textContent = 'Enter a valid WebSocket URL.';
-      return Promise.reject(new Error('Invalid server URL.'));
-    }
-
-    multiplayer.socketUrl = nextServerUrl;
-    saveServerUrl(nextServerUrl);
-    disconnectSocket();
-    syncMultiplayerControlState();
-
-    multiplayer.connectPromise = new Promise((resolve, reject) => {
-      const socket = new WebSocket(nextServerUrl);
-      multiplayer.socket = socket;
-      let settled = false;
-      const isCurrentSocket = () => multiplayer.socket === socket;
-      const settleResolve = () => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve();
-      };
-      const settleReject = (error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        reject(error);
-      };
-
-      socket.addEventListener('open', () => {
-        if (!isCurrentSocket()) {
-          return;
-        }
-        multiplayer.connected = true;
-        multiplayer.reconnectAttempts = 0;
-        clearReconnectTimer();
-        multiplayer.connectPromise = null;
-        multiplayerStatusEl.textContent = `Connected to ${nextServerUrl}.`;
-        markSocketActivity();
-        startHeartbeatLoop();
-        syncMultiplayerControlState();
-        syncMultiplayerPanel();
-        settleResolve();
-      });
-
-      socket.addEventListener('message', (messageEvent) => {
-        if (!isCurrentSocket()) {
-          return;
-        }
-        markSocketActivity();
-        handleServerMessage(messageEvent);
-      });
-      socket.addEventListener('error', () => {
-        if (!isCurrentSocket()) {
-          return;
-        }
-        multiplayer.connected = false;
-        multiplayer.connectPromise = null;
-        multiplayerStatusEl.textContent = 'Socket error while connecting.';
-        clearHeartbeatTimer();
-        syncMultiplayerControlState();
-        settleReject(new Error('WebSocket error.'));
-      });
-
-      socket.addEventListener('close', () => {
-        if (!isCurrentSocket()) {
-          return;
-        }
-        const wasConnected = multiplayer.connected;
-        const wasOnline = isOnlineMode();
-        const hadRoom = Boolean(multiplayer.roomCode);
-        const shouldAutoReconnect = wasOnline && hadRoom && !multiplayer.intentionalLeave;
-        multiplayer.connected = false;
-        multiplayer.connectPromise = null;
-        multiplayer.socket = null;
-        multiplayer.awaitingStateSync = false;
-        clearPendingRoomAction();
-        clearHeartbeatTimer();
-        if (wasOnline) {
-          syncMultiplayerPanel();
-          render();
-        }
-        syncMultiplayerControlState();
-        if (!wasConnected) {
-          settleReject(new Error('WebSocket closed before connecting.'));
-        }
-        if (shouldAutoReconnect) {
-          scheduleAutoReconnect();
-        }
-      });
-    });
-
-    return multiplayer.connectPromise;
-  }
-
-  function handleServerMessage(event) {
-    let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch {
-      addEvent('Received invalid JSON from server.');
-      render();
-      return;
-    }
-
-    const { type, payload = {} } = message;
-    markSocketActivity();
-    if (type === WEBSOCKET_TYPES.ROOM_CREATED) {
-      clearPendingRoomAction();
-      multiplayer.roomCode = normalizeRoomCode(message.roomCode || payload.roomCode);
-      applyPlayerIdentity(message, payload);
-      multiplayer.role = 'player';
-      multiplayer.spectatorId = null;
-      multiplayer.color = multiplayer.color || payload.playerColor || payload.color;
-      applyRosterFromPayload(payload);
-      multiplayer.intentionalLeave = false;
-      syncFromRoomPayload(message);
-      saveOnlineSession();
-      resetLobbyActionButtons();
-      hideLobby();
-      addEvent(`Room ${multiplayer.roomCode} created. Share this code with your friend.`);
-      joinRoomCodeEl.value = multiplayer.roomCode;
-      copyInviteLinkSilently(multiplayer.roomCode);
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.PLAYER_ASSIGNED) {
-      applyPlayerIdentity(message, payload);
-      multiplayer.role = 'player';
-      multiplayer.spectatorId = null;
-      applyRosterFromPayload(payload);
-      saveOnlineSession();
-      syncMultiplayerPanel();
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.ROOM_JOINED) {
-      clearPendingRoomAction();
-      multiplayer.roomCode = normalizeRoomCode(message.roomCode || payload.roomCode);
-      applyPlayerIdentity(message, payload);
-      if (payload.role === 'spectator') {
-        multiplayer.role = 'spectator';
-        multiplayer.color = null;
-        multiplayer.playerId = null;
-        multiplayer.spectatorId = payload.spectatorId || multiplayer.spectatorId || null;
-      }
-      applyRosterFromPayload(payload);
-      multiplayer.intentionalLeave = false;
-      updateOnlineSessionPersistence();
-      resetLobbyActionButtons();
-      hideLobby();
-      syncMultiplayerPanel();
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.GAME_STATE) {
-      applyRosterFromPayload(payload);
-      if (payload.game) {
-        const accepted = hydrateGameState(payload.game);
-        if (!accepted) {
-          return;
-        }
-      }
-      updateOnlineSessionPersistence();
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.MOVE_APPLIED) {
-      const previousCaptured = { ...state.captured };
-      applyRosterFromPayload(payload);
-      if (payload.game && !hydrateGameState(payload.game)) {
-        return;
-      }
-      const moverColor = payload.color || payload.movedBy || otherColor(state.turn);
-      let capturedColor = null;
-      if (state.captured.w > previousCaptured.w) {
-        capturedColor = 'w';
-      } else if (state.captured.b > previousCaptured.b) {
-        capturedColor = 'b';
-      }
-      const appliedPly = getCurrentPly();
-      if (payload.move?.from && payload.move?.to) {
-        setMoveHighlightForPly(appliedPly, {
-          from: payload.move.from,
-          to: payload.move.to,
-          san: payload.san || '',
-        });
-      }
-      if (capturedColor && payload.move?.from && payload.move?.to) {
-        setCaptureMarkerForPly(appliedPly, {
-          square: deriveCaptureSquare(
-            payload.move.from,
-            payload.move.to,
-            Boolean(payload.move.enPassant),
-          ),
-          moverColor,
-          capturedColor,
-        });
-      }
-      playMoveFeedback({
-        capture: Boolean(capturedColor),
-        moverColor,
-        capturedColor,
-      });
-      pendingServerAttempt = null;
-      if (payload.san) {
-        if (!shouldRevealBoardAndHistory() && moverColor && multiplayer.color && moverColor !== multiplayer.color) {
-          addEvent('Opponent moved ****', {
-            color: moverColor,
-            move: getCurrentPly(),
-          });
-        } else if (moverColor && multiplayer.color && moverColor === multiplayer.color) {
-          addEvent(`You played ${payload.san}`, {
-            color: moverColor,
-            move: getCurrentPly(),
-          });
-        } else {
-          addEvent(`Move played: ${maskMoveText(payload.san)}`, {
-            color: moverColor,
-            move: getCurrentPly(),
-          });
-        }
-      }
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.DRAW_RESULT) {
-      applyRosterFromPayload(payload);
-      if (payload.game && !hydrateGameState(payload.game)) {
-        return;
-      }
-      if (payload.reason) {
-        addEvent(`Draw accepted: ${payload.reason}.`);
-      } else {
-        addEvent('Game drawn.');
-      }
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.RESIGN_RESULT) {
-      applyRosterFromPayload(payload);
-      if (payload.game && !hydrateGameState(payload.game)) {
-        return;
-      }
-      if (payload.winner) {
-        addEvent(`${payload.winner} won by resignation.`);
-      } else {
-        addEvent('Game ended by resignation.');
-      }
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.MOVE_REJECTED) {
-      const pendingColor = pendingServerAttempt?.color || state.turn;
-      const offenderInCheck = pendingColor && isInCheck(state.board, pendingColor);
-      const reason = payload.reasonCode === ERROR_CODES.ILLEGAL_MOVE && offenderInCheck
-        ? 'You are in check. Choose a legal move.'
-        : (ERROR_TEXT[payload.reasonCode] || payload.reasonCode || 'Move rejected by server.');
-      const pendingPly = Number.isInteger(pendingServerAttempt?.ply) ? pendingServerAttempt.ply : (getCurrentPly() + 1);
-      const attemptedFrom = pendingServerAttempt?.from || payload?.moveIntent?.from || null;
-      const attemptedTo = pendingServerAttempt?.to || payload?.moveIntent?.to || null;
-      if (pendingServerAttempt?.from && pendingServerAttempt?.to) {
-        recordIllegalAttempt(
-          pendingServerAttempt.from,
-          pendingServerAttempt.to,
-          reason,
-          pendingColor,
-          pendingPly,
-        );
-      }
-      if (attemptedFrom && attemptedTo) {
-        const forfeitedTurn = payload.forfeited
-          && payload.game
-          && !payload.game.gameOver
-          && (payload.game.turn === 'w' || payload.game.turn === 'b')
-          ? payload.game.turn
-          : null;
-        showIllegalMoveBanner(attemptedFrom, attemptedTo, reason, forfeitedTurn);
-      } else {
-        showTransientBanner(`Illegal move (${reason})`);
-        showIllegalOverlay(reason);
-      }
-      pendingServerAttempt = null;
-      state.selected = null;
-      if (payload.game) {
-        applyRosterFromPayload(payload);
-        hydrateGameState(payload.game);
-      }
-      if (!payload.forfeited) {
-        addEvent(`Move rejected: ${reason}`, {
-          color: pendingColor,
-          move: pendingPly,
-        });
-      }
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.ERROR) {
-      const text = ERROR_TEXT[payload.errorCode] || payload.message || 'Server error.';
-      clearPendingRoomAction();
-      if (payload.errorCode === 'UNKNOWN_ROOM') {
-        clearSavedOnlineSession();
-      }
-      resetLobbyActionButtons();
-      syncMultiplayerControlState();
-      addEvent(`Server error: ${text}`);
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.DRAW_OFFERED) {
-      const offeredBy = payload.offeredBy || '';
-      const offeredByName = offeredBy === 'w' ? 'White' : offeredBy === 'b' ? 'Black' : 'Opponent';
-      if (offeredBy && offeredBy === multiplayer.color) {
-        // This is our own offer confirmation
-        showTransientBanner('Draw offer sent. Waiting for opponent to accept.');
-        addEvent('You offered a draw.');
-      } else {
-        // Opponent offered a draw
-        showTransientBanner(`${offeredByName} offers a draw. Click ½ Draw to accept.`);
-        addEvent(`${offeredByName} offers a draw. Click ½ Draw to accept or ignore to decline.`);
-      }
-      render();
-      return;
-    }
-
-    if (type === WEBSOCKET_TYPES.PONG) {
-      return;
-    }
-  }
-
-  async function handleConnectClick() {
-    try {
-      await connectSocket();
-    } catch (error) {
-      multiplayerStatusEl.textContent = error.message;
-      resetLobbyActionButtons();
-      syncMultiplayerControlState();
-    }
-  }
-
-  function setLobbyButtonLabel(button, text) {
-    if (!button) {
-      return;
-    }
-    const textEl = button.querySelector('.btn-text');
-    if (textEl) {
-      textEl.textContent = text;
-      return;
-    }
-    button.textContent = text;
-  }
-
-  function resetLobbyActionButtons() {
-    setLobbyButtonLabel(createRoomEl, 'Create Room');
-    createRoomEl.classList.remove('btn-loading');
-    setLobbyButtonLabel(joinRoomEl, 'Join Game');
-    joinRoomEl.classList.remove('btn-loading');
-    if (spectateRoomEl) {
-      setLobbyButtonLabel(spectateRoomEl, '👁 Spectate');
-      spectateRoomEl.classList.remove('btn-loading');
-    }
-  }
-
-  function ensureOnlineModeSelected() {
-    if (isOnlineMode()) {
-      return;
-    }
-    playModeEl.value = 'online';
-    setMode('online');
-  }
-
-  async function handleCreateRoom() {
-    const btn = createRoomEl;
-    try {
-      ensureOnlineModeSelected();
-      setLobbyButtonLabel(btn, 'Creating...');
-      btn.classList.add('btn-loading');
-
-      // If already in a room, leave it first
-      if (multiplayer.roomCode) {
-        multiplayer.intentionalLeave = true;
-        clearSavedOnlineSession();
-        clearReconnectTimer();
-        disconnectSocket();
-        multiplayer.roomCode = '';
-        multiplayer.playerId = null;
-        multiplayer.resumeToken = null;
-        multiplayer.color = null;
-        multiplayer.role = 'player';
-        multiplayer.spectatorId = null;
-        multiplayer.players = [];
-        multiplayer.spectators = [];
-        multiplayer.awaitingStateSync = false;
-        multiplayer.connected = false;
-      }
-
-      multiplayer.intentionalLeave = false;
-      await connectSocket();
-      multiplayer.role = 'player';
-      multiplayer.resumeToken = null;
-      multiplayer.spectatorId = null;
-      if (!sendSocketMessage(WEBSOCKET_TYPES.CREATE_ROOM, {
-        nickname: 'Player',
-        hardMode: Boolean(state.hardMode),
-      })) {
-        throw new Error('Failed to send create request');
-      }
-      markPendingRoomAction('create_room');
-      addEvent('Requesting room...');
-      syncMultiplayerPanel();
-      syncMultiplayerControlState();
-    } catch (error) {
-      clearPendingRoomAction();
-      addEvent(error.message);
-      resetLobbyActionButtons();
-      syncMultiplayerControlState();
-      render();
-    }
-  }
-
-  async function handleJoinRoom() {
-    const roomCode = normalizeRoomCode(joinRoomCodeEl.value);
-    if (!roomCode) {
-      addEvent('Enter room code to join.');
-      render();
-      return;
-    }
-
-    const btn = joinRoomEl;
-    try {
-      ensureOnlineModeSelected();
-      setLobbyButtonLabel(btn, 'Joining...');
-      btn.classList.add('btn-loading');
-
-      multiplayer.intentionalLeave = false;
-      await connectSocket();
-      const currentRoomCode = normalizeRoomCode(multiplayer.roomCode || '');
-      const saved = readSavedOnlineSession();
-      const hasLiveResume = currentRoomCode === roomCode
-        && Boolean(multiplayer.playerId)
-        && Boolean(multiplayer.resumeToken);
-      const hasSavedResume = Boolean(saved)
-        && saved.roomCode === roomCode
-        && Boolean(saved.playerId)
-        && Boolean(saved.resumeToken);
-      const resumeIdentity = hasLiveResume
-        ? {
-          playerId: multiplayer.playerId,
-          resumeToken: multiplayer.resumeToken,
-          color: multiplayer.color || null,
-        }
-        : hasSavedResume
-          ? {
-            playerId: saved.playerId,
-            resumeToken: saved.resumeToken,
-            color: saved.color || null,
-          }
-          : null;
-      const joinPayload = resumeIdentity
-        ? { nickname: 'Player', resume: true, resumeToken: resumeIdentity.resumeToken }
-        : { nickname: 'Player' };
-
-      if (resumeIdentity) {
-        multiplayer.playerId = resumeIdentity.playerId;
-        multiplayer.resumeToken = resumeIdentity.resumeToken;
-        multiplayer.color = resumeIdentity.color;
-      } else {
-        multiplayer.playerId = null;
-        multiplayer.resumeToken = null;
-        multiplayer.color = null;
-      }
-
-      if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, joinPayload, roomCode)) {
-        throw new Error('Failed to send join request');
-      }
-      markPendingRoomAction(resumeIdentity ? 'resume_join' : 'join_room', roomCode);
-      multiplayer.role = 'player';
-      multiplayer.spectatorId = null;
-      multiplayer.roomCode = roomCode;
-      addEvent(resumeIdentity
-        ? `Rejoining saved seat in room ${roomCode}...`
-        : `Joining room ${roomCode}...`);
-      syncMultiplayerPanel();
-      syncMultiplayerControlState();
-    } catch (error) {
-      clearPendingRoomAction();
-      addEvent(error.message);
-      resetLobbyActionButtons();
-      syncMultiplayerControlState();
-      render();
-    }
-  }
-
-  async function handleSpectateRoom() {
-    const roomCode = normalizeRoomCode(joinRoomCodeEl.value);
-    if (!roomCode) {
-      addEvent('Enter room code to spectate.');
-      render();
-      return;
-    }
-
-    const btn = spectateRoomEl;
-    try {
-      ensureOnlineModeSelected();
-      setLobbyButtonLabel(btn, 'Joining...');
-      btn.classList.add('btn-loading');
-
-      multiplayer.intentionalLeave = false;
-      await connectSocket();
-      multiplayer.resumeToken = null;
-      if (!sendSocketMessage(WEBSOCKET_TYPES.JOIN_ROOM, {
-        nickname: 'Spectator',
-        spectator: true,
-      }, roomCode)) {
-        throw new Error('Failed to send spectate request');
-      }
-      markPendingRoomAction('spectate_room', roomCode);
-      clearSavedOnlineSession();
-      multiplayer.role = 'spectator';
-      multiplayer.color = null;
-      multiplayer.playerId = null;
-      multiplayer.spectatorId = null;
-      multiplayer.roomCode = roomCode;
-      addEvent(`Spectating room ${roomCode}...`);
-      syncMultiplayerPanel();
-      syncMultiplayerControlState();
-    } catch (error) {
-      clearPendingRoomAction();
-      addEvent(error.message);
-      resetLobbyActionButtons();
-      syncMultiplayerControlState();
-      render();
-    }
-  }
-
-  async function handleCopyCode() {
-    if (!multiplayer.roomCode) {
-      addEvent('No room code to copy.');
-      render();
-      return;
-    }
-
-    try {
-      const inviteUrl = buildInviteUrl(multiplayer.roomCode);
-      await navigator.clipboard.writeText(inviteUrl);
-      addEvent(`Copied invite link for room ${multiplayer.roomCode}`);
-    } catch {
-      addEvent('Could not copy invite link. Copy room code manually.');
-    }
-    render();
-  }
-
-  function copyInviteLinkSilently(roomCode) {
-    if (!roomCode || !navigator?.clipboard?.writeText) {
-      return;
-    }
-
-    const inviteUrl = buildInviteUrl(roomCode);
-    navigator.clipboard.writeText(inviteUrl)
-      .then(() => {
-        showTransientBanner('Room created. Invite link copied.');
-      })
-      .catch(() => {
-        showTransientBanner(`Room ${roomCode} created.`);
-      });
-  }
-
-  function handleLeaveRoom() {
-    multiplayer.intentionalLeave = true;
-    clearSavedOnlineSession();
-    clearReconnectTimer();
-    disconnectSocket();
-    clearRoomSession({ clearSavedSession: true });
-    if (isOnlineMode()) {
-      playModeEl.value = 'local';
-    }
-    setMode('local');
-    resetLobbyActionButtons();
-    multiplayerStatusEl.textContent = 'Left room.';
-    syncMultiplayerPanel();
-    syncMultiplayerControlState();
-    render();
-  }
-
-  function resetGame() {
-    if (isOnlineMode()) {
-      if (!multiplayer.connected || !multiplayer.roomCode) {
-        addEvent('Join a room first.');
-        render();
-        return;
-      }
-      if (multiplayer.color !== 'w') {
-        addEvent('Only White can request a new online game.');
-        requestStateSync();
-        render();
-        return;
-      }
-
-      sendSocketMessage(WEBSOCKET_TYPES.NEW_GAME, {}, multiplayer.roomCode);
-      addEvent('Requested new game from server.');
-      render();
-      return;
-    }
-
-    // Local: ask for confirmation if a game is in progress
-    if (getCurrentPly() > 0 && !state.gameOver) {
-      if (!window.confirm('Start a new game? The current game will be lost.')) {
-        return;
+    let showWaiting = false;
+    if (app.mode === 'online' && view && !view.gameOver && !app.replay) {
+      const opponentSeat = view.players.find((seat) => seat.color !== view.you.color);
+      const missing = view.you.role === 'player' && (!opponentSeat || !opponentSeat.connected);
+      if (missing) {
+        showWaiting = true;
+        const neverJoined = !opponentSeat;
+        waiting.querySelector('.overlay-kicker').firstChild.textContent = neverJoined ? 'WAITING FOR OPPONENT' : 'OPPONENT DISCONNECTED';
+        $('waitingCode').textContent = net.roomCode;
+        waiting.querySelector('.overlay-label').classList.toggle('hidden', !neverJoined);
+        $('waitingCode').classList.toggle('hidden', !neverJoined);
+        $('waitingCopy').classList.toggle('hidden', !neverJoined);
+        waiting.querySelector('.overlay-small').textContent = neverJoined
+          ? 'Send the link or the code to a friend.'
+          : 'Their seat is saved. The game continues when they reconnect.';
       }
     }
+    waiting.classList.toggle('hidden', !showWaiting);
 
-    state = newGameState();
-    state.hardMode = hardModeEl.checked;
-    state.selected = null;
-    render();
-    addEvent('New game started.');
+    $('replayBar').classList.toggle('hidden', !app.replay);
+    if (app.replay) {
+      const total = app.replay.positions.length - 1;
+      $('replayLabel').textContent = `${app.replay.index} / ${total}`;
+    }
   }
 
   function render() {
-    syncReplayHistoryWithState();
-    saveCompletedGameToHistory();
+    if (!app.mode) return;
     renderBoard();
-    renderEvents();
+    const top = bottomColor() === 'w' ? 'b' : 'w';
+    renderBar($('barTop'), top);
+    renderBar($('barBottom'), bottomColor());
     renderMoves();
-    renderStatus();
-    syncIngameToolbar();
+    renderNews();
+    renderRoomPanel();
+    renderActions();
+    renderOverlays();
   }
 
-  // ===== LOBBY MODAL LOGIC =====
-  function populateLobbyResumeSection() {
-    if (!lobbyResumeSectionEl) {
-      return;
-    }
-    const saved = readSavedOnlineSession();
-    if (!saved) {
-      lobbyResumeSectionEl.classList.add('hidden');
-      return;
-    }
-    const colorLabel = saved.color === 'w' ? 'White' : saved.color === 'b' ? 'Black' : 'Unknown color';
-    if (lobbyResumeInfoEl) {
-      lobbyResumeInfoEl.textContent = `Room: ${saved.roomCode}  ·  Playing as: ${colorLabel}`;
-    }
-    lobbyResumeSectionEl.classList.remove('hidden');
-  }
+  // ---------------------------------------------------------------------------
+  // Wiring
+  // ---------------------------------------------------------------------------
 
-  async function handleLobbyResume() {
-    const saved = readSavedOnlineSession();
-    if (!saved) {
-      return;
-    }
-    // Pre-populate the multiplayer state so the resume flow works
-    multiplayer.roomCode = saved.roomCode;
-    multiplayer.playerId = saved.playerId;
-    multiplayer.resumeToken = saved.resumeToken;
-    multiplayer.color = saved.color || null;
-    multiplayer.role = 'player';
-    multiplayer.spectatorId = null;
-    multiplayer.socketUrl = saved.socketUrl || DEFAULT_SERVER_URL;
-    joinRoomCodeEl.value = saved.roomCode;
-    serverUrlEl.value = multiplayer.socketUrl;
-    if (!isOnlineMode()) {
-      playModeEl.value = 'online';
-      setMode('online', { preserveSession: true });
-    }
-    syncMultiplayerPanel();
-    syncMultiplayerControlState();
-    hideLobby();
-    resumeOnlineSession('Resuming saved session');
-  }
+  function wireMenu() {
+    $('pressStart').addEventListener('click', () => {
+      sfx.unlock();
+      sfx.play('start');
+      if (settings.music) sfx.setMusic(true);
+      showMenuPanel('menuMain');
+    });
+    document.querySelectorAll('[data-action]').forEach((button) => {
+      button.addEventListener('click', () => onMenuAction(button.dataset.action));
+    });
+    $('menuScreen').addEventListener('mouseover', (event) => {
+      const item = event.target.closest('.menu-item, .px-btn');
+      if (item && item !== wireMenu.lastHover) sfx.play('hover');
+      wireMenu.lastHover = item;
+    });
 
-  function handleLobbyStartFresh() {
-    clearSavedOnlineSession();
-    if (lobbyResumeSectionEl) {
-      lobbyResumeSectionEl.classList.add('hidden');
-    }
-    // Reset multiplayer color so the board renders neutrally
-    multiplayer.color = null;
-    multiplayer.roomCode = '';
-    multiplayer.playerId = null;
-    multiplayer.resumeToken = null;
-    render();
-  }
-
-  function showLobby() {
-    if (gameLobbyOverlay) {
-      gameLobbyOverlay.classList.remove('hidden');
-      lobbyStep1.classList.add('active');
-      lobbyStep2.classList.remove('active');
-      if (lobbyHardModeEl) lobbyHardModeEl.checked = hardModeEl.checked;
-      resetLobbyActionButtons();
-      populateLobbyResumeSection();
-    }
-  }
-
-  function hideLobby() {
-    if (gameLobbyOverlay) {
-      gameLobbyOverlay.classList.add('hidden');
-    }
-  }
-
-  function lobbyChooseLocal() {
-    if (lobbyHardModeEl) {
-      hardModeEl.checked = lobbyHardModeEl.checked;
-      state.hardMode = hardModeEl.checked;
-    }
-    playModeEl.value = 'local';
-    setMode('local');
-    hideLobby();
-  }
-
-  function lobbyChooseOnline() {
-    if (lobbyHardModeEl) {
-      hardModeEl.checked = lobbyHardModeEl.checked;
-      state.hardMode = hardModeEl.checked;
-    }
-    ensureOnlineModeSelected();
-    lobbyStep1.classList.remove('active');
-    lobbyStep2.classList.add('active');
-    resetLobbyActionButtons();
-    syncMultiplayerControlState();
-    syncMultiplayerPanel();
-    if (!multiplayer.connected && !multiplayer.connectPromise && !multiplayer.resumeInFlight) {
-      handleConnectClick();
-    }
-  }
-
-  function lobbyGoBack() {
-    // Reset any in-flight lobby operations
-    resetLobbyActionButtons();
-    // If not yet in a room, disconnect any partial socket connection and revert to local
-    if (!multiplayer.roomCode) {
-      multiplayer.intentionalLeave = true;
-      if (multiplayer.connected || multiplayer.socket || multiplayer.connectPromise) {
-        disconnectSocket();
-      }
-      setMode('local');
-      playModeEl.value = 'local';
-    }
-    lobbyStep2.classList.remove('active');
-    lobbyStep1.classList.add('active');
-    syncMultiplayerControlState();
-    syncMultiplayerPanel();
-  }
-
-  // ===== INGAME TOOLBAR SYNC =====
-  function syncIngameToolbar() {
-    if (!ingameToolbar) return;
-    const online = isOnlineMode();
-    const inRoom = Boolean(multiplayer.roomCode);
-    ingameToolbar.hidden = online && !inRoom;
-    copyRoomCodeEl.hidden = !online || !inRoom;
-    leaveRoomEl.hidden = !online;
-    claimDrawEl.hidden = false;
-    resignEl.hidden = false;
-  }
-
-  // ===== EVENT HANDLERS =====
-  hardModeEl.addEventListener('change', () => {
-    const previousHardMode = state.hardMode;
-    // Online restrictions: only White can change hard mode, and only before the first move
-    if (isOnlineMode() && multiplayer.connected && multiplayer.roomCode) {
-      if (multiplayer.color === 'b') {
-        hardModeEl.checked = previousHardMode;
-        showTransientBanner('Only White can change the hard mode setting.');
+    $('setupGo').addEventListener('click', () => {
+      sfx.play('click');
+      const hardMode = $('hardModeInput').checked;
+      if (setupMode === 'local') {
+        startLocal(hardMode);
         return;
       }
-      if (getCurrentPly() > 0) {
-        hardModeEl.checked = previousHardMode;
-        showTransientBanner('Hard mode can only be changed before the first move.');
-        return;
+      createRoom({
+        nickname: rememberNickname($('nicknameInput').value),
+        hardMode,
+        spectatorView: $('openSpectatorsInput').checked ? 'open' : 'fog',
+      });
+    });
+
+    $('roomCodeInput').addEventListener('input', (event) => {
+      event.target.value = protocol.normalizeRoomCode(event.target.value);
+    });
+    const join = (spectator) => {
+      sfx.play('click');
+      joinRoom($('roomCodeInput').value, { spectator, nickname: rememberNickname($('joinNicknameInput').value) });
+    };
+    $('joinGo').addEventListener('click', () => join(false));
+    $('watchGo').addEventListener('click', () => join(true));
+    $('roomCodeInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') join(false);
+    });
+
+    $('archiveClear').addEventListener('click', async () => {
+      if (await confirmDialog('CLEAR ARCHIVE?', 'Every saved game on this device will be deleted.', 'CLEAR', 'danger')) {
+        remove(STORAGE.archive);
+        renderArchiveList();
       }
+    });
+
+    // Arrow keys walk through menu entries, arcade style.
+    $('menuScreen').addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      const panel = event.target.closest('.menu');
+      if (!panel || event.target.tagName === 'INPUT') return;
+      const items = [...panel.querySelectorAll('.menu-item:not([hidden]), .archive-item, .px-btn, label.toggle input')].filter((node) => node.offsetParent);
+      const index = items.indexOf(document.activeElement);
+      const next = items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+      if (next) {
+        event.preventDefault();
+        next.focus();
+        sfx.play('hover');
+      }
+    });
+  }
+
+  function wireGame() {
+    boardEl.addEventListener('pointerdown', onBoardPointerDown);
+    boardEl.addEventListener('keydown', onBoardKey);
+    boardEl.addEventListener('contextmenu', (event) => event.preventDefault());
+    $('curtainGo').addEventListener('click', liftCurtain);
+    $('waitingCopy').addEventListener('click', copyInvite);
+    $('copyLink').addEventListener('click', copyInvite);
+    document.querySelectorAll('[data-replay]').forEach((button) => {
+      button.addEventListener('click', () => stepReplay(button.dataset.replay));
+    });
+    document.querySelectorAll('.tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        sfx.play('click');
+        document.querySelectorAll('.tab').forEach((other) => {
+          other.classList.toggle('active', other === tab);
+          other.setAttribute('aria-selected', String(other === tab));
+        });
+        $('movesList').classList.toggle('hidden', tab.dataset.tab !== 'moves');
+        $('newsList').classList.toggle('hidden', tab.dataset.tab !== 'news');
+      });
+    });
+  }
+
+  function wireChrome() {
+    $('brandBtn').addEventListener('click', () => {
+      if (app.mode) backToMenu();
+      else showMenuPanel('menuMain');
+    });
+    $('soundBtn').addEventListener('click', () => {
+      settings.sound = !settings.sound;
+      saveSettings();
+      applySettings();
+      sfx.play('click');
+    });
+    $('musicBtn').addEventListener('click', () => {
+      settings.music = !settings.music;
+      saveSettings();
+      applySettings();
+      sfx.setMusic(settings.music);
+    });
+    $('settingsBtn').addEventListener('click', () => {
+      sfx.play('click');
+      $('settings').classList.remove('hidden');
+      $('settingsClose').focus();
+    });
+    $('settingsClose').addEventListener('click', () => {
+      const url = $('serverUrlInput').value.trim();
+      if (url && url !== settings.serverUrl) {
+        if (isWsUrl(url)) settings.serverUrl = url;
+        else toast('Server URL must start with ws:// or wss://', 'bad');
+      }
+      saveSettings();
+      $('settings').classList.add('hidden');
+      sfx.play('click');
+    });
+    document.querySelectorAll('[data-theme-choice]').forEach((button) => {
+      button.addEventListener('click', () => {
+        settings.theme = button.dataset.themeChoice;
+        saveSettings();
+        applySettings();
+        sfx.play('select');
+        render();
+      });
+    });
+    for (const [id, key] of [['crtInput', 'crt'], ['fxInput', 'fx'], ['hintsInput', 'hints']]) {
+      $(id).addEventListener('change', (event) => {
+        settings[key] = event.target.checked;
+        saveSettings();
+        applySettings();
+        renderBoard();
+      });
     }
-    state.hardMode = hardModeEl.checked;
-    if (lobbyHardModeEl) lobbyHardModeEl.checked = hardModeEl.checked;
-    sendHardModeUpdate(previousHardMode);
-    renderStatus();
-  });
 
-  newGameEl.addEventListener('click', () => {
-    resetGame();
-  });
+    document.addEventListener('keydown', (event) => {
+      if (event.target.tagName === 'INPUT') return;
+      if (event.key === 'Escape') {
+        if (!$('dialog').classList.contains('hidden')) closeDialog(false);
+        else if (!$('settings').classList.contains('hidden')) $('settingsClose').click();
+        else if (!$('gameOver').classList.contains('hidden')) $('gameOver').classList.add('hidden');
+        else if (!$('promotion').classList.contains('hidden')) $('promotionCancel').click();
+      } else if (event.key === 'm' || event.key === 'M') {
+        $('soundBtn').click();
+      } else if (app.replay && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && document.activeElement !== boardEl) {
+        stepReplay(event.key === 'ArrowLeft' ? 'prev' : 'next');
+      } else if (!$('menuScreen').classList.contains('hidden') && !$('pressStart').classList.contains('hidden') && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        $('pressStart').click();
+      }
+    });
+    boardEl.addEventListener('keydown', (event) => {
+      if (app.replay && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.stopPropagation();
+        stepReplay(event.key === 'ArrowLeft' ? 'prev' : 'next');
+      }
+    }, true);
 
-  playModeEl.addEventListener('change', (event) => {
-    if (event.target.value === 'local') {
-      clearSavedOnlineSession();
-      multiplayer.intentionalLeave = true;
-      clearReconnectTimer();
-    } else {
-      multiplayer.intentionalLeave = false;
+    window.addEventListener('online', () => {
+      if (app.mode === 'online' && !net.ws) reconnectNow();
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && app.mode === 'online' && !net.ws && !net.intentionalClose) reconnectNow();
+    });
+  }
+
+  function boot() {
+    applySettings();
+    $('umpireFace').src = sprites.umpire('idle');
+    initBoard();
+    initLogoBoard();
+    wireMenu();
+    wireGame();
+    wireChrome();
+
+    const params = new URLSearchParams(window.location.search);
+    const wsParam = params.get('ws');
+    if (wsParam && isWsUrl(wsParam)) {
+      settings.serverUrl = wsParam;
+      applySettings();
     }
-    setMode(event.target.value);
-  });
+    const room = protocol.normalizeRoomCode(params.get('room'));
+    const session = load(STORAGE.session, null);
 
-  if (connectServerEl) {
-    connectServerEl.addEventListener('click', () => {
-      handleConnectClick();
-    });
+    if (room && session && session.roomCode === room) {
+      resumeOnline(session, { auto: true });
+      return;
+    }
+    if (room) {
+      $('roomCodeInput').value = room;
+      $('joinNicknameInput').value = settings.nickname;
+      showMenuPanel('menuJoin');
+      return;
+    }
+    showMenuPanel('title');
   }
 
-  createRoomEl.addEventListener('click', () => {
-    handleCreateRoom();
-  });
-
-  joinRoomEl.addEventListener('click', () => {
-    handleJoinRoom();
-  });
-
-  if (spectateRoomEl) {
-    spectateRoomEl.addEventListener('click', () => {
-      handleSpectateRoom();
-    });
-  }
-
-  copyRoomCodeEl.addEventListener('click', () => {
-    handleCopyCode();
-  });
-
-  if (exportPgnEl) {
-    exportPgnEl.addEventListener('click', () => {
-      handleExportPgn();
-    });
-  }
-
-  if (loadHistoryGameEl && historyGamesEl) {
-    loadHistoryGameEl.addEventListener('click', () => {
-      const selected = historyGamesEl.value;
-      if (!selected) {
-        return;
-      }
-      if (!loadHistoryEntryById(selected)) {
-        showTransientBanner('Could not load selected game.');
-      }
-    });
-  }
-
-  if (clearHistoryGamesEl) {
-    clearHistoryGamesEl.addEventListener('click', () => {
-      clearHistoryGames();
-    });
-  }
-
-  if (replayFirstEl) {
-    replayFirstEl.addEventListener('click', () => {
-      setReplayFirst();
-    });
-  }
-
-  if (replayPrevEl) {
-    replayPrevEl.addEventListener('click', () => {
-      stepReplay(-1);
-    });
-  }
-
-  if (replayNextEl) {
-    replayNextEl.addEventListener('click', () => {
-      stepReplay(1);
-    });
-  }
-
-  if (replayFinalEl) {
-    replayFinalEl.addEventListener('click', () => {
-      setReplayFinal();
-    });
-  }
-
-  leaveRoomEl.addEventListener('click', () => {
-    handleLeaveRoom();
-  });
-
-  claimDrawEl.addEventListener('click', () => {
-    handleClaimDraw();
-  });
-
-  resignEl.addEventListener('click', () => {
-    handleResign();
-  });
-
-  window.addEventListener('pointerdown', unlockAudio, { once: true });
-  window.addEventListener('keydown', unlockAudio, { once: true });
-
-  // Theme selectors — lobby, header, and inline
-  if (uiThemeEl) {
-    uiThemeEl.addEventListener('change', applyThemes);
-  }
-  if (boardThemeEl) {
-    boardThemeEl.addEventListener('change', applyThemes);
-  }
-  if (uiThemeHeaderEl) {
-    uiThemeHeaderEl.addEventListener('change', () => {
-      if (uiThemeEl) uiThemeEl.value = uiThemeHeaderEl.value;
-      applyThemes();
-    });
-  }
-  if (boardThemeHeaderEl) {
-    boardThemeHeaderEl.addEventListener('change', () => {
-      if (boardThemeEl) boardThemeEl.value = boardThemeHeaderEl.value;
-      applyThemes();
-    });
-  }
-
-  if (lobbyHardModeEl) {
-    lobbyHardModeEl.addEventListener('change', () => {
-      // Sync to main switch and state
-      if (hardModeEl) hardModeEl.checked = lobbyHardModeEl.checked;
-      state.hardMode = lobbyHardModeEl.checked;
-    });
-  }
-
-  // Lobby modal buttons
-  if (lobbyLocalBtn) {
-    lobbyLocalBtn.addEventListener('click', lobbyChooseLocal);
-  }
-  if (lobbyOnlineBtn) {
-    lobbyOnlineBtn.addEventListener('click', lobbyChooseOnline);
-  }
-  if (lobbyBackBtn) {
-    lobbyBackBtn.addEventListener('click', lobbyGoBack);
-  }
-  if (openLobbyBtn) {
-    openLobbyBtn.addEventListener('click', showLobby);
-  if (lobbyCloseBtn) lobbyCloseBtn.addEventListener('click', hideLobby);
-  }
-  if (lobbyResumeBtnEl) {
-    lobbyResumeBtnEl.addEventListener('click', handleLobbyResume);
-  }
-  if (lobbyStartFreshBtnEl) {
-    lobbyStartFreshBtnEl.addEventListener('click', handleLobbyStartFresh);
-  }
-
-  // Initialize
-  loadSavedThemes();
-  const initialMode = readSavedPlayMode();
-  playModeEl.value = initialMode;
-  setMode(initialMode, { preserveSession: true });
-  state.hardMode = hardModeEl.checked;
-  loadHistoryCache();
-  applyUrlPrefill();
-
-  // Always show the lobby on page load so users explicitly choose how to proceed.
-  // If a saved online session exists the lobby resume banner will appear,
-  // letting the user decide whether to resume or start fresh.
-  showLobby();
-
-  render();
+  boot();
 })();
