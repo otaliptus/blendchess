@@ -143,9 +143,9 @@
   const local = {
     state: null,
     viewer: 'w',
-    curtain: false,
     handoff: false,
     seen: { w: 0, b: 0 },
+    lastView: { w: null, b: null },
   };
 
   const net = {
@@ -415,7 +415,7 @@
   function canAct() {
     const view = app.view;
     if (!view || app.replay || view.gameOver) return false;
-    if (app.mode === 'local') return !local.curtain && !local.handoff;
+    if (app.mode === 'local') return !local.handoff;
     if (app.mode === 'online') {
       return view.you.role === 'player'
         && view.turn === view.you.color
@@ -842,8 +842,8 @@
   // Views
   // ---------------------------------------------------------------------------
 
-  function setView(view, { viewer, seenId, quiet = false }) {
-    const previous = app.view;
+  function setView(view, { viewer, seenId, quiet = false, previousOwn = undefined }) {
+    const previous = previousOwn === undefined ? app.view : previousOwn;
     if (previous && previous.gameId !== view.gameId) {
       app.selected = null;
       app.replay = null;
@@ -852,6 +852,7 @@
     }
     app.prevView = previous;
     app.view = view;
+    if (app.mode === 'local') local.lastView[viewer] = view;
 
     // Animate your own new move sliding into place.
     const last = view.moves[view.moves.length - 1];
@@ -959,11 +960,12 @@
     rl.assignPlayer(state, 'black', 'Black', () => '');
     local.state = state;
     local.seen = { w: 0, b: 0 };
+    local.lastView = { w: null, b: null };
     local.startedAt = Date.now();
-    local.viewer = 'w';
     enterGame('local');
     sfx.play('start');
-    showCurtain('w', true);
+    showLocalTurn('w');
+    umpireSay('Welcome to the fog. White moves first.');
   }
 
   function continueLocal() {
@@ -974,35 +976,21 @@
     }
     local.state = saved.state;
     local.seen = saved.seen || { w: 0, b: 0 };
+    local.lastView = { w: null, b: null };
     local.startedAt = saved.startedAt || Date.now();
     enterGame('local');
-    showCurtain(local.state.turn);
+    showLocalTurn(local.state.turn);
   }
 
-  function showCurtain(color, first = false) {
+  // Switch the board to the side to move. Their news (what the opponent did) plays as effects and
+  // stays in the turn banner at the top until the next turn.
+  function showLocalTurn(color) {
     local.viewer = color;
-    local.curtain = true;
     local.handoff = false;
     app.selected = null;
-    app.view = localView();
-    const news = app.view.events
-      .filter((event) => event.id > local.seen[color] && !(event.color === color && ['move', 'illegal', 'forfeit', 'draw_offer', 'resign'].includes(event.kind)))
-      .map((event) => describeEvent(event, color))
-      .filter(Boolean)
-      .slice(-5);
-    $('curtainTitle').textContent = first ? `${colorName(color).toUpperCase()} STARTS` : `PASS TO ${colorName(color).toUpperCase()}`;
-    $('curtainNews').replaceChildren(...news.map((line) => el('li', { text: line.text })));
-    $('curtainGo').textContent = `I'M ${colorName(color).toUpperCase()}`;
-    render();
-    umpireSay(first ? 'Welcome to the fog. White, you have the first move.' : `${colorName(color)}, your turn. No peeking, ${colorName(color === 'w' ? 'b' : 'w')}!`);
-    $('curtainGo').focus();
-  }
-
-  function liftCurtain() {
-    sfx.play('click');
-    local.curtain = false;
-    const view = localView();
-    local.seen[local.viewer] = setView(view, { viewer: local.viewer, seenId: local.seen[local.viewer] });
+    // Compare against this player's own last view, so "your knight was captured" names the right piece.
+    local.seen[color] = setView(localView(), { viewer: color, seenId: local.seen[color], previousOwn: local.lastView[color] || null });
+    fx.retrigger($('boardFrame'), 'fx-swap');
     saveLocal();
     boardEl.focus({ preventScroll: true });
   }
@@ -1024,13 +1012,13 @@
     local.seen[local.viewer] = setView(localView(), { viewer: local.viewer, seenId: local.seen[local.viewer] });
     saveLocal();
 
-    const turnPassed = !state.gameOver && state.turn !== local.viewer;
-    if (turnPassed) {
+    // Give the mover a moment to see their move (or the red alert), then hand the board over.
+    if (!state.gameOver && state.turn !== local.viewer) {
       local.handoff = true;
       render();
       setTimeout(() => {
-        if (app.mode === 'local' && local.state === state) showCurtain(state.turn);
-      }, result.forfeited ? 1600 : 1100);
+        if (app.mode === 'local' && local.state === state) showLocalTurn(state.turn);
+      }, result.forfeited ? 1700 : 1000);
     }
     if (state.gameOver) remove(STORAGE.local);
   }
@@ -1604,16 +1592,84 @@
       sub.push(el('span', { class: `presence ${seat && seat.connected ? '' : 'off'}`, 'aria-hidden': 'true' }));
       sub.push(seat ? (seat.connected ? colorName(color) : `${colorName(color)}, disconnected`) : `${colorName(color)}, empty seat`);
     } else {
-      sub.push(app.mode === 'local' && color === local.viewer && !local.curtain ? 'your pieces' : colorName(color));
+      sub.push(app.mode === 'local' && color === local.viewer ? 'your pieces' : colorName(color));
     }
     const lost = view.captured[color] || 0;
     node.classList.toggle('to-move', toMove);
     node.replaceChildren(...[
       el('img', { class: 'avatar', src: sprites.piece(color, 'K'), alt: '' }),
       el('div', { class: 'player-info' }, el('span', { class: 'player-name', text: name }), el('span', { class: 'player-sub' }, sub)),
-      toMove ? el('span', { class: 'turn-badge', text: myColor() === color ? 'YOUR MOVE' : 'TO MOVE' }) : null,
       lost ? el('span', { class: 'taken', title: `${lost} ${colorName(color)} piece${lost > 1 ? 's' : ''} captured` }, el('img', { src: sprites.piece(color, 'P'), alt: '' }), `-${lost}`) : null,
     ].filter(Boolean));
+  }
+
+  const NOTE_KINDS = ['move', 'capture', 'check', 'illegal', 'forfeit', 'draw_offer', 'draw_declined', 'resign'];
+  const TONE_RANK = { bad: 3, warn: 2, good: 1, '': 0 };
+
+  // What happened since `anchor` last moved: the news the side to move needs before playing.
+  function turnNote(view, viewer) {
+    const anchor = viewer || view.turn;
+    const events = view.events;
+    let start = 0;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      if (events[i].color === anchor && (events[i].kind === 'move' || events[i].kind === 'forfeit')) {
+        start = i + 1;
+        break;
+      }
+    }
+    let recent = events.slice(start).filter((event) => NOTE_KINDS.includes(event.kind));
+    if (!recent.length && start > 0) recent = [events[start - 1]];
+
+    const lines = [];
+    let illegalTries = 0;
+    for (const event of recent) {
+      if (event.kind === 'illegal' && event.color !== viewer) {
+        illegalTries += 1;
+        continue;
+      }
+      const line = describeEvent(event, viewer, view);
+      if (line) lines.push(line);
+    }
+    if (illegalTries) {
+      const who = playerName(recent.find((event) => event.kind === 'illegal' && event.color !== viewer).color, view);
+      lines.unshift({ text: `${who} tried ${illegalTries > 1 ? `${illegalTries} illegal moves` : 'an illegal move'}.`, tone: 'warn' });
+    }
+    const tone = lines.reduce((worst, line) => (TONE_RANK[line.tone || ''] > TONE_RANK[worst] ? line.tone : worst), '');
+    return { text: lines.map((line) => line.text).join(' '), tone };
+  }
+
+  function renderTurnBanner() {
+    const view = app.view;
+    const banner = $('turnBanner');
+    banner.classList.toggle('hidden', !view);
+    if (!view) return;
+    const viewer = myColor();
+    let who;
+    let side = view.turn;
+    let note = { text: '', tone: '' };
+    if (app.replay) {
+      who = 'REPLAY';
+      side = '';
+      note = { text: 'The fog has lifted. Step through the game with the arrows.', tone: '' };
+    } else if (view.gameOver) {
+      who = 'GAME OVER';
+      side = '';
+      const last = [...view.events].reverse().find((event) => event.kind === 'game_over');
+      note = { text: last ? resultLine(last) : '', tone: 'warn' };
+    } else if (app.mode === 'online' && view.waitingForStart) {
+      who = view.players.length < 2 ? 'WAITING FOR OPPONENT' : 'OPPONENT DISCONNECTED';
+      side = '';
+    } else {
+      const myTurn = viewer && view.turn === viewer;
+      if (app.mode === 'local') who = `${colorName(view.turn).toUpperCase()} TO MOVE`;
+      else if (myTurn) who = 'YOUR MOVE';
+      else who = `${playerName(view.turn).toUpperCase()} TO MOVE`;
+      note = local.handoff && app.mode === 'local' ? { text: 'Hand the device over.', tone: '' } : turnNote(view, viewer);
+    }
+    banner.dataset.side = side;
+    banner.dataset.tone = note.tone || '';
+    $('turnWho').textContent = who;
+    $('turnNote').textContent = note.text || (view.moves.length ? '' : "The other side's pieces are hidden in the fog.");
   }
 
   function renderMoves() {
@@ -1719,7 +1775,7 @@
       if (app.mode !== 'archive') buttons.push(actionButton('BACK TO GAME', () => { app.replay = null; render(); }));
       buttons.push(actionButton('PGN', exportPgn));
     } else if (!view.gameOver && isPlayer) {
-      const playing = app.mode === 'local' ? !local.curtain : !view.waitingForStart;
+      const playing = app.mode === 'local' || !view.waitingForStart;
       buttons.push(actionButton(opponentOffered ? 'ACCEPT DRAW' : 'OFFER DRAW', () => act(TYPES.CLAIM_DRAW), {
         disabled: !playing || (app.mode === 'online' && net.status !== 'online'),
         pulse: Boolean(opponentOffered),
@@ -1739,7 +1795,6 @@
   function renderOverlays() {
     const view = app.view;
     const waiting = $('waiting');
-    $('curtain').classList.toggle('hidden', !(app.mode === 'local' && local.curtain));
 
     let showWaiting = false;
     if (app.mode === 'online' && view && !view.gameOver && !app.replay) {
@@ -1773,6 +1828,7 @@
     const top = bottomColor() === 'w' ? 'b' : 'w';
     renderBar($('barTop'), top);
     renderBar($('barBottom'), bottomColor());
+    renderTurnBanner();
     renderMoves();
     renderNews();
     renderRoomPanel();
@@ -1854,7 +1910,6 @@
     boardEl.addEventListener('pointerdown', onBoardPointerDown);
     boardEl.addEventListener('keydown', onBoardKey);
     boardEl.addEventListener('contextmenu', (event) => event.preventDefault());
-    $('curtainGo').addEventListener('click', liftCurtain);
     $('waitingCopy').addEventListener('click', copyInvite);
     $('copyLink').addEventListener('click', copyInvite);
     document.querySelectorAll('[data-replay]').forEach((button) => {

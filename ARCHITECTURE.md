@@ -59,13 +59,15 @@ hooks = { connections(), send(conn, msg), close(conn, code, reason), save(conn),
 ## Client
 
 `app.js` renders views; it never decides legality. Local pass-and-play runs the same `room-logic.js` in
-the browser and shows a hand-over curtain between turns, so each player only ever sees their own view.
+the browser and switches the board to the side to move after each turn. A turn banner above the board
+says whose move it is and summarizes what the opponent did.
 Supporting modules:
 
 - `client/sprites.js`: 16x16 pixel pieces and the umpire, drawn to canvas once and cached as data URLs.
 - `client/sfx.js`: a small WebAudio chiptune synth (effects plus optional music).
 - `client/fx.js`: particles, screen shake, banners and typewriter text. All of it respects `prefers-reduced-motion`.
 - `client/stateGuards.js`: snapshot version checks.
+- `assets/help/*.gif`: the how-to-play animations, rendered from the same sprites by `tools/make-help-gifs.mjs` (`cd tools && npm install && npm run help-gifs`).
 
 ## Tests
 

@@ -17,7 +17,7 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 ## Modes
 
-- `Local Duel`: pass-and-play on one device. A "pass to Black" curtain between turns keeps each side's pieces private.
+- `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
 - `Online`: create a room, send the invite link, play. Reconnects resume your seat automatically.
 - `Watch`: spectators see the fog too, unless the host turns on **party mode** (live full board for the audience).
 - `Archive`: finished games are saved on your device for replay and PGN export.
@@ -37,7 +37,7 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 3. Click or drag your pieces. Dots mark squares that *might* be legal; dashed corners are pawn captures worth a try. Keyboard works too: arrows, Enter, Esc.
 4. Offer a draw or resign when needed. After the game: replay, PGN, rematch.
 
-Retro extras: four palettes (arcade, handheld, amber, paper), CRT scanlines, chiptune sound effects and optional music. All can be toggled under OPTIONS, and motion effects respect `prefers-reduced-motion`.
+Retro extras: four palettes (the colour dots in the top bar), CRT scanlines, chiptune sound effects and optional music. Motion effects respect `prefers-reduced-motion`.
 
 ## Origin (Kriegspiel)
 

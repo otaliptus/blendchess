@@ -19,6 +19,12 @@
           <span class="brand-blend">BLEND</span><span class="brand-chess">CHESS</span>
         </button>
         <div class="topbar-actions">
+          <div class="palette" role="group" aria-label="Colour theme">
+            <button type="button" class="palette-dot" data-theme-choice="arcade" title="Arcade"></button>
+            <button type="button" class="palette-dot" data-theme-choice="handheld" title="Handheld"></button>
+            <button type="button" class="palette-dot" data-theme-choice="amber" title="Amber"></button>
+            <button type="button" class="palette-dot" data-theme-choice="paper" title="Paper"></button>
+          </div>
           <button id="soundBtn" class="chip-btn" type="button" aria-pressed="true" title="Sound effects (M)">SFX</button>
           <button id="musicBtn" class="chip-btn" type="button" aria-pressed="false" title="Music">MUSIC</button>
           <button id="settingsBtn" class="chip-btn" type="button" title="Settings">OPTIONS</button>
@@ -108,16 +114,30 @@
         <section id="menuHelp" class="menu px-panel wide hidden" aria-labelledby="helpTitle">
           <h2 id="helpTitle" class="menu-title">HOW TO PLAY</h2>
           <div class="help">
-            <p><b>Normal chess rules, one twist:</b> you only see your own pieces. Everything else is fog.</p>
-            <ul>
-              <li><b>The umpire</b> tells both players when someone moves, when a piece is captured (and on which square), and when a move attempt was illegal. Nobody hears <i>which</i> move.</li>
-              <li><b>Check:</b> only the player in check is told, along with the line it comes from: file, rank, diagonal or knight.</li>
-              <li><b>Illegal tries:</b> pieces may run into things you can't see. Try again. In <b>hard mode</b> an illegal try costs your turn, unless you're in check.</li>
-              <li><b>Hints:</b> dots show squares that <i>might</i> be legal. Dashed corners are pawn captures you can try.</li>
-              <li><b>Game over</b> lifts the fog: replay every move and export the PGN.</li>
-              <li><b>Spectators</b> see the fog too, unless the host turned on party mode.</li>
-            </ul>
-            <p class="help-keys">KEYS: arrows move the cursor, ENTER picks or drops a piece, ESC cancels, M toggles sound.</p>
+            <p><b>Normal chess, one twist:</b> you only see your own pieces.</p>
+            <div class="help-cards">
+              <figure class="help-card">
+                <img src="assets/help/fog.gif" width="80" height="80" alt="Enemy pieces fade into fog; only your pieces stay visible" />
+                <figcaption><b>The fog.</b> Enemy pieces are hidden. Only the game's end lifts it.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/hints.gif" width="80" height="80" alt="Selecting a rook shows dots; a pawn shows dashed capture squares" />
+                <figcaption><b>Hints.</b> Dots: might be legal. Dashed: a pawn capture worth a try.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/illegal.gif" width="80" height="80" alt="A bishop bumps into a hidden piece and the move is refused" />
+                <figcaption><b>Illegal tries.</b> Hidden pieces block you: try again. <i>Hard mode:</i> it costs your turn.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/capture.gif" width="80" height="80" alt="A knight disappears and a red X marks its square" />
+                <figcaption><b>Captures.</b> The umpire names the square, for both players.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/check.gif" width="80" height="80" alt="The king flashes red and the checking diagonal is highlighted" />
+                <figcaption><b>Check.</b> Only you are told, plus the line: file, rank, diagonal or knight.</figcaption>
+              </figure>
+            </div>
+            <p class="help-keys">Click or drag pieces. Keys: arrows, ENTER, ESC. M mutes.</p>
           </div>
           <div class="menu-row">
             <button class="px-btn primary" type="button" data-action="back">GOT IT</button>
@@ -128,6 +148,11 @@
       <!-- ===== GAME ===== -->
       <main id="gameScreen" class="screen game-screen hidden">
         <div class="board-column">
+          <div id="turnBanner" class="turn-banner hidden" role="status" aria-live="polite">
+            <span class="turn-chip" aria-hidden="true"></span>
+            <span id="turnWho" class="turn-who"></span>
+            <span id="turnNote" class="turn-note"></span>
+          </div>
           <div id="barTop" class="player-bar"></div>
           <div class="board-frame" id="boardFrame">
             <div id="board" class="board" role="grid" aria-label="Chess board"></div>
@@ -137,12 +162,6 @@
               <p id="waitingCode" class="big-code">------</p>
               <button id="waitingCopy" class="px-btn primary" type="button">COPY INVITE LINK</button>
               <p class="overlay-small">Send the link or code to a friend.</p>
-            </div>
-            <div id="curtain" class="board-overlay curtain hidden">
-              <p class="overlay-kicker">DON'T PEEK!</p>
-              <p id="curtainTitle" class="curtain-title">PASS TO BLACK</p>
-              <ul id="curtainNews" class="curtain-news"></ul>
-              <button id="curtainGo" class="px-btn primary" type="button">I'M READY</button>
             </div>
           </div>
           <div id="barBottom" class="player-bar"></div>
@@ -220,15 +239,6 @@
     <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-box px-panel">
         <h2 id="settingsTitle" class="menu-title">OPTIONS</h2>
-        <div class="field">
-          <span class="field-label">PALETTE</span>
-          <div class="swatches" id="themeSwatches">
-            <button type="button" class="swatch" data-theme-choice="arcade">ARCADE</button>
-            <button type="button" class="swatch" data-theme-choice="handheld">HANDHELD</button>
-            <button type="button" class="swatch" data-theme-choice="amber">AMBER</button>
-            <button type="button" class="swatch" data-theme-choice="paper">PAPER</button>
-          </div>
-        </div>
         <label class="toggle">
           <input id="crtInput" type="checkbox" />
           <span class="toggle-box" aria-hidden="true"></span>
