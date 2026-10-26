@@ -1,50 +1,29 @@
-# Blendchess Multiplayer Node Server
+# Blendchess multiplayer Node server
 
-Authoritative websocket backend for online games.
+Authoritative WebSocket backend for online games.
 
 ## Run
 
 ```bash
 cd server
 npm install
-npm start
+npm start            # ws://localhost:3000, override with PORT=5000
 ```
 
-Default URL: `ws://localhost:3000`
-
-Optional port override:
-
-```bash
-PORT=5000 npm start
-```
-
-Run tests:
+## Test
 
 ```bash
 npm test
 ```
 
-## Architecture
+Runs the engine perft suite, room logic, session handling against a fake transport, and an end-to-end
+suite that spawns this server and plays games over real sockets. Point `E2E_URL` at another server
+(e.g. `wrangler dev`) to run the end-to-end suite there instead.
 
-- Transport: WebSocket (`ws`) with JSON protocol envelopes.
-- Authority: all legality and room lifecycle logic is server-owned.
-- Rules engine: `chess-core.js` through `chessEngineFacade.js`.
-- Room state: in-memory room map with TTL pruning.
-- Session model: create/join room, player seat assignment, spectator join, reconnect via resume token.
+## How it fits together
 
-## Behavior highlights
+- `server.js` is only the transport: a map of rooms, each with its set of connections, plus size and rate limits, a room cap and TTL pruning.
+- `shared.js` loads the shared modules from the repo root.
+- Everything else, including joins, resumes, moves, draws, options and per-viewer redaction, lives in `../shared/room-session.js` and `../shared/room-logic.js`. The Cloudflare Worker uses the same code.
 
-- Illegal move attempts are rejected without mutating board state.
-- Hard mode forfeits turn on illegal moves, except when the mover is currently in check (that illegal move is rejected without forfeit).
-- Opponent illegal attempts are masked in the player timeline.
-- Spectators receive authoritative state updates and can observe illegal-attempt events.
-
-## Safety controls
-
-- Maximum message size (`MAX_MESSAGE_BYTES`).
-- Per-connection message rate limiting (`RATE_LIMIT_MAX_MESSAGES` per second).
-- Protocol version guard (`PROTOCOL_VERSION`).
-
-## Protocol docs
-
-Message and error schema: `../multiplayer-schema.md`.
+Protocol: `../multiplayer-schema.md`.

@@ -1,17 +1,6 @@
 (function installEngineFacade() {
-  var core;
-  if (typeof globalThis !== 'undefined' && globalThis.ChessCore) {
-    core = globalThis.ChessCore;
-  } else if (typeof window !== 'undefined' && window.ChessCore) {
-    core = window.ChessCore;
-  }
-
-  var protocol;
-  if (typeof globalThis !== 'undefined' && globalThis.BlendChessProtocol) {
-    protocol = globalThis.BlendChessProtocol;
-  } else if (typeof window !== 'undefined' && window.BlendChessProtocol) {
-    protocol = window.BlendChessProtocol;
-  }
+  var core = globalThis.ChessCore;
+  var protocol = globalThis.BlendChessProtocol;
 
   if (!core) throw new Error('chess-core.js must be loaded before engine-facade.js');
   if (!protocol) throw new Error('shared/protocol.js must be loaded before engine-facade.js');
@@ -98,11 +87,7 @@
     normalizeMoveIntent: normalizeMoveIntent,
   };
 
-  if (typeof globalThis !== 'undefined') {
-    globalThis.BlendChessEngineFacade = exports;
-  } else if (typeof window !== 'undefined') {
-    window.BlendChessEngineFacade = exports;
-  }
+  globalThis.BlendChessEngineFacade = exports;
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = exports;

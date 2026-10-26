@@ -21,19 +21,13 @@ jobs:
         with:
           node-version: 20
 
-      - name: Syntax check core files
+      - name: Syntax check browser files
         run: |
-          node --check chess-core.js
-          node --check app.js
-          node --check client/stateGuards.js
+          for file in chess-core.js app.js shared/*.js client/*.js; do
+            node --check "$file"
+          done
 
-      - name: Verify chess-core sync
-        run: |
-          tmp_file="$(mktemp)"
-          perl -0pe "s/\n\n  if \(typeof module !== 'undefined' && module\.exports\) \{\n    module\.exports = coreExports;\n  \}\n/\n/s" chess-core.js > "$tmp_file"
-          diff "$tmp_file" ws-worker/src/chess-core.js
-
-      - name: Server tests
+      - name: Server tests (engine, room logic, session, Node end-to-end)
         working-directory: server
         run: |
           npm ci
@@ -44,6 +38,12 @@ jobs:
         run: |
           npm ci
           npm test
+
+      - name: End-to-end against wrangler dev
+        run: |
+          (cd ws-worker && npx wrangler dev --port 8787 --ip 127.0.0.1 > /tmp/wrangler.log 2>&1 &)
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8787/health && break; sleep 1; done
+          cd server && E2E_URL=ws://127.0.0.1:8787 node --test tests/server-e2e.test.mjs
 
   deploy-pages:
     needs: test

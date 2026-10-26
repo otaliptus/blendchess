@@ -1,115 +1,76 @@
-# Blendchess Architecture
+# Blendchess architecture
 
-## 1) High-level components
+## Components
 
-- Frontend UI: `index.html`, `style.css`, `app.js`
-- Shared rules engine: `chess-core.js`
-- Shared protocol constants: `shared/protocol.js`
-- Shared move validation: `shared/engine-facade.js`
-- Shared room authority logic: `shared/room-logic.js`
-- Client validation helpers: `client/stateGuards.js`
-- Node backend: `server/`
-- Cloudflare Worker backend: `ws-worker/`
+| Path | Role |
+| --- | --- |
+| `chess-core.js` | Rules engine: move generation, check, terminal states, SAN, plausible moves for the fog |
+| `shared/protocol.js` | Message types, error codes, envelope parsing |
+| `shared/engine-facade.js` | Validates a move intent against the legal moves |
+| `shared/room-logic.js` | Room and game authority, **per-viewer redaction** (`createView`), PGN |
+| `shared/room-session.js` | Message handling for one room, written against a tiny transport interface |
+| `server/` | Node transport (`ws`), in-memory rooms |
+| `ws-worker/` | Cloudflare Worker transport: one Durable Object per room |
+| `index.html`, `style.css`, `app.js`, `client/` | Static pixel-art client |
 
-The rules engine and room logic are shared so move legality, terminal evaluation, and game authority stay consistent across all backends.
+The shared modules are plain classic scripts that publish themselves on `globalThis` and also set
+`module.exports`. The browser loads them with `<script>` tags, Node with `require`, and Wrangler bundles
+them as side-effect imports. Load order: `chess-core.js` -> `protocol.js` -> `engine-facade.js` ->
+`room-logic.js` -> `room-session.js`.
 
-## 2) Shared module pattern
+## Hidden information lives on the server
 
-All shared modules (`chess-core.js`, `shared/protocol.js`, `shared/engine-facade.js`, `shared/room-logic.js`) use an IIFE pattern that exports to:
-- `module.exports` when loaded via Node CJS `require()`
-- `window.*` when loaded via browser `<script>` tags
-- `globalThis.*` in other environments (Workers, ESM)
+Earlier versions broadcast the whole game and masked it in the browser. Now the room keeps the full
+state and `createView(state, viewer)` builds what each member may know (see the table in
+`multiplayer-schema.md`). Because the masking happens on the server, opening dev tools or a second tab
+as a spectator shows nothing a player shouldn't see. The fog only lifts when the game is over, or for
+spectators when the host enabled party mode.
 
-Load order matters: `chess-core.js` → `shared/protocol.js` → `shared/engine-facade.js` → `shared/room-logic.js`.
+What is public, Kriegspiel style: that a move happened, captures and their squares, that an illegal try
+happened, forfeits, draw offers, resignations. Check goes only to the side in check, along with the
+lines it comes from.
 
-## 3) Frontend flow
+The client can't run `generateLegalMoves` any more, since it doesn't know where the enemy is. Instead it uses
+`generatePlausibleMovesForPiece`, which only respects your own pieces. It powers the move hints and stops
+moves that are impossible on any board, so a misclick never costs a hard-mode turn. The server has
+the final word on everything else.
 
-`app.js` manages:
+## One session layer, two transports
 
-- mode selection (Local vs Online Friend),
-- board rendering and status updates,
-- input handling (select/move/promotion),
-- websocket session lifecycle for online mode.
+`shared/room-session.js` handles create/join/resume/spectate, moves, options, draws, resignations, new
+games and disconnects. It talks to the transport only through:
 
-Frontend treats backend `game_state` as canonical in online mode.
+```js
+hooks = { connections(), send(conn, msg), close(conn, code, reason), save(conn), makeResumeToken() }
+```
 
-## 4) Rules layer flow (`chess-core.js`)
+- **Node** (`server/server.js`): a `Map` of rooms, each with a `Set` of connections. Rate and size limits, room cap, TTL pruning.
+- **Worker** (`ws-worker/src`): `index.js` routes `?room=CODE` to `idFromName(CODE)` and `?create=1` to a fresh random code (retrying on a 409 collision). `room.js` uses the WebSocket hibernation API. Per-socket metadata lives in socket attachments; the room is a single small storage value per Durable Object. After an eviction, presence is rebuilt from the sockets that are still open. An alarm deletes rooms that have sat idle for an hour.
 
-Core helper flow per move:
+## Game rules worth knowing
 
-1. Generate legal moves.
-2. Validate selected move.
-3. Apply move to cloned board state.
-4. Compute SAN and captures.
-5. Evaluate terminal state (checkmate, stalemate, draw, fallback king-captured).
+- `boardVersion` is monotonic for the life of a room, so clients can always drop stale snapshots, including after a rematch.
+- Forfeited turns are recorded as plies (`--`), so colours always alternate in the move list, replay and PGN.
+- A forfeit clears the en passant square.
+- Options (hard mode, party mode) are locked between the first move and the end of the game.
+- `new_game` is refused while a game is in progress; after a finished game the players swap colours.
+- Automatic draws: stalemate, fivefold repetition, the 75-move rule, and dead positions (K v K, a single minor piece, or same-coloured bishops only). Threefold and the 50-move rule must be claimed.
 
-Important safety rules:
+## Client
 
-- King capture is not a legal move.
-- Missing king positions are handled as terminal fallback to prevent undefined behavior.
+`app.js` renders views; it never decides legality. Local pass-and-play runs the same `room-logic.js` in
+the browser and switches the board to the side to move after each turn. A turn banner above the board
+says whose move it is and summarizes what the opponent did.
+Supporting modules:
 
-## 5) Local mode flow
+- `client/sprites.js`: 16x16 pixel pieces and the umpire, drawn to canvas once and cached as data URLs.
+- `client/sfx.js`: a small WebAudio chiptune synth (effects plus optional music).
+- `client/fx.js`: particles, screen shake, banners and typewriter text. All of it respects `prefers-reduced-motion`.
+- `client/stateGuards.js`: snapshot version checks.
+- `assets/help/*.gif`: the how-to-play animations, rendered from the same sprites by `tools/make-help-gifs.mjs` (`cd tools && npm install && npm run help-gifs`).
 
-1. Frontend computes legal moves directly with `chess-core.js`.
-2. Frontend applies move and updates local state.
-3. History/event UI updates from local canonical state.
-4. No network/backend dependency.
+## Tests
 
-## 6) Online mode flow
-
-1. Client opens websocket to Node or Worker backend.
-2. Player creates or joins room.
-3. Backend assigns seat (`w`/`b`) or spectator role.
-4. Client sends move intent.
-5. Backend validates move authoritatively via shared room logic.
-6. Backend broadcasts authoritative `game_state`.
-7. Clients hydrate only if snapshot version is monotonic.
-
-Hard mode behavior:
-
-- Illegal move attempts are rejected.
-- In hard mode, illegal move attempts forfeit turn unless the mover is in check; in-check illegal attempts are rejected with no forfeit.
-
-## 7) Session and room model
-
-- Two player seats max per room.
-- Additional users can join as spectators.
-- Reconnect is token-based for player sessions.
-- Node backend stores room state in memory with TTL pruning.
-- Worker backend persists room state via Durable Object storage.
-
-## 8) Backend paths
-
-Both backends use the same shared room authority (`shared/room-logic.js`) and differ only in transport and persistence.
-
-### Node (`server/`)
-
-- `server/server.js`: websocket transport + protocol dispatch.
-- `server/roomManager.js`: thin wrapper around shared room logic + connection management.
-- `server/protocol.js`: re-exports from `shared/protocol.js`.
-- `server/chessEngineFacade.js`: re-exports from `shared/engine-facade.js`.
-
-### Cloudflare Worker (`ws-worker/`)
-
-- `src/index.js`: websocket upgrade and DO routing.
-- `src/room.js`: Durable Object with connection management, delegates game logic to shared room module.
-
-Current Worker topology:
-
-- All sessions currently route to one DO (`global-hub`).
-- This is simple but not ideal for high scale.
-
-## 9) Reliability guards
-
-- Client-side stale snapshot rejection.
-- Snapshot shape validation for persisted history.
-- Backend rate-limit and max-message checks (Node).
-- Protocol version mismatch rejection.
-
-## 10) Scaling direction
-
-Recommended next architecture step:
-
-1. Replace single `global-hub` with room-code sharded Durable Objects.
-2. Add stronger abuse controls and telemetry.
-3. Add integration tests for websocket end-to-end flows.
+- `server/tests`: engine perft suite, room logic, session (fake transport), Node end-to-end over real sockets.
+- `ws-worker/tests`: Durable Object against a mocked hibernation API.
+- The end-to-end suite also runs against `wrangler dev`: `E2E_URL=ws://127.0.0.1:8787 node --test tests/server-e2e.test.mjs`.

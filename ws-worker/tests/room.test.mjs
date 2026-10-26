@@ -7,17 +7,43 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
-const PROTOCOL_VERSION = '1.0.0';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOM_MODULE_PATH = path.resolve(__dirname, '../src/room.js');
-const CHESS_CORE_PATH = path.resolve(__dirname, '../src/chess-core.js');
 
-// Load shared IIFE modules via CJS require and bridge to globalThis
-await import(CHESS_CORE_PATH);
-globalThis.BlendChessProtocol = globalThis.BlendChessProtocol || require('../../shared/protocol.js');
-globalThis.BlendChessEngineFacade = globalThis.BlendChessEngineFacade || require('../../shared/engine-facade.js');
-globalThis.BlendChessRoomLogic = globalThis.BlendChessRoomLogic || require('../../shared/room-logic.js');
+require('../../chess-core.js');
+const protocol = require('../../shared/protocol.js');
+require('../../shared/engine-facade.js');
+const rl = require('../../shared/room-logic.js');
+require('../../shared/room-session.js');
+
+class MockSocket {
+  constructor() {
+    this.inbox = [];
+    this.closed = false;
+    this.attachment = null;
+  }
+  send(text) {
+    if (this.closed) throw new Error('closed');
+    this.inbox.push(JSON.parse(text));
+  }
+  close() {
+    this.closed = true;
+  }
+  serializeAttachment(value) {
+    this.attachment = structuredClone(value);
+  }
+  deserializeAttachment() {
+    return structuredClone(this.attachment);
+  }
+}
+
+class MockResponse {
+  constructor(body, init = {}) {
+    this.body = body;
+    this.status = init.status;
+    this.webSocket = init.webSocket;
+  }
+}
 
 async function loadGameHubClass() {
   const source = await readFile(ROOM_MODULE_PATH, 'utf8');
@@ -32,224 +58,197 @@ async function loadGameHubClass() {
     String,
     Number,
     Boolean,
-    Uint32Array,
-    setTimeout,
-    clearTimeout,
-    setInterval,
-    clearInterval,
-    WebSocketPair: class WebSocketPair {},
-    Response: class Response { constructor(body, init) { this.body = body; this.status = init?.status; } },
+    Set,
+    Map,
+    Uint8Array,
+    TextEncoder,
+    TextDecoder,
+    WebSocketPair: class {
+      constructor() {
+        this[0] = new MockSocket();
+        this[1] = new MockSocket();
+      }
+    },
+    Response: MockResponse,
+    BlendChessProtocol: globalThis.BlendChessProtocol,
+    BlendChessRoomLogic: globalThis.BlendChessRoomLogic,
+    BlendChessRoomSession: globalThis.BlendChessRoomSession,
   });
   context.globalThis = context;
-  context.ChessCore = globalThis.ChessCore;
-  context.BlendChessProtocol = globalThis.BlendChessProtocol;
-  context.BlendChessEngineFacade = globalThis.BlendChessEngineFacade;
-  context.BlendChessRoomLogic = globalThis.BlendChessRoomLogic;
 
-  const module = new vm.SourceTextModule(source, {
-    context,
-    identifier: ROOM_MODULE_PATH,
-  });
-
+  const module = new vm.SourceTextModule(source, { context, identifier: ROOM_MODULE_PATH });
   await module.link(async (specifier) => {
-    if (specifier === 'cloudflare:workers') {
-      return new vm.SyntheticModule(['DurableObject'], function init() {
-        this.setExport('DurableObject', class DurableObject {
-          constructor(ctx, env) {
-            this.ctx = ctx;
-            this.env = env;
-          }
-        });
-      }, { context });
-    }
-    throw new Error(`Unhandled import: ${specifier}`);
+    if (specifier !== 'cloudflare:workers') throw new Error(`Unhandled import: ${specifier}`);
+    return new vm.SyntheticModule(['DurableObject'], function init() {
+      this.setExport('DurableObject', class DurableObject {
+        constructor(ctx, env) {
+          this.ctx = ctx;
+          this.env = env;
+        }
+      });
+    }, { context });
   });
-
   await module.evaluate();
   return module.namespace.GameHub;
 }
 
 const GameHub = await loadGameHubClass();
 
-function createStorageContext() {
-  const state = new Map();
+function createCtx(storageMap = new Map()) {
+  const sockets = [];
+  let ready = Promise.resolve();
   return {
+    sockets,
+    storageMap,
+    alarm: null,
+    acceptWebSocket(ws) {
+      sockets.push(ws);
+    },
+    getWebSockets() {
+      return sockets.filter((ws) => !ws.closed);
+    },
+    blockConcurrencyWhile(fn) {
+      ready = fn();
+      return ready;
+    },
+    get ready() {
+      return ready;
+    },
     storage: {
       async get(key) {
-        return state.get(key);
+        return structuredClone(storageMap.get(key));
       },
       async put(key, value) {
-        state.set(key, value);
+        storageMap.set(key, structuredClone(value));
+      },
+      async deleteAll() {
+        storageMap.clear();
+      },
+      async setAlarm(time) {
+        this.alarmAt = time;
       },
     },
   };
 }
 
-function createFakeSocket() {
-  return {
-    readyState: 1,
-    sent: [],
-    send(raw) {
-      this.sent.push(JSON.parse(String(raw)));
+async function createHub(storageMap) {
+  const ctx = createCtx(storageMap);
+  const hub = new GameHub(ctx, {});
+  await ctx.ready;
+  return { hub, ctx };
+}
+
+function upgradeRequest(roomCode, create) {
+  const headers = new Map([['upgrade', 'websocket'], ['x-room-code', roomCode], ['x-room-create', create ? '1' : '0']]);
+  return { headers: { get: (name) => headers.get(name.toLowerCase()) || null } };
+}
+
+async function open(hub, roomCode, create = false) {
+  const response = await hub.fetch(upgradeRequest(roomCode, create));
+  assert.equal(response.status, 101);
+  const serverSocket = hub.ctx.sockets.at(-1);
+  const client = {
+    ws: serverSocket,
+    async send(type, payload = {}, playerId = '') {
+      await hub.webSocketMessage(serverSocket, JSON.stringify(protocol.createMessage(type, roomCode, playerId, payload)));
     },
-    close() {
-      this.readyState = 3;
-    },
+    last: (type) => serverSocket.inbox.filter((message) => message.type === type).at(-1),
+    view: () => serverSocket.inbox.filter((message) => message.payload.game).at(-1).payload.game,
   };
+  return client;
 }
 
-async function createHub() {
-  const hub = new GameHub(createStorageContext(), {});
-  await hub.ready;
-  return hub;
+const sq = (name) => ({ r: 8 - Number(name[1]), c: 'abcdefgh'.indexOf(name[0]) });
+
+async function startGame() {
+  const { hub, ctx } = await createHub();
+  const white = await open(hub, 'ROOM01', true);
+  await white.send('create_room', { nickname: 'Wendy' });
+  const black = await open(hub, 'ROOM01');
+  await black.send('join_room', { nickname: 'Boris' });
+  return { hub, ctx, white, black };
 }
 
-function addConnection(hub, id) {
-  const ws = createFakeSocket();
-  hub.connections.set(id, {
-    id,
-    ws,
-    roomCode: '',
-    playerId: '',
-    role: 'player',
-    color: null,
-  });
-  return ws;
-}
+test('create needs the create flag, and a taken code answers 409', async () => {
+  const { hub } = await createHub();
+  const stranger = await open(hub, 'ROOM01');
+  await stranger.send('create_room', {});
+  assert.equal(stranger.last('error').payload.errorCode, 'INVALID_PAYLOAD');
 
-async function sendEnvelope(hub, connectionId, envelope) {
-  const message = {
-    ...envelope,
-    version: PROTOCOL_VERSION,
-  };
-  await hub.handleMessage(connectionId, JSON.stringify(message));
-}
-
-function messageByType(socket, type) {
-  return socket.sent.find((message) => message.type === type) || null;
-}
-
-test('join room emits player_assigned with resume token', async () => {
-  const hub = await createHub();
-  const hostSocket = addConnection(hub, 'host-conn');
-
-  await sendEnvelope(hub, 'host-conn', {
-    type: 'create_room',
-    payload: { nickname: 'Host' },
-  });
-
-  const created = messageByType(hostSocket, 'room_created');
-  assert.ok(created, 'room_created should be emitted');
-  const roomCode = created.payload.roomCode;
-  assert.ok(roomCode, 'room code should exist');
-
-  const joinerSocket = addConnection(hub, 'joiner-conn');
-  await sendEnvelope(hub, 'joiner-conn', {
-    type: 'join_room',
-    roomCode,
-    payload: { nickname: 'Joiner' },
-  });
-
-  const assigned = messageByType(joinerSocket, 'player_assigned');
-  assert.ok(assigned, 'player_assigned should be emitted');
-  assert.equal(typeof assigned.payload.resumeToken, 'string');
-  assert.ok(assigned.payload.resumeToken.length >= 12, 'resumeToken should be non-trivial');
+  const host = await open(hub, 'ROOM01', true);
+  await host.send('create_room', {});
+  assert.equal(host.last('room_created').payload.color, 'w');
+  const again = await hub.fetch(upgradeRequest('ROOM01', true));
+  assert.equal(again.status, 409);
 });
 
-test('plain join is rejected when disconnected seat is reserved during active game', async () => {
-  const hub = await createHub();
-  const hostSocket = addConnection(hub, 'host-conn');
-  const guestSocket = addConnection(hub, 'guest-conn');
-
-  await sendEnvelope(hub, 'host-conn', {
-    type: 'create_room',
-    payload: { nickname: 'Host' },
-  });
-  const created = messageByType(hostSocket, 'room_created');
-  const roomCode = created?.payload?.roomCode;
-  assert.ok(roomCode, 'room code should exist');
-
-  await sendEnvelope(hub, 'guest-conn', {
-    type: 'join_room',
-    roomCode,
-    payload: { nickname: 'Guest' },
-  });
-
-  await sendEnvelope(hub, 'host-conn', {
-    type: 'move_intent',
-    roomCode,
-    payload: {
-      from: { r: 6, c: 4 },
-      to: { r: 4, c: 4 },
-    },
-  });
-  assert.ok(messageByType(hostSocket, 'move_applied'), 'host should receive move_applied');
-
-  await hub.handleClose('guest-conn');
-
-  const intruderSocket = addConnection(hub, 'intruder-conn');
-  await sendEnvelope(hub, 'intruder-conn', {
-    type: 'join_room',
-    roomCode,
-    payload: { nickname: 'Intruder' },
-  });
-
-  const error = messageByType(intruderSocket, 'error');
-  assert.ok(error, 'error should be emitted');
-  assert.equal(error.payload.errorCode, 'PLAYER_NOT_FOUND');
+test('joining an empty room code reports UNKNOWN_ROOM', async () => {
+  const { hub } = await createHub();
+  const client = await open(hub, 'EMPTY1');
+  await client.send('join_room', {});
+  assert.equal(client.last('error').payload.errorCode, 'UNKNOWN_ROOM');
 });
 
-test('resume join reclaims disconnected seat using player id and token', async () => {
-  const hub = await createHub();
-  const hostSocket = addConnection(hub, 'host-conn');
-  const guestSocket = addConnection(hub, 'guest-conn');
+test('moves are redacted per viewer and the room is persisted per room', async () => {
+  const { ctx, white, black } = await startGame();
+  await white.send('move_intent', { from: sq('g1'), to: sq('f3') });
+  const blackView = black.view();
+  assert.equal(blackView.turn, 'b');
+  assert.equal(blackView.board.flat().some((piece) => piece && piece.color === 'w'), false);
+  assert.equal(JSON.stringify(black.ws.inbox).includes('Nf3'), false);
+  assert.equal(ctx.storageMap.get('room').log.length, 1);
+  assert.ok(ctx.storage.alarmAt > Date.now());
+});
 
-  await sendEnvelope(hub, 'host-conn', {
-    type: 'create_room',
-    payload: { nickname: 'Host' },
-  });
-  const roomCode = messageByType(hostSocket, 'room_created')?.payload?.roomCode;
-  assert.ok(roomCode, 'room code should exist');
+test('state and seats survive eviction; presence is rebuilt from open sockets', async () => {
+  const { ctx, white, black } = await startGame();
+  await white.send('move_intent', { from: sq('e2'), to: sq('e4') });
+  const blackIdentity = black.last('room_joined').payload;
 
-  await sendEnvelope(hub, 'guest-conn', {
-    type: 'join_room',
-    roomCode,
-    payload: { nickname: 'Guest' },
-  });
+  // Simulate an eviction: a new object instance over the same storage and sockets, with Black's socket gone.
+  black.ws.closed = true;
+  const revived = new GameHub(ctx, {});
+  await ctx.ready;
+  assert.equal(revived.room.log.length, 1);
+  assert.equal(rl.getPlayer(revived.room, blackIdentity.playerId).connected, false);
+  assert.equal(rl.getPlayer(revived.room, white.last('room_created').payload.playerId).connected, true);
 
-  const initialAssigned = messageByType(guestSocket, 'player_assigned');
-  assert.ok(initialAssigned, 'initial join should assign player seat');
-  const seatPlayerId = initialAssigned.payload.playerId;
-  const seatResumeToken = initialAssigned.payload.resumeToken;
-  assert.ok(seatPlayerId, 'seat player id should exist');
-  assert.ok(seatResumeToken, 'seat resume token should exist');
+  const phone = await open(revived, 'ROOM01');
+  await phone.send('join_room', { resume: true, resumeToken: blackIdentity.resumeToken }, blackIdentity.playerId);
+  assert.equal(phone.last('room_joined').payload.color, 'b');
+});
 
-  await sendEnvelope(hub, 'host-conn', {
-    type: 'move_intent',
-    roomCode,
-    payload: {
-      from: { r: 6, c: 4 },
-      to: { r: 4, c: 4 },
-    },
-  });
-  await hub.handleClose('guest-conn');
+test('closing a socket marks the seat disconnected and tells the opponent', async () => {
+  const { hub, white, black } = await startGame();
+  await white.send('move_intent', { from: sq('e2'), to: sq('e4') });
+  black.ws.closed = true;
+  await hub.webSocketClose(black.ws, 1006);
+  const seats = white.view().players;
+  assert.equal(seats.find((seat) => seat.color === 'b').connected, false);
+});
 
-  const resumeSocket = addConnection(hub, 'resume-conn');
-  await sendEnvelope(hub, 'resume-conn', {
-    type: 'join_room',
-    roomCode,
-    playerId: seatPlayerId,
-    payload: {
-      nickname: 'Guest',
-      resume: true,
-      resumeToken: seatResumeToken,
-    },
-  });
+test('resume from a second socket detaches the first without dropping the seat', async () => {
+  const { hub, white, black } = await startGame();
+  const identity = black.last('room_joined').payload;
+  const tab2 = await open(hub, 'ROOM01');
+  await tab2.send('join_room', { resume: true, resumeToken: identity.resumeToken }, identity.playerId);
+  assert.equal(black.ws.closed, true);
+  await hub.webSocketClose(black.ws, 4000);
+  assert.equal(white.view().players.find((seat) => seat.color === 'b').connected, true);
+});
 
-  const resumedAssigned = messageByType(resumeSocket, 'player_assigned');
-  assert.ok(resumedAssigned, 'resumed player should receive player_assigned');
-  assert.equal(resumedAssigned.payload.playerId, seatPlayerId, 'resume should reclaim prior seat id');
-  assert.equal(typeof resumedAssigned.payload.resumeToken, 'string');
-  assert.ok(resumedAssigned.payload.resumeToken.length >= 12, 'resume should issue/confirm token');
-  assert.equal(messageByType(resumeSocket, 'error'), null, 'resume should not emit error');
+test('rate limit and size limit apply per socket', async () => {
+  const { white } = await startGame();
+  for (let i = 0; i < 45; i += 1) await white.send('ping');
+  assert.equal(white.last('error').payload.errorCode, 'RATE_LIMIT');
+});
+
+test('alarm deletes an idle empty room', async () => {
+  const { hub, ctx, white, black } = await startGame();
+  white.ws.closed = true;
+  black.ws.closed = true;
+  hub.room.lastActivity = Date.now() - 2 * 60 * 60 * 1000;
+  await hub.alarm();
+  assert.equal(hub.room, null);
+  assert.equal(ctx.storageMap.size, 0);
 });

@@ -5,6 +5,7 @@
   "durable_objects": {
     "bindings": [
       {
+        // One instance per room code (idFromName(roomCode)).
         "name": "GAME_HUB",
         "class_name": "GameHub"
       }

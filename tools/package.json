@@ -1,0 +1,11 @@
+{
+  "name": "blendchess-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "help-gifs": "node make-help-gifs.mjs"
+  },
+  "devDependencies": {
+    "gifenc": "^1.0.3"
+  }
+}

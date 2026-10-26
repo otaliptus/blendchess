@@ -1,278 +1,296 @@
 <!doctype html>
-<html lang="en" data-ui-theme="classic" data-board-theme="chesscom">
+<html lang="en" data-theme="arcade">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>BlendChess</title>
-    <meta name="description" content="Play chess online or locally with blind mode. Clean, modern interface inspired by the best chess platforms." />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Blendchess</title>
+    <meta name="description" content="Kriegspiel-style chess in pixel fog: you only see your own pieces. Pass and play, or invite a friend online." />
+    <meta name="theme-color" content="#140b2b" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect width='16' height='16' fill='%23140b2b'/%3E%3Cpath fill='%23ff4fa3' d='M7 2h2v2h2v2H9v2h2v2h1v2H4v-2h1V8h2V6H5V4h2z'/%3E%3C/svg%3E" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-    />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <!-- ===== GAME LOBBY MODAL ===== -->
-    <div id="gameLobbyOverlay" class="lobby-overlay">
-      <div class="lobby-modal">
-        <button id="lobbyClose" class="lobby-close-btn" type="button" aria-label="Close">&#10005;</button>
-        <!-- Step 1: Choose mode -->
-        <div id="lobbyStep1" class="lobby-step active">
-          <div class="lobby-header">
-            <span class="lobby-logo">♞</span>
-            <h1>BlendChess</h1>
+    <div id="app" class="app">
+      <header class="topbar">
+        <button id="brandBtn" class="brand" type="button" aria-label="Back to the main menu">
+          <span class="brand-blend">BLEND</span><span class="brand-chess">CHESS</span>
+        </button>
+        <div class="topbar-actions">
+          <div class="palette" role="group" aria-label="Colour theme">
+            <button type="button" class="palette-dot" data-theme-choice="arcade" title="Arcade"></button>
+            <button type="button" class="palette-dot" data-theme-choice="handheld" title="Handheld"></button>
+            <button type="button" class="palette-dot" data-theme-choice="amber" title="Amber"></button>
+            <button type="button" class="palette-dot" data-theme-choice="paper" title="Paper"></button>
           </div>
-
-          <!-- Resume Banner: shown only when a saved online session exists -->
-          <div id="lobbyResumeSection" class="lobby-resume-section hidden">
-            <div class="lobby-resume-card">
-              <div class="lobby-resume-icon">⚡</div>
-              <div class="lobby-resume-body">
-                <strong class="lobby-resume-title">Online Game in Progress</strong>
-                <div id="lobbyResumeInfo" class="lobby-resume-info"></div>
-              </div>
-              <div class="lobby-resume-btns">
-                <button id="lobbyResumeBtn" class="btn btn-primary btn-sm" type="button">↩ Resume</button>
-                <button id="lobbyStartFreshBtn" class="btn btn-ghost btn-sm" type="button">Start Fresh</button>
-              </div>
-            </div>
-          </div>
-
-          <p class="lobby-subtitle">Choose how to play</p>
-          <div class="lobby-choices">
-            <button id="lobbyLocal" class="lobby-choice-btn" type="button">
-              <span class="lobby-choice-icon">🏠</span>
-              <span class="lobby-choice-label">Local Play</span>
-              <span class="lobby-choice-desc">Pass-and-play on one device</span>
-            </button>
-            <button id="lobbyOnline" class="lobby-choice-btn" type="button">
-              <span class="lobby-choice-icon">🌐</span>
-              <span class="lobby-choice-label">Online Play</span>
-              <span class="lobby-choice-desc">Play with a friend over the internet</span>
-            </button>
-          </div>
-          <label class="lobby-toggle">
-            <input id="lobbyHardMode" type="checkbox" class="toggle-input" />
-            <span class="toggle-switch"></span>
-            <span>Hard mode (illegal moves lose turn)</span>
-          </label>
-        </div>
-
-        <!-- Step 2: Online setup -->
-        <div id="lobbyStep2" class="lobby-step">
-          <button id="lobbyBack" class="lobby-back-btn" type="button">← Back</button>
-          <h2>Online Play</h2>
-          
-          <div class="lobby-online-split">
-            <!-- CREATE SECTION -->
-            <div class="lobby-action-card">
-              <div class="action-icon">✨</div>
-              <h3>Create New Room</h3>
-              <p>Start a new game and invite a friend.</p>
-              <button id="createRoom" class="btn btn-primary lobby-action-btn" type="button">
-                <span class="btn-text">Create Room</span>
-              </button>
-            </div>
-
-            <!-- JOIN SECTION -->
-            <div class="lobby-action-card">
-              <div class="action-icon">🚀</div>
-              <h3>Join Existing Room</h3>
-              <p>Enter a code to join a friend's game.</p>
-              <div class="lobby-join-group">
-                <input id="joinRoomCode" placeholder="Enter room code..." />
-                <div class="lobby-join-buttons">
-                  <button id="joinRoom" class="btn btn-secondary" type="button">
-                    <span class="btn-text">Join Game</span>
-                  </button>
-                  <button id="spectateRoom" class="btn btn-ghost" type="button" title="Watch a game without playing">
-                    👁 Spectate
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <details class="advanced-server">
-            <summary>Advanced: Server URL</summary>
-            <input id="serverUrl" placeholder="wss://your-worker.workers.dev" />
-          </details>
-          <details class="advanced-server advanced-appearance">
-            <summary>Appearance</summary>
-            <div class="lobby-theme-row">
-              <div class="theme-group">
-                <label class="theme-label" for="uiTheme">Theme</label>
-                <select id="uiTheme" class="theme-select">
-                  <option value="classic">Classic</option>
-                  <option value="modern">Modern</option>
-                  <option value="dark">Dark</option>
-                  <option value="midnight">Midnight</option>
-                </select>
-              </div>
-              <div class="theme-group">
-                <label class="theme-label" for="boardTheme">Board</label>
-                <select id="boardTheme" class="theme-select">
-                  <option value="chesscom">Chess.com Green</option>
-                  <option value="lichess">Lichess Brown</option>
-                  <option value="wood">Wood</option>
-                  <option value="green">Tournament Green</option>
-                  <option value="blue">Ice Blue</option>
-                  <option value="brown">Classic Brown</option>
-                  <option value="purple">Royal Purple</option>
-                </select>
-              </div>
-            </div>
-          </details>
-        </div>
-      </div>
-    </div>
-
-    <!-- ===== PROMOTION PICKER ===== -->
-    <div id="promotionPicker" class="promotion-picker" hidden>
-      <div class="promotion-picker-pieces" id="promotionPieces"></div>
-    </div>
-
-    <!-- ===== MAIN PAGE ===== -->
-    <main class="page">
-      <header class="header">
-        <div class="header-left">
-          <h1><a id="headerLogo" href="./" class="logo-link"><span class="logo-icon">&#9822;</span> BlendChess</a></h1>
-        </div>
-        <div class="header-right">
-          <div class="header-controls">
-            <button id="newGame" class="btn btn-primary btn-sm"><span class="btn-icon">+</span> New game</button>
-            <button id="openLobby" class="btn btn-secondary btn-sm">Play mode</button>
-          </div>
-          <div class="theme-group">
-            <label class="theme-label" for="uiThemeHeader">Theme</label>
-            <select id="uiThemeHeader" class="theme-select">
-              <option value="classic">Classic</option>
-              <option value="modern">Modern</option>
-              <option value="dark">Dark</option>
-              <option value="midnight">Midnight</option>
-            </select>
-          </div>
-          <div class="theme-group">
-            <label class="theme-label" for="boardThemeHeader">Board</label>
-            <select id="boardThemeHeader" class="theme-select">
-              <option value="chesscom">Chess.com Green</option>
-              <option value="lichess">Lichess Brown</option>
-              <option value="wood">Wood</option>
-              <option value="green">Tournament Green</option>
-              <option value="blue">Ice Blue</option>
-              <option value="brown">Classic Brown</option>
-              <option value="purple">Royal Purple</option>
-            </select>
-          </div>
+          <button id="soundBtn" class="chip-btn" type="button" aria-pressed="true" title="Sound effects (M)">SFX</button>
+          <button id="musicBtn" class="chip-btn" type="button" aria-pressed="false" title="Music">MUSIC</button>
+          <button id="settingsBtn" class="chip-btn" type="button" title="Settings">OPTIONS</button>
         </div>
       </header>
 
-      <!-- In-game toolbar (only visible during active online game) -->
-      <div id="ingameToolbar" class="ingame-toolbar" hidden>
-        <div class="ingame-toolbar-left">
-          <span id="multiplayerStatus" class="ingame-status"></span>
-          <span id="roomCodeBadge" class="room-badge"></span>
+      <!-- ===== MENU ===== -->
+      <main id="menuScreen" class="screen menu-screen">
+        <div class="logo-wrap">
+          <h1 class="logo" data-text="BLENDCHESS">BLENDCHESS</h1>
+          <p class="tagline">chess in the fog of war</p>
         </div>
-        <div class="ingame-toolbar-right">
-          <button id="copyRoomCode" class="btn btn-sm" type="button">📋 Copy invite</button>
-          <button id="claimDraw" class="btn btn-sm" type="button">½ Draw</button>
-          <button id="resign" class="btn btn-sm btn-danger-sm" type="button">🏳 Resign</button>
-          <button id="leaveRoom" class="btn btn-sm btn-danger-sm" type="button">Leave</button>
-        </div>
-      </div>
 
-      <div id="flashBanner" class="flash-banner" aria-live="polite"></div>
-      <div id="illegalOverlay" class="illegal-overlay" aria-live="assertive" hidden>
-        <span class="illegal-icon">&#10007;</span>
-        <span class="illegal-text"></span>
-      </div>
+        <div id="logoBoard" class="logo-board" aria-hidden="true"></div>
 
-      <div class="layout">
-        <section class="board-section">
-          <div class="board-shell">
-            <!-- Player bar: opponent (top) -->
-            <div class="player-bar player-bar-top" id="playerBarTop">
-              <div class="player-bar-info">
-                <span class="player-bar-name" id="topPlayerName">Black</span>
-                <span class="player-bar-material" id="topPlayerMaterial"></span>
-              </div>
-              <div class="player-bar-captures" id="topPlayerCaptures"></div>
-            </div>
+        <button id="pressStart" class="press-start" type="button">PRESS START</button>
 
-            <div class="board-wrap">
-              <div id="board" class="board" aria-label="Chess board"></div>
-            </div>
+        <nav id="menuMain" class="menu px-panel hidden" aria-label="Main menu">
+          <button class="menu-item" type="button" data-action="continue" id="continueItem" hidden>
+            <span class="menu-label">CONTINUE</span><span class="menu-hint" id="continueHint"></span>
+          </button>
+          <button class="menu-item" type="button" data-action="local">
+            <span class="menu-label">LOCAL DUEL</span><span class="menu-hint">pass &amp; play on this device</span>
+          </button>
+          <button class="menu-item" type="button" data-action="create">
+            <span class="menu-label">CREATE ROOM</span><span class="menu-hint">invite a friend online</span>
+          </button>
+          <button class="menu-item" type="button" data-action="join">
+            <span class="menu-label">JOIN ROOM</span><span class="menu-hint">play or watch with a code</span>
+          </button>
+          <button class="menu-item" type="button" data-action="archive">
+            <span class="menu-label">ARCHIVE</span><span class="menu-hint">replay finished games</span>
+          </button>
+          <button class="menu-item" type="button" data-action="help">
+            <span class="menu-label">HOW TO PLAY</span><span class="menu-hint">rules of the fog</span>
+          </button>
+        </nav>
 
-            <!-- Player bar: you (bottom) -->
-            <div class="player-bar player-bar-bottom" id="playerBarBottom">
-              <div class="player-bar-info">
-                <span class="player-bar-name" id="bottomPlayerName">White</span>
-                <span class="player-bar-material" id="bottomPlayerMaterial"></span>
-              </div>
-              <div class="player-bar-captures" id="bottomPlayerCaptures"></div>
-            </div>
+        <section id="menuSetup" class="menu px-panel hidden" aria-labelledby="setupTitle">
+          <h2 id="setupTitle" class="menu-title">NEW DUEL</h2>
+          <label class="field" id="nicknameField">
+            <span class="field-label">YOUR NAME</span>
+            <input id="nicknameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
+          </label>
+          <label class="toggle">
+            <input id="hardModeInput" type="checkbox" />
+            <span class="toggle-box" aria-hidden="true"></span>
+            <span class="toggle-text">HARD MODE<small>an illegal try costs your turn (unless you're in check)</small></span>
+          </label>
+          <label class="toggle" id="openSpectatorsField">
+            <input id="openSpectatorsInput" type="checkbox" />
+            <span class="toggle-box" aria-hidden="true"></span>
+            <span class="toggle-text">PARTY MODE<small>spectators see the whole board live. Only for watchers you trust.</small></span>
+          </label>
+          <div class="menu-row">
+            <button class="px-btn ghost" type="button" data-action="back">BACK</button>
+            <button class="px-btn primary" type="button" id="setupGo">START</button>
           </div>
-
-          <!-- Status bar below board -->
-          <div class="status" id="status"></div>
         </section>
 
-        <aside class="side-panel">
-          <div class="panel-card">
-            <h2><span class="card-icon">&#9889;</span> Events</h2>
-            <ul id="events" class="events"></ul>
+        <section id="menuJoin" class="menu px-panel hidden" aria-labelledby="joinTitle">
+          <h2 id="joinTitle" class="menu-title">JOIN ROOM</h2>
+          <label class="field">
+            <span class="field-label">ROOM CODE</span>
+            <input id="roomCodeInput" class="code-input" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC123" />
+          </label>
+          <label class="field">
+            <span class="field-label">YOUR NAME</span>
+            <input id="joinNicknameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
+          </label>
+          <div class="menu-row">
+            <button class="px-btn ghost" type="button" data-action="back">BACK</button>
+            <button class="px-btn" type="button" id="watchGo">WATCH</button>
+            <button class="px-btn primary" type="button" id="joinGo">PLAY</button>
           </div>
-          <div class="panel-card">
-            <h2><span class="card-icon">&#9776;</span> Moves</h2>
-            <div class="replay-toolbar">
-              <div class="replay-controls">
-                <button id="replayFirst" type="button" class="btn btn-sm">⏮</button>
-                <button id="replayPrev" type="button" class="btn btn-sm">◀</button>
-                <button id="replayNext" type="button" class="btn btn-sm">▶</button>
-                <button id="replayFinal" type="button" class="btn btn-sm">⏭</button>
-              </div>
-              <div id="checkAlert" class="check-alert" aria-live="polite" hidden>CHECK</div>
-            </div>
-            <div id="moveListInline" class="move-list-inline"></div>
-            <p id="replayBanner" class="replay-banner">Replay available when the game ends.</p>
-            <div class="move-list-footer">
-              <button id="exportPgn" type="button" class="btn btn-sm">Export PGN</button>
-              <div class="history-controls">
-                <select id="historyGames"></select>
-                <button id="loadHistoryGame" type="button" class="btn btn-sm">Load</button>
-                <button id="clearHistoryGames" type="button" class="btn btn-sm">Clear</button>
-              </div>
-            </div>
-          </div>
-          <div class="panel-card panel-card-info">
-            <h2><span class="card-icon">&#9881;</span> Game info</h2>
-            <p id="modeText">Strict mode: illegal moves are rejected.</p>
-            <p id="setupHint">Local mode active. Switch to Online Friend to create or join a room.</p>
-            <p id="multiplayerInfo">Playing locally.</p>
-            <p id="playerRoster"></p>
-            <label class="toggle-label toggle-label-sm">
-              <input id="hardMode" type="checkbox" class="toggle-input" />
-              <span class="toggle-switch"></span>
-              <span class="toggle-text">Hard mode</span>
-            </label>
-          </div>
-        </aside>
-      </div>
-    </main>
+        </section>
 
-    <!-- Hidden elements for backward compat with app.js references -->
-    <select id="playMode" hidden>
-      <option value="local">Local</option>
-      <option value="online">Online Friend</option>
-    </select>
-    <button id="connectServer" hidden></button>
-    <div id="captures" hidden></div>
+        <section id="menuArchive" class="menu px-panel wide hidden" aria-labelledby="archiveTitle">
+          <h2 id="archiveTitle" class="menu-title">ARCHIVE</h2>
+          <ol id="archiveList" class="archive-list"></ol>
+          <div class="menu-row">
+            <button class="px-btn ghost" type="button" data-action="back">BACK</button>
+            <button class="px-btn danger" type="button" id="archiveClear">CLEAR ALL</button>
+          </div>
+        </section>
+
+        <section id="menuHelp" class="menu px-panel wide hidden" aria-labelledby="helpTitle">
+          <h2 id="helpTitle" class="menu-title">HOW TO PLAY</h2>
+          <div class="help">
+            <p><b>Normal chess, one twist:</b> you only see your own pieces.</p>
+            <div class="help-cards">
+              <figure class="help-card">
+                <img src="assets/help/fog.gif" width="80" height="80" alt="Enemy pieces fade into fog; only your pieces stay visible" />
+                <figcaption><b>The fog.</b> Enemy pieces are hidden. Only the game's end lifts it.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/hints.gif" width="80" height="80" alt="Selecting a rook shows dots; a pawn shows dashed capture squares" />
+                <figcaption><b>Hints.</b> Dots: might be legal. Dashed: a pawn capture worth a try.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/illegal.gif" width="80" height="80" alt="A bishop bumps into a hidden piece and the move is refused" />
+                <figcaption><b>Illegal tries.</b> Hidden pieces block you: try again. <i>Hard mode:</i> it costs your turn.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/capture.gif" width="80" height="80" alt="A knight disappears and a red X marks its square" />
+                <figcaption><b>Captures.</b> The umpire names the square, for both players.</figcaption>
+              </figure>
+              <figure class="help-card">
+                <img src="assets/help/check.gif" width="80" height="80" alt="The king flashes red and the checking diagonal is highlighted" />
+                <figcaption><b>Check.</b> Only you are told, plus the line: file, rank, diagonal or knight.</figcaption>
+              </figure>
+            </div>
+            <p class="help-keys">Click or drag pieces. Keys: arrows, ENTER, ESC. M mutes.</p>
+          </div>
+          <div class="menu-row">
+            <button class="px-btn primary" type="button" data-action="back">GOT IT</button>
+          </div>
+        </section>
+      </main>
+
+      <!-- ===== GAME ===== -->
+      <main id="gameScreen" class="screen game-screen hidden">
+        <div class="board-column">
+          <div id="turnBanner" class="turn-banner hidden" role="status" aria-live="polite">
+            <span class="turn-chip" aria-hidden="true"></span>
+            <span id="turnWho" class="turn-who"></span>
+            <span id="turnNote" class="turn-note"></span>
+          </div>
+          <div id="barTop" class="player-bar"></div>
+          <div class="board-frame" id="boardFrame">
+            <div id="board" class="board" role="grid" aria-label="Chess board"></div>
+            <div id="waiting" class="board-overlay hidden">
+              <p class="overlay-kicker">WAITING FOR OPPONENT<span class="dots"></span></p>
+              <div id="waitingInvite" class="invite">
+                <canvas id="waitingQr" class="qr" role="img" aria-label="QR code with the invite link"></canvas>
+                <div class="invite-side">
+                  <p class="overlay-label">SCAN WITH A PHONE<br />OR ENTER THE CODE</p>
+                  <p id="waitingCode" class="big-code">------</p>
+                  <div class="invite-buttons">
+                    <button id="waitingShare" class="px-btn primary" type="button" hidden>SHARE</button>
+                    <button id="waitingCopy" class="px-btn" type="button">COPY LINK</button>
+                  </div>
+                </div>
+              </div>
+              <p class="overlay-small">Your friend scans the code and taps PLAY.</p>
+            </div>
+          </div>
+          <div id="barBottom" class="player-bar"></div>
+          <div id="replayBar" class="replay-bar hidden">
+            <button class="px-btn small" type="button" data-replay="first" aria-label="First position">|&lt;</button>
+            <button class="px-btn small" type="button" data-replay="prev" aria-label="Previous move">&lt;</button>
+            <span id="replayLabel" class="replay-label">0 / 0</span>
+            <button class="px-btn small" type="button" data-replay="next" aria-label="Next move">&gt;</button>
+            <button class="px-btn small" type="button" data-replay="last" aria-label="Final position">&gt;|</button>
+          </div>
+        </div>
+
+        <aside class="side-column">
+          <div class="umpire px-panel">
+            <img id="umpireFace" class="umpire-face" alt="" width="64" height="64" />
+            <div class="umpire-body">
+              <div class="umpire-name">THE UMPIRE SAYS</div>
+              <p id="umpireText" class="umpire-text" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div id="roomPanel" class="room-panel px-panel hidden">
+            <div class="room-line">
+              <span class="room-label">ROOM</span>
+              <span id="roomCode" class="room-code">------</span>
+              <button id="qrBtn" class="px-btn small" type="button" title="Show a QR code to scan">QR</button>
+              <button id="copyLink" class="px-btn small" type="button">COPY LINK</button>
+            </div>
+            <div class="room-line">
+              <span id="netStatus" class="net-status" data-status="offline">OFFLINE</span>
+              <span id="watchers" class="watchers"></span>
+            </div>
+            <div id="roomOptions" class="room-options"></div>
+          </div>
+
+          <div class="log px-panel">
+            <div class="tabs" role="tablist">
+              <button class="tab active" type="button" role="tab" aria-selected="true" data-tab="moves">MOVES</button>
+              <button class="tab" type="button" role="tab" aria-selected="false" data-tab="news">UMPIRE LOG</button>
+            </div>
+            <ol id="movesList" class="moves-list" data-panel="moves"></ol>
+            <ol id="newsList" class="news-list hidden" data-panel="news"></ol>
+          </div>
+
+          <div id="actions" class="actions"></div>
+        </aside>
+      </main>
+    </div>
+
+    <!-- ===== OVERLAYS ===== -->
+    <div id="dialog" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+      <div class="modal-box px-panel">
+        <h2 id="dialogTitle" class="menu-title"></h2>
+        <div id="dialogBody" class="modal-body"></div>
+        <div id="dialogButtons" class="menu-row"></div>
+      </div>
+    </div>
+
+    <div id="promotion" class="modal hidden" role="dialog" aria-modal="true" aria-label="Choose promotion piece">
+      <div class="modal-box px-panel">
+        <h2 class="menu-title">PROMOTE TO</h2>
+        <div id="promotionChoices" class="promotion-choices"></div>
+        <div class="menu-row"><button class="px-btn ghost" type="button" id="promotionCancel">CANCEL</button></div>
+      </div>
+    </div>
+
+    <div id="gameOver" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="gameOverTitle">
+      <div class="modal-box px-panel gameover-box">
+        <p id="gameOverKicker" class="overlay-kicker"></p>
+        <h2 id="gameOverTitle" class="gameover-title"></h2>
+        <p id="gameOverReason" class="gameover-reason"></p>
+        <div id="gameOverButtons" class="menu-row wrap"></div>
+      </div>
+    </div>
+
+    <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-box px-panel">
+        <h2 id="settingsTitle" class="menu-title">OPTIONS</h2>
+        <label class="toggle">
+          <input id="musicInput" type="checkbox" />
+          <span class="toggle-box" aria-hidden="true"></span>
+          <span class="toggle-text">MUSIC</span>
+        </label>
+        <label class="toggle">
+          <input id="crtInput" type="checkbox" />
+          <span class="toggle-box" aria-hidden="true"></span>
+          <span class="toggle-text">CRT SCANLINES</span>
+        </label>
+        <label class="toggle">
+          <input id="fxInput" type="checkbox" />
+          <span class="toggle-box" aria-hidden="true"></span>
+          <span class="toggle-text">SHAKE &amp; PARTICLES</span>
+        </label>
+        <label class="toggle">
+          <input id="hintsInput" type="checkbox" />
+          <span class="toggle-box" aria-hidden="true"></span>
+          <span class="toggle-text">MOVE HINTS</span>
+        </label>
+        <details class="advanced">
+          <summary>ADVANCED</summary>
+          <label class="field">
+            <span class="field-label">SERVER URL</span>
+            <input id="serverUrlInput" spellcheck="false" autocomplete="off" />
+          </label>
+        </details>
+        <div class="menu-row"><button class="px-btn primary" type="button" id="settingsClose">DONE</button></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div class="crt" aria-hidden="true"></div>
 
     <script src="chess-core.js"></script>
     <script src="shared/protocol.js"></script>
+    <script src="shared/engine-facade.js"></script>
+    <script src="shared/room-logic.js"></script>
     <script src="client/stateGuards.js"></script>
+    <script src="client/vendor/qrcode.js"></script>
+    <script src="client/sprites.js"></script>
+    <script src="client/sfx.js"></script>
+    <script src="client/fx.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
