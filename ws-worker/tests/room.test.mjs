@@ -63,6 +63,9 @@ async function loadGameHubClass() {
     Uint8Array,
     TextEncoder,
     TextDecoder,
+    URL,
+    Headers,
+    Request,
     WebSocketPair: class {
       constructor() {
         this[0] = new MockSocket();
@@ -136,6 +139,15 @@ async function createHub(storageMap) {
   const hub = new GameHub(ctx, {});
   await ctx.ready;
   return { hub, ctx };
+}
+
+function reserveRequest(body) {
+  return {
+    url: 'https://room.internal/reserve',
+    method: 'POST',
+    headers: { get: () => null },
+    json: async () => body,
+  };
 }
 
 function upgradeRequest(roomCode, create) {
@@ -251,4 +263,50 @@ test('alarm deletes an idle empty room', async () => {
   await hub.alarm();
   assert.equal(hub.room, null);
   assert.equal(ctx.storageMap.size, 0);
+});
+
+test('a reserved ranked room only opens with the lobby tickets', async () => {
+  const { hub } = await createHub();
+  const reservation = {
+    roomCode: 'RATED1',
+    rated: true,
+    control: '5+3',
+    clock: { baseMs: 300_000, incMs: 3000 },
+    seats: [
+      { color: 'w', playerId: 'lobby-white', nickname: 'Wendy', rating: 1200, ticket: 'w'.repeat(24) },
+      { color: 'b', playerId: 'lobby-black', nickname: 'Boris', rating: 1300, ticket: 'b'.repeat(24) },
+    ],
+  };
+  const reserved = await hub.fetch(reserveRequest(reservation));
+  assert.equal(reserved.status, 200);
+  assert.equal(hub.room.rated, true);
+  assert.equal(hub.room.clock.baseMs, 300_000);
+
+  const intruder = await open(hub, 'RATED1');
+  await intruder.send('join_room', { nickname: 'Intruder' });
+  assert.equal(intruder.last('error').payload.errorCode, 'TICKET_INVALID');
+
+  const watcher = await open(hub, 'RATED1');
+  await watcher.send('join_room', { spectator: true });
+  assert.equal(watcher.last('error').payload.errorCode, 'SPECTATOR_DISABLED');
+
+  const white = await open(hub, 'RATED1');
+  await white.send('join_room', { ticket: 'w'.repeat(24), nickname: 'Cheater' });
+  assert.equal(white.last('room_joined').payload.color, 'w');
+  assert.equal(white.last('room_joined').payload.playerId, 'lobby-white');
+
+  const black = await open(hub, 'RATED1');
+  await black.send('join_room', { ticket: 'b'.repeat(24) });
+  assert.equal(black.last('room_joined').payload.color, 'b');
+  assert.equal(hub.room.clock.startedAt !== null, true);
+  const view = white.view();
+  assert.equal(view.rated, true);
+  assert.equal(view.reserved, true);
+  assert.equal(view.players.find((seat) => seat.color === 'b').rating, 1300);
+  assert.equal(view.players.find((seat) => seat.color === 'w').nickname, 'Wendy');
+
+  // Options are fixed in a lobby-arranged game.
+  white.ws.inbox.length = 0;
+  await white.send('set_options', { hardMode: true });
+  assert.equal(white.last('move_rejected').payload.reasonCode, 'RATED_LOCKED');
 });

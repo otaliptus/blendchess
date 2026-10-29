@@ -17,6 +17,16 @@
     ERROR: 'error',
     PING: 'ping',
     PONG: 'pong',
+    // Ranked lobby. Additive: a 2.0 room server ignores nothing, it just never sends these.
+    LOBBY_HELLO: 'lobby_hello',
+    LOBBY_READY: 'lobby_ready',
+    LOBBY_QUEUE: 'lobby_queue',
+    LOBBY_QUEUED: 'lobby_queued',
+    LOBBY_CANCEL: 'lobby_cancel',
+    LOBBY_CANCELLED: 'lobby_cancelled',
+    LOBBY_ERROR: 'lobby_error',
+    LOBBY_RATING: 'lobby_rating',
+    MATCH_FOUND: 'match_found',
   };
 
   const ERROR_CODES = {
@@ -33,9 +43,16 @@
     PLAYER_NOT_FOUND: 'PLAYER_NOT_FOUND',
     INVALID_DRAW_CLAIM: 'INVALID_DRAW_CLAIM',
     VERSION_MISMATCH: 'VERSION_MISMATCH',
+    QUEUE_FULL: 'QUEUE_FULL',
+    ALREADY_IN_GAME: 'ALREADY_IN_GAME',
+    NOT_AUTHENTICATED: 'NOT_AUTHENTICATED',
+    TICKET_INVALID: 'TICKET_INVALID',
+    SPECTATOR_DISABLED: 'SPECTATOR_DISABLED',
+    RATED_LOCKED: 'RATED_LOCKED',
   };
 
-  const ROOM_LESS_TYPES = new Set([TYPES.CREATE_ROOM]);
+  // Lobby messages have no room code: the lobby is a single shared connection.
+  const ROOM_LESS_TYPES = new Set([TYPES.CREATE_ROOM, TYPES.LOBBY_HELLO, TYPES.LOBBY_QUEUE, TYPES.LOBBY_CANCEL]);
 
   const DRAW_REASON_ALIASES = {
     threefold: 'threefold',

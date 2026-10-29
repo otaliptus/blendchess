@@ -8,6 +8,11 @@
         // One instance per room code (idFromName(roomCode)).
         "name": "GAME_HUB",
         "class_name": "GameHub"
+      },
+      {
+        // One global instance: ranked queue, identities and ratings.
+        "name": "LOBBY_HUB",
+        "class_name": "LobbyHub"
       }
     ]
   },
@@ -15,6 +20,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["GameHub"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["LobbyHub"]
     }
   ]
 }

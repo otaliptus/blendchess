@@ -11,6 +11,8 @@
   const MAX_PLAYERS_PER_ROOM = 2;
   const MAX_EVENTS = 40;
   const NICKNAME_MAX_LENGTH = 16;
+  const MAX_CLOCK_MS = 60 * 60 * 1000;
+  const JOIN_DEADLINE_MS = 2 * 60 * 1000;
   const DRAW_REASON_PRIORITY = ['fivefold', 'seventyFiveMove', 'threefold', 'fiftyMove', 'insufficientMaterial'];
 
   function cleanNickname(value, fallback) {
@@ -28,6 +30,7 @@
   function createRoomState(roomCode, options = {}) {
     const base = core.createInitialState();
     const now = Date.now();
+    const spec = options.clockSpec && Number(options.clockSpec.baseMs) > 0 ? options.clockSpec : null;
     return {
       roomCode: roomCode || '',
       players: {},
@@ -54,6 +57,22 @@
       waitingForStart: true,
       hardMode: Boolean(options.hardMode),
       spectatorView: normalizeSpectatorView(options.spectatorView),
+      // Ranked games: seats are reserved by the lobby, spectators are barred and a clock runs.
+      rated: Boolean(options.rated),
+      control: options.control || null,
+      reservedSeats: options.reservedSeats ? { ...options.reservedSeats } : null,
+      clockSpec: spec ? { ...spec } : null,
+      clock: spec ? {
+        baseMs: spec.baseMs,
+        incMs: Math.max(0, Number(spec.incMs) || 0),
+        w: spec.baseMs,
+        b: spec.baseMs,
+        startedAt: null,
+        lastTick: null,
+      } : null,
+      reservedAt: options.reservedAt || now,
+      reported: false,
+      ratingUpdates: null,
       createdAt: now,
       lastActivity: now,
     };
@@ -147,6 +166,17 @@
     return Boolean(player && player.resumeToken && resumeToken && player.resumeToken === resumeToken);
   }
 
+  // Lobby-arranged rooms know both players from the reservation, even if one never connected.
+  function playerIdentities(state) {
+    if (state.reservedSeats && state.reservedSeats.w && state.reservedSeats.b) {
+      return ['w', 'b'].map((color) => ({ playerId: state.reservedSeats[color].playerId, color }));
+    }
+    return state.playerOrder
+      .filter((playerId) => state.players[playerId])
+      .slice(0, 2)
+      .map((playerId) => ({ playerId, color: state.players[playerId].color }));
+  }
+
   function getSeatAssignments(state) {
     return state.playerOrder.map((playerId) => {
       const player = state.players[playerId];
@@ -154,6 +184,8 @@
         color: player.color,
         nickname: player.nickname,
         connected: player.connected,
+        rating: Number.isFinite(Number(player.rating)) ? Number(player.rating) : null,
+        playerId: state.rated ? player.id : undefined,
       };
     });
   }
@@ -211,6 +243,145 @@
     return { ok: true, spectator };
   }
 
+  // --- Ranked rooms --------------------------------------------------------
+
+  function clampClock(value) {
+    const ms = Number(value);
+    if (!Number.isFinite(ms) || ms <= 0) return 0;
+    return Math.min(MAX_CLOCK_MS, Math.round(ms));
+  }
+
+  // The lobby hands a room its two seats, the clock and the ticket each player must present.
+  function applyReservation(state, reservation = {}) {
+    const now = Date.now();
+    state.rated = Boolean(reservation.rated);
+    state.control = typeof reservation.control === 'string' ? reservation.control.slice(0, 12) : null;
+    const baseMs = clampClock(reservation.clock && reservation.clock.baseMs);
+    const incMs = Math.max(0, Math.min(60_000, Math.round(Number(reservation.clock && reservation.clock.incMs) || 0)));
+    if (baseMs > 0) {
+      state.clockSpec = { baseMs, incMs, control: state.control };
+      state.clock = { baseMs, incMs, w: baseMs, b: baseMs, startedAt: null, lastTick: null };
+    }
+    const reserved = {};
+    const seats = Array.isArray(reservation.seats) ? reservation.seats : [];
+    for (const seat of seats) {
+      const color = seat && seat.color === 'b' ? 'b' : 'w';
+      reserved[color] = {
+        color,
+        playerId: String((seat && seat.playerId) || ''),
+        nickname: cleanNickname(seat && seat.nickname, color === 'w' ? 'White' : 'Black'),
+        rating: Number.isFinite(Number(seat && seat.rating)) ? Number(seat.rating) : null,
+        ticket: String((seat && seat.ticket) || ''),
+        joined: false,
+      };
+    }
+    state.reservedSeats = reserved;
+    state.reservedAt = now;
+    state.spectatorView = 'fog';
+    return state;
+  }
+
+  function reservedSeatsValid(state) {
+    return Boolean(state.reservedSeats && state.reservedSeats.w && state.reservedSeats.b);
+  }
+
+  function findReservedSeat(state, ticket) {
+    if (!state.reservedSeats || typeof ticket !== 'string' || !ticket) return null;
+    for (const color of ['w', 'b']) {
+      const seat = state.reservedSeats[color];
+      if (seat && seat.ticket && seat.ticket === ticket) return seat;
+    }
+    return null;
+  }
+
+  // Seats a reserved player with the colour and name the lobby fixed, not the ones they ask for.
+  function assignReservedPlayer(state, seat, makeResumeTokenFn) {
+    touchState(state);
+    const existing = getPlayer(state, seat.playerId);
+    if (existing) {
+      const wasConnected = existing.connected;
+      existing.connected = true;
+      existing.resumeToken = makeResumeTokenFn();
+      state.waitingForStart = !isReady(state);
+      if (!wasConnected) addEvent(state, 'presence', { color: existing.color, nickname: existing.nickname, online: true });
+      startClockIfReady(state);
+      return { ok: true, player: existing };
+    }
+
+    const occupant = getPlayerByColor(state, seat.color);
+    if (occupant && occupant.id !== seat.playerId) return { ok: false, reason: ERROR_CODES.ROOM_FULL };
+    if (isFull(state)) return { ok: false, reason: ERROR_CODES.ROOM_FULL };
+
+    const player = {
+      id: seat.playerId,
+      color: seat.color,
+      nickname: cleanNickname(seat.nickname, 'Player'),
+      connected: true,
+      resumeToken: makeResumeTokenFn(),
+      rating: seat.rating,
+    };
+    state.players[player.id] = player;
+    state.playerOrder.push(player.id);
+    seat.joined = true;
+    state.waitingForStart = !isReady(state);
+    startClockIfReady(state);
+    addEvent(state, 'presence', { color: seat.color, nickname: player.nickname, online: true });
+    return { ok: true, player };
+  }
+
+  // --- Clock ---------------------------------------------------------------
+
+  function startClockIfReady(state) {
+    if (!state.clock || state.clock.startedAt || state.gameOver) return false;
+    if (!isReady(state)) return false;
+    state.clock.startedAt = Date.now();
+    state.clock.lastTick = state.clock.startedAt;
+    return true;
+  }
+
+  // Takes the time the side to move has spent since the last tick off their clock.
+  function chargeClock(state, now = Date.now()) {
+    if (!state.clock || !state.clock.startedAt || state.gameOver) return null;
+    const elapsed = Math.max(0, now - (state.clock.lastTick || now));
+    state.clock[state.turn] = Math.max(0, state.clock[state.turn] - elapsed);
+    state.clock.lastTick = now;
+    return state.clock[state.turn];
+  }
+
+  function clockRemainingMs(state, now = Date.now()) {
+    if (!state.clock) return null;
+    const stored = Math.max(0, Number(state.clock[state.turn]) || 0);
+    if (state.gameOver || !state.clock.startedAt) return stored;
+    return Math.max(0, stored - Math.max(0, now - (state.clock.lastTick || now)));
+  }
+
+  function nextClockDeadline(state, now = Date.now()) {
+    if (!state.clock || !state.clock.startedAt || state.gameOver) return null;
+    return now + clockRemainingMs(state, now);
+  }
+
+  function finishByTimeout(state) {
+    if (!state.clock || state.gameOver) return false;
+    const loser = state.turn;
+    finishGame(state, core.colorName(core.otherColor(loser)), 'timeout');
+    addEvent(state, 'timeout', { color: loser });
+    return true;
+  }
+
+  // A reserved player never showed up: the one who did waits no longer than JOIN_DEADLINE_MS.
+  function finishByAbandon(state) {
+    if (state.gameOver) return false;
+    const connected = state.playerOrder
+      .map((playerId) => state.players[playerId])
+      .filter((player) => player && player.connected);
+    finishGame(state, connected.length === 1 ? core.colorName(connected[0].color) : null, 'abandon');
+    const missing = state.playerOrder
+      .map((playerId) => state.players[playerId])
+      .filter((player) => player && !player.connected);
+    if (missing.length) addEvent(state, 'abandon', { color: missing[0].color, nickname: missing[0].nickname });
+    return true;
+  }
+
   function removePlayer(state, playerId) {
     const player = getPlayer(state, playerId);
     if (!player) return;
@@ -252,9 +423,13 @@
     touchState(state);
     if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
     if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
+    // A rated rematch needs both players present: nobody should be handed a loss while away.
+    if (state.rated && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
 
     const swapColors = state.gameOver;
     resetGame(state, { swapColors });
+    state.reservedAt = Date.now();
+    startClockIfReady(state);
     addEvent(state, 'new_game', { gameId: state.gameId, swapped: swapColors });
     return { ok: true };
   }
@@ -262,6 +437,8 @@
   function setOptions(state, player, options = {}) {
     touchState(state);
     if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
+    // Lobby-arranged rules are fixed: changing them would change the game being rated.
+    if (state.rated || state.reservedSeats) return { ok: false, reason: ERROR_CODES.RATED_LOCKED };
     if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
 
     if (typeof options.hardMode === 'boolean') state.hardMode = options.hardMode;
@@ -388,6 +565,14 @@
     if (state.gameOver) return { ok: false, reason: ERROR_CODES.GAME_OVER };
     if (state.turn !== player.color) return { ok: false, reason: ERROR_CODES.NOT_YOUR_TURN };
 
+    if (state.clock) {
+      const remaining = chargeClock(state);
+      if (remaining !== null && remaining <= 0) {
+        finishByTimeout(state);
+        return { ok: false, reason: ERROR_CODES.GAME_OVER, timedOut: true };
+      }
+    }
+
     const outcome = facade.evaluateMove(state, player.color, payload);
     if (!outcome.ok) {
       if (outcome.reason !== ERROR_CODES.ILLEGAL_MOVE) return outcome;
@@ -451,6 +636,9 @@
       capture,
     });
 
+    // A played move earns the increment. A forfeited turn does not.
+    if (state.clock && !state.gameOver) state.clock[player.color] += state.clock.incMs;
+
     return { ok: true, san, ply, terminal, nextTurn: state.turn };
   }
 
@@ -513,6 +701,22 @@
       spectatorView: state.spectatorView,
       waitingForStart: state.waitingForStart,
       inProgress: isGameInProgress(state),
+      rated: Boolean(state.rated),
+      reserved: Boolean(state.reservedSeats),
+      control: state.control || null,
+      ratings: state.ratingUpdates || null,
+      clock: state.clock ? {
+        control: state.control || '',
+        baseMs: state.clock.baseMs,
+        incMs: state.clock.incMs,
+        w: state.clock.w,
+        b: state.clock.b,
+        turn: state.turn,
+        startedAt: state.clock.startedAt,
+        running: Boolean(state.clock.startedAt) && !state.gameOver,
+        remaining: clockRemainingMs(state),
+        sentAt: Date.now(),
+      } : null,
       players: getSeatAssignments(state),
       spectatorCount: connectedSpectatorCount(state),
     };
@@ -529,6 +733,8 @@
     seventyFiveMove: '75-move rule',
     insufficientMaterial: 'insufficient material',
     kingCaptured: 'king captured',
+    timeout: 'time forfeit',
+    abandon: 'abandoned',
   };
 
   function pgnResult(winner, gameOver) {
@@ -598,9 +804,21 @@
     getPlayer,
     getPlayerByColor,
     isResumeTokenValid,
+    playerIdentities,
     getSeatAssignments,
     assignPlayer,
     assignSpectator,
+    applyReservation,
+    reservedSeatsValid,
+    findReservedSeat,
+    assignReservedPlayer,
+    startClockIfReady,
+    chargeClock,
+    clockRemainingMs,
+    nextClockDeadline,
+    finishByTimeout,
+    finishByAbandon,
+    JOIN_DEADLINE_MS,
     removePlayer,
     removeSpectator,
     resetGame,
