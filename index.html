@@ -46,6 +46,9 @@
           <button class="menu-item" type="button" data-action="continue" id="continueItem" hidden>
             <span class="menu-label">CONTINUE</span><span class="menu-hint" id="continueHint"></span>
           </button>
+          <button class="menu-item" type="button" data-action="online" id="onlineItem">
+            <span class="menu-label">PLAY ONLINE</span><span class="menu-hint">ranked matchmaking, elo &amp; a clock</span>
+          </button>
           <button class="menu-item" type="button" data-action="local">
             <span class="menu-label">LOCAL DUEL</span><span class="menu-hint">pass &amp; play on this device</span>
           </button>
@@ -62,6 +65,42 @@
             <span class="menu-label">HOW TO PLAY</span><span class="menu-hint">rules of the fog</span>
           </button>
         </nav>
+
+
+        <section id="menuLobby" class="menu px-panel wide hidden" aria-labelledby="lobbyTitle">
+          <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
+          <p id="lobbyIdentity" class="lobby-identity">RANKED: play your first game to get a rating.</p>
+          <label class="field">
+            <span class="field-label">YOUR NAME</span>
+            <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
+          </label>
+          <div class="control-picker" role="group" aria-label="Time control">
+            <button type="button" class="control-chip" data-control="5+3">
+              <span class="control-name">BLITZ</span><span class="control-time">5 + 3</span>
+              <small>fast, 3s per move</small>
+            </button>
+            <button type="button" class="control-chip" data-control="10+0">
+              <span class="control-name">RAPID</span><span class="control-time">10 + 0</span>
+              <small>calmer, no increment</small>
+            </button>
+          </div>
+          <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite">Ready. Pick a time control, then FIND GAME.</p>
+          <div class="menu-row">
+            <button class="px-btn ghost" type="button" data-action="back">BACK</button>
+            <button id="lobbyCancel" class="px-btn danger hidden" type="button">CANCEL</button>
+            <button id="lobbyFind" class="px-btn primary" type="button">FIND GAME</button>
+          </div>
+          <div class="leaderboard-block">
+            <div class="leaderboard-head">
+              <h3 class="lobby-subtitle">LEADERBOARD</h3>
+              <button id="leaderboardRefresh" class="px-btn small" type="button">REFRESH</button>
+            </div>
+            <ol id="leaderboardList" class="leaderboard-list">
+              <li class="empty-note">No ranked games yet. Be the first!</li>
+            </ol>
+            <p id="leaderboardMeta" class="leaderboard-meta"></p>
+          </div>
+        </section>
 
         <section id="menuSetup" class="menu px-panel hidden" aria-labelledby="setupTitle">
           <h2 id="setupTitle" class="menu-title">NEW DUEL</h2>
@@ -115,6 +154,7 @@
           <h2 id="helpTitle" class="menu-title">HOW TO PLAY</h2>
           <div class="help">
             <p><b>Normal chess, one twist:</b> you only see your own pieces.</p>
+            <p><b>Ranked (<i>Play Online</i>):</b> the same fog, plus a server clock and an Elo rating. No spectators. Leaving does not stop your clock.</p>
             <div class="help-cards">
               <figure class="help-card">
                 <img src="assets/help/fog.gif" width="80" height="80" alt="Enemy pieces fade into fog; only your pieces stay visible" />
@@ -195,6 +235,7 @@
             <div class="room-line">
               <span class="room-label">ROOM</span>
               <span id="roomCode" class="room-code">------</span>
+              <span id="ratedBadge" class="rated-badge hidden"></span>
               <button id="qrBtn" class="px-btn small" type="button" title="Show a QR code to scan">QR</button>
               <button id="copyLink" class="px-btn small" type="button">COPY LINK</button>
             </div>
@@ -241,6 +282,7 @@
         <p id="gameOverKicker" class="overlay-kicker"></p>
         <h2 id="gameOverTitle" class="gameover-title"></h2>
         <p id="gameOverReason" class="gameover-reason"></p>
+        <p id="gameOverRating" class="gameover-rating"></p>
         <div id="gameOverButtons" class="menu-row wrap"></div>
       </div>
     </div>
