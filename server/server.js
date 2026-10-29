@@ -131,6 +131,15 @@ async function registerActive(room) {
 async function reportResult(room) {
   const state = room.state;
   if (!state.rated || !state.gameOver || state.reported) return false;
+  const players = playerIdentitiesOf(state).map((player) => player.playerId);
+  if (state.noContest) {
+    // Nobody gets rated for an opponent who never arrived; just free both players.
+    if (!state.released) {
+      state.released = true;
+      await lobbySession.release(lobbyStore, { roomCode: state.roomCode, players });
+    }
+    return false;
+  }
   state.reported = true;
   const gameKey = `${state.roomCode}:${state.gameId}`;
   const winner = state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null;
@@ -183,11 +192,20 @@ async function tickRatedGames() {
     }
 
     const waitingForSeat = !rl.isReady(state) && state.log.length === 0;
-    if (waitingForSeat && rl.connectedPlayerCount(state) >= 1 && now - state.reservedAt >= rl.JOIN_DEADLINE_MS) {
-      rl.finishByAbandon(state);
-      session.broadcastViews(state, hooksFor(room));
-      await afterRoomChange(room);
+    if (waitingForSeat && now - state.reservedAt >= rl.JOIN_DEADLINE_MS) {
+      if (rl.connectedPlayerCount(state) >= 1) {
+        rl.finishByAbandon(state);
+        session.broadcastViews(state, hooksFor(room));
+        await afterRoomChange(room);
+      } else {
+        // Nobody ever arrived: free both players and drop the room.
+        await releaseRated(room);
+        rooms.delete(state.roomCode);
+        continue;
+      }
     }
+
+    if (state.gameOver && !state.reported) await reportResult(room);
   }
 }
 

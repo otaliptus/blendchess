@@ -26,7 +26,8 @@ function makeRoomCode() {
 
 // The raw IP never leaves this function: Durable Objects only ever see a hash.
 async function networkHash(request) {
-  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For');
+  // Only the platform header is trustworthy; X-Forwarded-For is client-controlled.
+  const ip = request.headers.get('CF-Connecting-IP');
   if (!ip) return 'unknown';
   const address = String(ip).split(',')[0].trim();
   // Local development: everything comes from loopback, which is not a shared network.

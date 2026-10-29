@@ -207,7 +207,7 @@
     insufficientMaterial: 'Draw: nobody can checkmate any more.',
     kingCaptured: 'king captured',
     timeout: 'on time',
-    abandon: 'by abandonment',
+    abandon: 'No contest: an opponent never arrived.',
   };
   const REASON_TEXT = {
     NOT_YOUR_TURN: "It's not your turn.",
@@ -790,6 +790,10 @@
         return { text: mine ? 'Your draw offer was declined.' : 'Draw offer declined.', tone: 'warn' };
       case 'resign':
         return { text: mine ? 'You resigned.' : `${who} resigned!`, tone: mine ? 'bad' : 'good' };
+      case 'abandon':
+        return { text: `${event.nickname || who} never arrived. No contest, no rating change.`, tone: 'warn' };
+      case 'timeout':
+        return { text: mine ? 'Your flag fell: out of time.' : `${who} ran out of time.`, tone: mine ? 'bad' : 'good' };
       case 'game_over':
         return { text: resultLine(event), tone: 'warn' };
       case 'presence':
@@ -930,7 +934,10 @@
     const winnerColor = view.winner === 'White' ? 'w' : view.winner === 'Black' ? 'b' : null;
     let title;
     let tone;
-    if (!winnerColor) {
+    if (view.result === 'abandon') {
+      title = 'NO CONTEST';
+      tone = 'warn';
+    } else if (!winnerColor) {
       title = 'DRAW';
       tone = 'warn';
     } else if (viewer) {

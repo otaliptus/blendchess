@@ -178,3 +178,15 @@ test('lobby rejects unauthenticated queueing and oversized frames', async () => 
   if (outcome.kind === 'error') assert.equal(outcome.code, 'INVALID_PAYLOAD');
   client.close();
 });
+
+// Only meaningful against the Worker: the Node server has no HTTP routes at all.
+test('internal Durable Object paths are not reachable from the internet', { skip: !EXTERNAL_URL }, async () => {
+  for (const path of ['/report', '/active', '/release', '/reserve', '/limit/create']) {
+    const response = await fetch(`${HTTP_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"roomCode":"ZZZZZZ","gameKey":"ZZZZZZ:1","players":[]}',
+    });
+    assert.notEqual(response.status, 200, `${path} must not answer like an internal endpoint`);
+  }
+});

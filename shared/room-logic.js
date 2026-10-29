@@ -72,6 +72,7 @@
       } : null,
       reservedAt: options.reservedAt || now,
       reported: false,
+      noContest: false,
       ratingUpdates: null,
       createdAt: now,
       lastActivity: now,
@@ -169,7 +170,12 @@
   // Lobby-arranged rooms know both players from the reservation, even if one never connected.
   function playerIdentities(state) {
     if (state.reservedSeats && state.reservedSeats.w && state.reservedSeats.b) {
-      return ['w', 'b'].map((color) => ({ playerId: state.reservedSeats[color].playerId, color }));
+      return ['w', 'b'].map((seatColor) => {
+        const seat = state.reservedSeats[seatColor];
+        const player = getPlayer(state, seat.playerId);
+        // Colours swap between rematches; the player record is the truth once seated.
+        return { playerId: seat.playerId, color: player ? player.color : seatColor };
+      });
     }
     return state.playerOrder
       .filter((playerId) => state.players[playerId])
@@ -178,7 +184,7 @@
   }
 
   function getSeatAssignments(state) {
-    return state.playerOrder.map((playerId) => {
+    return state.playerOrder.filter((playerId) => state.players[playerId]).map((playerId) => {
       const player = state.players[playerId];
       return {
         color: player.color,
@@ -368,13 +374,12 @@
     return true;
   }
 
-  // A reserved player never showed up: the one who did waits no longer than JOIN_DEADLINE_MS.
+  // A reserved player never showed up: the game ends as a no contest. Nobody gets rating
+  // points for an opponent who never arrived, and the absent player is not charged a loss.
   function finishByAbandon(state) {
     if (state.gameOver) return false;
-    const connected = state.playerOrder
-      .map((playerId) => state.players[playerId])
-      .filter((player) => player && player.connected);
-    finishGame(state, connected.length === 1 ? core.colorName(connected[0].color) : null, 'abandon');
+    state.noContest = true;
+    finishGame(state, null, 'abandon');
     const missing = state.playerOrder
       .map((playerId) => state.players[playerId])
       .filter((player) => player && !player.connected);
@@ -413,6 +418,12 @@
         const player = fresh.players[playerId];
         player.color = core.otherColor(player.color);
       }
+      if (fresh.reservedSeats && fresh.reservedSeats.w && fresh.reservedSeats.b) {
+        const seats = fresh.reservedSeats;
+        const white = { ...seats.w, color: 'b' };
+        const black = { ...seats.b, color: 'w' };
+        fresh.reservedSeats = { w: black, b: white };
+      }
     }
 
     Object.keys(state).forEach((key) => { delete state[key]; });
@@ -423,8 +434,10 @@
     touchState(state);
     if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
     if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
-    // A rated rematch needs both players present: nobody should be handed a loss while away.
+    // A rated rematch needs both players present, and the finished result fully recorded:
+    // nobody should be handed a loss while away, and no game may go unrated by accident.
     if (state.rated && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    if (state.rated && state.gameOver && !state.reported) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
 
     const swapColors = state.gameOver;
     resetGame(state, { swapColors });
@@ -486,8 +499,18 @@
 
   function claimDraw(state, player, payload) {
     touchState(state);
-    const blocked = guardPlayerAction(state, player) || (isReady(state) ? '' : ERROR_CODES.ROOM_NOT_READY);
+    const blocked = guardPlayerAction(state, player)
+      || (isReady(state) || state.log.length > 0 ? '' : ERROR_CODES.ROOM_NOT_READY);
     if (blocked) return { ok: false, reason: blocked };
+
+    // A draw claim cannot rescue a flag that already fell.
+    if (state.clock) {
+      const remaining = chargeClock(state);
+      if (remaining !== null && remaining <= 0) {
+        finishByTimeout(state);
+        return { ok: false, reason: ERROR_CODES.GAME_OVER, timedOut: true };
+      }
+    }
 
     const drawReason = evaluateDrawEligibility(state, normalizeDrawReason((payload || {}).reason));
     if (drawReason) {
@@ -561,7 +584,9 @@
     touchState(state);
 
     if (!player) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
-    if (!isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    // Once a game has started the clock is the authority: a disconnected opponent must not
+    // freeze the player who is still there.
+    if (!isReady(state) && state.log.length === 0) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
     if (state.gameOver) return { ok: false, reason: ERROR_CODES.GAME_OVER };
     if (state.turn !== player.color) return { ok: false, reason: ERROR_CODES.NOT_YOUR_TURN };
 

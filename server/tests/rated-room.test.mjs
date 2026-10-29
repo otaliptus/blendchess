@@ -116,7 +116,7 @@ test('a clock that runs out ends the game for the side to move', () => {
   assert.ok(white);
 });
 
-test('a reserved player who never shows up loses after the join deadline', () => {
+test('a reserved player who never shows up is a no contest, not a rated win', () => {
   const h = createRatedHarness();
   const white = h.connect('conn-w');
   session.joinRoom(h.state, h.hooks, white, h.envelope(TYPES.JOIN_ROOM, { ticket: WHITE_TICKET }));
@@ -126,7 +126,9 @@ test('a reserved player who never shows up loses after the join deadline', () =>
   rl.finishByAbandon(h.state);
   assert.equal(h.state.gameOver, true);
   assert.equal(h.state.result, 'abandon');
-  assert.equal(h.state.winner, 'White');
+  assert.equal(h.state.noContest, true);
+  assert.equal(h.state.winner, null, 'no rating points for an opponent who never arrived');
+  assert.ok(white);
 });
 
 test('reporting identities come from the reservation even if one seat stayed empty', () => {
@@ -138,7 +140,8 @@ test('reporting identities come from the reservation even if one seat stayed emp
   assert.equal(identities[1].playerId, 'player-black');
   rl.finishByAbandon(h.state);
   assert.equal(h.state.result, 'abandon');
-  assert.equal(h.state.winner, 'White');
+  assert.equal(h.state.noContest, true);
+  assert.equal(h.state.winner, null);
   assert.ok(white);
 });
 
@@ -187,6 +190,7 @@ test('a rated rematch needs both players present', () => {
   rl.finishByTimeout(h.state);
   const whitePlayer = rl.getPlayer(h.state, 'player-white');
 
+  h.state.reported = true; // a real room reports before the rematch is allowed
   black.closed = true;
   session.handleClose(h.state, h.hooks, black);
   assert.equal(rl.newGame(h.state, whitePlayer).reason, ERROR_CODES.ROOM_NOT_READY);
@@ -199,6 +203,51 @@ test('a rated rematch needs both players present', () => {
   assert.equal(h.state.gameOver, false);
   assert.ok(h.state.clock.startedAt);
   assert.ok(white);
+});
+
+test('after a rematch the report colours follow the swapped seats', () => {
+  const h = createRatedHarness();
+  seatBoth(h);
+  const whitePlayer = rl.getPlayer(h.state, 'player-white');
+  rl.finishByTimeout(h.state);
+  h.state.reported = true;
+  assert.equal(rl.newGame(h.state, whitePlayer).ok, true);
+
+  const identities = rl.playerIdentities(h.state);
+  const byId = Object.fromEntries(identities.map((player) => [player.playerId, player.color]));
+  assert.equal(byId['player-white'], 'b');
+  assert.equal(byId['player-black'], 'w');
+  const seats = rl.getSeatAssignments(h.state);
+  assert.equal(seats.find((seat) => seat.playerId === 'player-white').color, 'b');
+  assert.equal(seats.find((seat) => seat.playerId === 'player-black').color, 'w');
+});
+
+test('the opponent leaving mid-game does not freeze the player who stayed', () => {
+  const h = createRatedHarness();
+  const { white, black } = seatBoth(h);
+  session.handleMessage(h.state, h.hooks, white, h.envelope(TYPES.MOVE_INTENT, { from: sq('e2'), to: sq('e4') }));
+  black.closed = true;
+  session.handleClose(h.state, h.hooks, black);
+  assert.equal(rl.isReady(h.state), false);
+
+  h.state.clock.b = 300_000;
+  h.state.clock.lastTick = Date.now();
+  const result = rl.applyMove(h.state, rl.getPlayer(h.state, 'player-black'), { from: sq('e7'), to: sq('e5') });
+  assert.equal(result.ok, true, 'the remaining player can still move');
+  assert.equal(h.state.log.length, 2);
+});
+
+test('a draw claim cannot rescue a flag that already fell', () => {
+  const h = createRatedHarness();
+  seatBoth(h);
+  const player = rl.getPlayer(h.state, 'player-white');
+  h.state.clock.w = 10;
+  h.state.clock.lastTick = Date.now() - 500;
+
+  const result = rl.claimDraw(h.state, player, {});
+  assert.equal(result.timedOut, true);
+  assert.equal(h.state.result, 'timeout');
+  assert.equal(h.state.winner, 'Black');
 });
 
 test('PGN names a flag fall as a time forfeit', () => {

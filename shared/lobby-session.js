@@ -8,6 +8,7 @@
   if (!rating) throw new Error('shared/rating.js must be loaded before lobby-session.js');
 
   const { TYPES, ERROR_CODES, createMessage } = protocol;
+  const MAX_MATCHES_PER_PASS = 8;
 
   // Matchmaking for one lobby, shared by the Node server and the Durable Object.
   //
@@ -210,10 +211,24 @@
     if (live.length < 2) return 0;
 
     const { pairs, remaining } = logic.takeMatches(live, now);
-    if (remaining.length !== live.length) await store.saveQueue(remaining);
+    // Cap one pass so a huge queue cannot hold the lock across hundreds of room creations.
+    const batch = pairs.slice(0, MAX_MATCHES_PER_PASS);
+    const queuedAfter = [...remaining, ...pairs.slice(MAX_MATCHES_PER_PASS).flat()];
+    if (queuedAfter.length !== live.length) await store.saveQueue(queuedAfter);
 
     let started = 0;
-    for (const [first, second] of pairs) {
+    for (const [first, second] of batch) {
+      // A result in another game may have freed (or a late report re-taken) an active marker
+      // between queueing and this pass; never place someone in two live games.
+      const activeFirst = await store.getActiveGame(first.playerId);
+      const activeSecond = await store.getActiveGame(second.playerId);
+      if ((activeFirst && now - activeFirst.at < logic.ACTIVE_GAME_TTL_MS)
+        || (activeSecond && now - activeSecond.at < logic.ACTIVE_GAME_TTL_MS)) {
+        for (const entry of [first, second]) {
+          fail(hooks, connFor(hooks, entry), ERROR_CODES.ALREADY_IN_GAME, 'You are already in a rated game.');
+        }
+        continue;
+      }
       const sameNetwork = Boolean(first.ipHash) && first.ipHash !== 'unknown' && first.ipHash === second.ipHash;
       const order = Math.random() < 0.5 ? [first, second] : [second, first];
       const [whiteEntry, blackEntry] = order;
@@ -286,9 +301,13 @@
     const gameKey = String(payload.gameKey || '');
     const players = Array.isArray(payload.players) ? payload.players : [];
     if (!roomCode || !gameKey || players.length !== 2) return { ok: false, reason: 'INVALID' };
+    const records = [];
     for (const playerId of players) {
       const record = await store.getPlayer(String(playerId));
       if (!record) return { ok: false, reason: 'UNKNOWN_PLAYER' };
+      records.push(record);
+    }
+    for (const record of records) {
       await store.saveActiveGame(record.id, { roomCode, gameKey, at: Date.now() });
     }
     return { ok: true };
@@ -319,9 +338,12 @@
     const cached = await store.getReport(gameKey);
     if (cached) return { ok: true, updates: cached.updates, duplicate: true };
 
-    const white = players.find((player) => player.color === 'w');
-    const black = players.find((player) => player.color === 'b');
+    const white = players.find((player) => player && typeof player === 'object' && player.color === 'w');
+    const black = players.find((player) => player && typeof player === 'object' && player.color === 'b');
     if (!white || !black) return { ok: false, reason: 'INVALID' };
+    if (typeof white.playerId !== 'string' || typeof black.playerId !== 'string' || !white.playerId || !black.playerId) {
+      return { ok: false, reason: 'INVALID' };
+    }
 
     const whiteRecord = await store.getPlayer(String(white.playerId));
     const blackRecord = await store.getPlayer(String(black.playerId));

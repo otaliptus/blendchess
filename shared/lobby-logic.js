@@ -82,41 +82,38 @@
   }
 
   // Pairs waiting players by rating closeness, widening the window with wait time.
+  // One pass over the longest-waiting players: O(n^2), not the repeated re-scan it used to be.
   // Returns { pairs, remaining }; input is not mutated.
   function takeMatches(queue, now) {
-    const remaining = queue.slice().sort((a, b) => a.joinedAt - b.joinedAt);
+    const ordered = queue.slice().sort((a, b) => a.joinedAt - b.joinedAt);
+    const used = new Set();
     const pairs = [];
-    let progress = true;
-    while (progress) {
-      progress = false;
-      for (let i = 0; i < remaining.length; i += 1) {
-        const a = remaining[i];
-        let bestIndex = -1;
-        let bestScore = Infinity;
-        for (let j = 0; j < remaining.length; j += 1) {
-          if (j === i) continue;
-          const b = remaining[j];
-          if (a.control !== b.control) continue;
-          if (rematchBlocked(a, b, now) || rematchBlocked(b, a, now)) continue;
-          const window = Math.max(matchWindow(now - a.joinedAt), matchWindow(now - b.joinedAt));
-          const diff = Math.abs(a.rating - b.rating);
-          if (diff > window) continue;
-          const score = diff + Math.max(0, b.joinedAt - a.joinedAt) / 1000;
-          if (score < bestScore) {
-            bestScore = score;
-            bestIndex = j;
-          }
-        }
-        if (bestIndex >= 0) {
-          pairs.push([a, remaining[bestIndex]]);
-          remaining.splice(Math.max(i, bestIndex), 1);
-          remaining.splice(Math.min(i, bestIndex), 1);
-          progress = true;
-          break;
+    for (let i = 0; i < ordered.length; i += 1) {
+      if (used.has(i)) continue;
+      const a = ordered[i];
+      let bestIndex = -1;
+      let bestScore = Infinity;
+      for (let j = i + 1; j < ordered.length; j += 1) {
+        if (used.has(j)) continue;
+        const b = ordered[j];
+        if (a.control !== b.control) continue;
+        if (rematchBlocked(a, b, now) || rematchBlocked(b, a, now)) continue;
+        const window = Math.max(matchWindow(now - a.joinedAt), matchWindow(now - b.joinedAt));
+        const diff = Math.abs(a.rating - b.rating);
+        if (diff > window) continue;
+        const score = diff + Math.max(0, b.joinedAt - a.joinedAt) / 1000;
+        if (score < bestScore) {
+          bestScore = score;
+          bestIndex = j;
         }
       }
+      if (bestIndex >= 0) {
+        pairs.push([a, ordered[bestIndex]]);
+        used.add(i);
+        used.add(bestIndex);
+      }
     }
-    return { pairs, remaining };
+    return { pairs, remaining: ordered.filter((_, index) => !used.has(index)) };
   }
 
   // --- Players -------------------------------------------------------------
@@ -184,6 +181,10 @@
         .map((record) => summary(record));
     }
 
+    function rankedCount() {
+      return [...players.values()].filter((record) => record.games > 0).length;
+    }
+
     return {
       getPlayer: (id) => players.get(id) || null,
       savePlayer(record) {
@@ -215,28 +216,39 @@
         active.delete(playerId);
       },
       creationCount(ipHash, since) {
-        return (creations.get(ipHash) || []).filter((at) => at >= since).length;
+        const list = (creations.get(ipHash) || []).filter((at) => at >= since);
+        if (!list.length) creations.delete(ipHash);
+        return list.length;
       },
       recordCreation(ipHash, at) {
         const list = (creations.get(ipHash) || []).filter((stamp) => at - stamp < NEW_PLAYER_WINDOW_MS);
         list.push(at);
         creations.set(ipHash, list.slice(-NEW_PLAYER_LIMIT * 2));
+        if (creations.size > 5000) {
+          for (const [key, stamps] of creations) {
+            if (!stamps.some((stamp) => at - stamp < NEW_PLAYER_WINDOW_MS)) creations.delete(key);
+          }
+        }
       },
       getReport(key) {
         return reports.get(key) || null;
       },
       saveReport(key, data) {
         reports.set(key, { ...data, at: data.at || Date.now() });
+        if (reports.size > 10_000) {
+          for (const [oldKey, value] of reports) {
+            if (reports.size <= 8_000) break;
+            if (Date.now() - (value.at || 0) > 7 * 24 * 60 * 60 * 1000) reports.delete(oldKey);
+          }
+        }
       },
       bumpLeaderboard() {
         rebuildTop();
       },
       leaderboard(limit = 20) {
-        return { entries: top.slice(0, Math.max(1, Math.min(LEADERBOARD_SIZE, limit))), total: top.length };
+        return { entries: top.slice(0, Math.max(1, Math.min(LEADERBOARD_SIZE, limit))), total: rankedCount() };
       },
-      rankedCount() {
-        return [...players.values()].filter((record) => record.games > 0).length;
-      },
+      rankedCount,
     };
   }
 

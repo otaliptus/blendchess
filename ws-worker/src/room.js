@@ -158,7 +158,8 @@ export class GameHub extends DurableObject {
     if (this.room.reportRetryAt) next = Math.min(next, this.room.reportRetryAt);
     const waitingForSeat = this.room.rated && !this.room.gameOver && !rl.isReady(this.room) && this.room.log.length === 0;
     if (waitingForSeat) next = Math.min(next, this.room.reservedAt + rl.JOIN_DEADLINE_MS + 100);
-    await this.ctx.storage.setAlarm(next);
+    // Never schedule an alarm in the past: the runtime would re-fire it immediately and loop.
+    await this.ctx.storage.setAlarm(Math.max(next, now + 1000));
   }
 
   lobby() {
@@ -189,6 +190,23 @@ export class GameHub extends DurableObject {
   // Exactly one report per game, retried by the alarm until the lobby acknowledges it.
   async reportResult() {
     if (!this.room || !this.room.rated || !this.room.gameOver || this.room.reported) return;
+    if (this.room.noContest) {
+      // Nobody gets rated for an opponent who never arrived; just free both players.
+      if (this.room.released) return;
+      this.room.released = true;
+      try {
+        await this.lobby().fetch('https://lobby.internal/release', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode: this.room.roomCode, players: this.ratedPlayers().map((player) => player.playerId) }),
+        });
+      } catch {
+        this.room.released = false;
+        this.room.reportRetryAt = Date.now() + REPORT_RETRY_MS;
+        await this.persist();
+      }
+      return;
+    }
     const gameKey = `${this.room.roomCode}:${this.room.gameId}`;
     this.room.reported = true;
     this.room.reportRetryAt = 0;
@@ -232,7 +250,8 @@ export class GameHub extends DurableObject {
 
   async releaseRated() {
     if (!this.room || !this.room.rated) return;
-    const players = this.room.playerOrder.filter((playerId) => this.room.players[playerId]);
+    // Reservation identities, not seated players: a room nobody joined still blocks both players.
+    const players = rl.playerIdentities(this.room).map((player) => player.playerId);
     if (!players.length) return;
     try {
       await this.lobby().fetch('https://lobby.internal/release', {
@@ -256,10 +275,17 @@ export class GameHub extends DurableObject {
         rl.finishByTimeout(this.room);
         changed = true;
       } else if (!rl.isReady(this.room) && this.room.log.length === 0
-        && rl.connectedPlayerCount(this.room) >= 1
         && now - this.room.reservedAt >= rl.JOIN_DEADLINE_MS) {
-        rl.finishByAbandon(this.room);
-        changed = true;
+        if (rl.connectedPlayerCount(this.room) >= 1) {
+          rl.finishByAbandon(this.room);
+          changed = true;
+        } else {
+          // Nobody ever arrived: free both players and drop the room instead of looping alarms.
+          await this.releaseRated();
+          await this.ctx.storage.deleteAll();
+          this.room = null;
+          return;
+        }
       }
     }
     if (changed) {
@@ -347,12 +373,12 @@ export class GameHub extends DurableObject {
     const key = (ws.deserializeAttachment() || {}).id || 'anonymous';
     const previous = this.chains.get(key) || Promise.resolve();
     const task = previous.then(() => this.processMessage(ws, data));
-    const guarded = task.catch(() => {});
+    const guarded = task.catch((error) => console.error('room message failed', error));
     this.chains.set(key, guarded);
     guarded.then(() => {
       if (this.chains.get(key) === guarded) this.chains.delete(key);
     });
-    return task;
+    return guarded;
   }
 
   async processMessage(ws, data) {

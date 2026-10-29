@@ -134,9 +134,9 @@ function createCtx(storageMap = new Map()) {
   };
 }
 
-async function createHub(storageMap) {
+async function createHub(storageMap, env = {}) {
   const ctx = createCtx(storageMap);
-  const hub = new GameHub(ctx, {});
+  const hub = new GameHub(ctx, env);
   await ctx.ready;
   return { hub, ctx };
 }
@@ -309,4 +309,59 @@ test('a reserved ranked room only opens with the lobby tickets', async () => {
   white.ws.inbox.length = 0;
   await white.send('set_options', { hardMode: true });
   assert.equal(white.last('move_rejected').payload.reasonCode, 'RATED_LOCKED');
+});
+
+test('a reserved room nobody ever joins is released and deleted, not left looping alarms', async () => {
+  const calls = [];
+  const env = {
+    LOBBY_HUB: {
+      idFromName: (name) => name,
+      get: () => ({
+        async fetch(url, init) {
+          calls.push({ url: String(url), body: init && init.body ? JSON.parse(init.body) : null });
+          return new Response('{"ok":true}', { status: 200 });
+        },
+      }),
+    },
+  };
+  const { hub, ctx } = await createHub(new Map(), env);
+  const reserved = await hub.fetch(reserveRequest({
+    roomCode: 'ORPHAN',
+    rated: true,
+    control: '5+3',
+    clock: { baseMs: 300_000, incMs: 3000 },
+    seats: [
+      { color: 'w', playerId: 'ghost-white', nickname: 'Ghost', rating: 1200, ticket: 'w'.repeat(24) },
+      { color: 'b', playerId: 'ghost-black', nickname: 'Ghost2', rating: 1200, ticket: 'b'.repeat(24) },
+    ],
+  }));
+  assert.equal(reserved.status, 200);
+  hub.room.reservedAt = Date.now() - 200_000;
+
+  assert.equal(hub.room.rated, true);
+  assert.ok(Date.now() - hub.room.reservedAt >= rl.JOIN_DEADLINE_MS);
+  await hub.alarm();
+  assert.equal(hub.room, null);
+  assert.equal(ctx.storageMap.size, 0);
+  const release = calls.find((call) => call.url.includes('/release'));
+  assert.ok(release, 'the lobby was told to free both players');
+  assert.deepEqual(release.body.players.sort(), ['ghost-black', 'ghost-white']);
+});
+
+test('the alarm is never scheduled in the past', async () => {
+  const { hub, ctx } = await createHub(new Map(), {});
+  await hub.fetch(reserveRequest({
+    roomCode: 'PAST00',
+    rated: true,
+    control: '10+0',
+    clock: { baseMs: 600_000, incMs: 0 },
+    seats: [
+      { color: 'w', playerId: 'p-w', nickname: 'W', rating: 1200, ticket: 'w'.repeat(24) },
+      { color: 'b', playerId: 'p-b', nickname: 'B', rating: 1200, ticket: 'b'.repeat(24) },
+    ],
+  }));
+  hub.room.reservedAt = Date.now() - 200_000;
+  const before = Date.now();
+  await hub.alarm();
+  assert.ok(ctx.storage.alarmAt === null || ctx.storage.alarmAt >= before, 'no past alarm');
 });

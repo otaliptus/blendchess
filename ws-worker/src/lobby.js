@@ -47,15 +47,24 @@ class StorageLobbyStore {
     this.cache = new Map();
   }
 
+  // Bounded insert-order cache: enough to absorb a burst without growing for the life of the object.
+  remember(key, value) {
+    this.cache.set(key, value);
+    if (this.cache.size > 2000) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest !== undefined) this.cache.delete(oldest);
+    }
+  }
+
   async read(key) {
     if (this.cache.has(key)) return this.cache.get(key);
     const value = (await this.storage.get(key)) ?? null;
-    this.cache.set(key, value);
+    this.remember(key, value);
     return value;
   }
 
   async write(key, value) {
-    this.cache.set(key, value);
+    this.remember(key, value);
     await this.storage.put(key, value);
   }
 
@@ -263,10 +272,12 @@ export class LobbyHub extends DurableObject {
     if (live.length !== entries.length) await this.store.saveQueue(live);
   }
 
+  // The alarm either retries matching while someone waits, or comes back once a day to prune
+  // old report markers. It is always in the future.
   async scheduleAlarm() {
     const entries = await this.store.getQueue();
-    if (entries.length) await this.ctx.storage.setAlarm(Date.now() + MATCH_TICK_MS);
-    else await this.ctx.storage.deleteAlarm();
+    const next = entries.length ? Date.now() + MATCH_TICK_MS : Date.now() + PRUNE_INTERVAL_MS;
+    await this.ctx.storage.setAlarm(next);
   }
 
   async fetch(request) {
@@ -366,12 +377,12 @@ export class LobbyHub extends DurableObject {
     const key = (ws.deserializeAttachment() || {}).id || 'anonymous';
     const previous = this.chains.get(key) || Promise.resolve();
     const task = previous.then(() => this.processMessage(ws, data));
-    const guarded = task.catch(() => {});
+    const guarded = task.catch((error) => console.error('lobby message failed', error));
     this.chains.set(key, guarded);
     guarded.then(() => {
       if (this.chains.get(key) === guarded) this.chains.delete(key);
     });
-    return task;
+    return guarded;
   }
 
   async processMessage(ws, data) {
@@ -442,9 +453,14 @@ export class LobbyHub extends DurableObject {
     const last = (await this.ctx.storage.get('lastPrune')) || 0;
     const now = Date.now();
     if (now - last < PRUNE_INTERVAL_MS) return;
-    const page = await this.ctx.storage.list({ prefix: 'report:', limit: 1000 });
-    for (const [key, value] of page) {
-      if (value && now - (value.at || 0) > REPORT_TTL_MS) await this.ctx.storage.delete(key);
+    let cursor;
+    for (let page = 0; page < 5; page += 1) {
+      const batch = await this.ctx.storage.list({ prefix: 'report:', limit: 1000, startAfter: cursor });
+      for (const [key, value] of batch) {
+        if (value && now - (value.at || 0) > REPORT_TTL_MS) await this.ctx.storage.delete(key);
+      }
+      if (batch.size < 1000) break;
+      cursor = [...batch.keys()].at(-1);
     }
     await this.ctx.storage.put('lastPrune', now);
   }
