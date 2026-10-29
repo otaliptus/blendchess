@@ -84,7 +84,9 @@
     if (!record) {
       const ipHash = conn.ipHash || 'unknown';
       const recent = await store.creationCount(ipHash, now - logic.NEW_PLAYER_WINDOW_MS);
-      if (recent >= logic.NEW_PLAYER_LIMIT) {
+      // The transport may widen this for a development deployment; production keeps 10/hour.
+      const limit = Number(hooks.newPlayerLimit) > 0 ? Number(hooks.newPlayerLimit) : logic.NEW_PLAYER_LIMIT;
+      if (recent >= limit) {
         fail(hooks, conn, ERROR_CODES.RATE_LIMIT, 'Too many new players from this network. Try again in a while.');
         return false;
       }

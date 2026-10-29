@@ -228,6 +228,7 @@ export class LobbyHub extends DurableObject {
         }
       },
       createRatedRoom: (match) => this.createRatedRoom(match),
+      newPlayerLimit: this.env.NEW_PLAYER_LIMIT,
     };
   }
 

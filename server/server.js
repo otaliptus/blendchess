@@ -65,6 +65,7 @@ function lobbyHooks() {
     },
     save: () => {},
     createRatedRoom,
+    newPlayerLimit: process.env.NEW_PLAYER_LIMIT,
   };
 }
 

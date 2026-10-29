@@ -36,6 +36,6 @@ URL format: `https://<worker>.workers.dev` -> `wss://<worker>.workers.dev`. Heal
 - Per-socket state lives in socket attachments and the room in Durable Object storage, so hibernation and evictions don't lose games. Presence is rebuilt from the open sockets.
 - A room alarm wakes for the earliest of: the clock deadline, a missing opponent (2 minutes), a failed result report (retried every 15 s), and idle cleanup (an hour with nobody connected). Idle rooms are deleted; a dead ranked room releases both players from the lobby.
 - Limits: 16 KiB per message, 40 messages per second per socket, 64 sockets per room and 4 per network.
-- The lobby caps sockets (6 per network), queue entries (500 total, 6 per network), new identities (10 per network per hour), room creation (12 per network per minute plus a global cap) and message rate.
+- The lobby caps sockets (6 per network), queue entries (500 total, 6 per network), new identities (10 per network per hour, widen with `--var NEW_PLAYER_LIMIT:100` on a dev deployment only), room creation (12 per network per minute plus a global cap) and message rate.
 - Tickets and the room reservation are server-side only: `index.js` never forwards `/reserve`, `/report`, `/active`, `/release` or `/limit/create` from the internet.
 - The old single `global-hub` instance is no longer used. Its stored state is orphaned and harmless.
