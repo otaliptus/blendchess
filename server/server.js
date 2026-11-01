@@ -341,6 +341,10 @@ wss.on('connection', (ws, req) => {
     recentMessages: [],
   };
 
+  // A protocol error on one socket (an oversized frame, say) must not take the whole process down:
+  // without a listener, ws re-throws it as an uncaught exception. The socket closes on its own.
+  ws.on('error', (error) => console.warn('socket error:', error.message));
+
   if (url.searchParams.get('lobby') === '1') {
     lobbyConnections.add(conn);
     // Messages from one socket are handled strictly in order: a rename must land before a queue.
