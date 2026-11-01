@@ -111,7 +111,6 @@
     sfx.setSound(settings.sound);
     fx.setEnabled(settings.fx);
     $('soundBtn').setAttribute('aria-pressed', String(settings.sound));
-    $('musicBtn').setAttribute('aria-pressed', String(settings.music));
     document.querySelectorAll('[data-theme-choice]').forEach((button) => {
       button.setAttribute('aria-pressed', String(button.dataset.themeChoice === settings.theme));
     });
@@ -325,25 +324,29 @@
   // Menu
   // ---------------------------------------------------------------------------
 
-  const MENU_PANELS = ['menuMain', 'menuLobby', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
+  const MENU_PANELS = ['menuLobby', 'menuCommunity', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
   let setupMode = 'local';
 
   function showScreen(name) {
     $('menuScreen').classList.toggle('hidden', name !== 'menu');
     $('gameScreen').classList.toggle('hidden', name !== 'game');
+    $('accountBtn').classList.toggle('hidden', name === 'game');
   }
 
   function showMenuPanel(panel) {
     if (panel !== 'menuLobby') leaveLobbyPanel();
     if (panel !== 'menuProfile' && new URLSearchParams(window.location.search).has('p')) setUrl({});
     showScreen('menu');
-    $('pressStart').classList.toggle('hidden', panel !== 'title');
-    $('logoBoard').classList.toggle('hidden', panel !== 'title' && panel !== 'menuMain');
+    document.querySelector('.logo-wrap').classList.toggle('hidden', panel !== 'menuLobby');
     for (const id of MENU_PANELS) $(id).classList.toggle('hidden', id !== panel);
-    if (panel === 'menuMain') refreshContinue();
+    if (panel === 'menuLobby') refreshContinue();
     if (panel === 'menuArchive') renderArchiveList();
-    const first = panel === 'title' ? $('pressStart') : $(panel).querySelector('input, .menu-item:not([hidden]), .px-btn.primary');
-    if (first) setTimeout(() => first.focus(), 0);
+    const first = panel === 'menuLobby' ? ($('continueItem').hidden ? $('lobbyFind') : $('continueItem')) : $(panel).querySelector('h2');
+    if (first) {
+      first.tabIndex = first.tagName === 'H2' ? -1 : 0;
+      first.focus({ preventScroll: true });
+    }
+    window.scrollTo(0, 0);
   }
 
   function refreshContinue() {
@@ -357,7 +360,7 @@
     } else if (localSave && localSave.state && !localSave.state.gameOver) {
       item.hidden = false;
       item.dataset.kind = 'local';
-      $('continueHint').textContent = `local duel, move ${Math.floor(localSave.state.log.length / 2) + 1}`;
+      $('continueHint').textContent = `pass & play · move ${Math.floor(localSave.state.log.length / 2) + 1}`;
     } else {
       item.hidden = true;
     }
@@ -365,11 +368,14 @@
 
   function openSetup(mode) {
     setupMode = mode;
-    $('setupTitle').textContent = mode === 'local' ? 'LOCAL DUEL' : 'CREATE ROOM';
+    $('setupTitle').textContent = mode === 'local' ? 'PASS & PLAY' : 'PLAY A FRIEND';
+    $('setupHelp').textContent = mode === 'local' ? 'Take turns on this device. Pass it over after each move.' : 'Create a game, then send your friend the link.';
     $('nicknameField').classList.toggle('hidden', mode === 'local');
     $('openSpectatorsField').classList.toggle('hidden', mode === 'local');
     $('nicknameInput').value = settings.nickname;
-    $('setupGo').textContent = mode === 'local' ? 'START' : 'CREATE';
+    $('setupGo').textContent = mode === 'local' ? 'START GAME' : 'CREATE INVITE';
+    $('joinFriendBtn').classList.toggle('hidden', mode === 'local');
+    $('gameOptions').open = $('hardModeInput').checked || (mode === 'create' && $('openSpectatorsInput').checked);
     showMenuPanel('menuSetup');
   }
 
@@ -381,12 +387,14 @@
 
   function onMenuAction(action) {
     sfx.play('click');
-    if (action === 'back') showMenuPanel('menuMain');
+    if (action === 'back') openLobbyPanel();
     else if (action === 'online') openLobbyPanel();
+    else if (action === 'community') openCommunityPanel();
     else if (action === 'local') openSetup('local');
     else if (action === 'create') openSetup('create');
     else if (action === 'join') {
       $('joinNicknameInput').value = settings.nickname;
+      $('joinTitle').textContent = 'JOIN A FRIEND';
       showMenuPanel('menuJoin');
     } else if (action === 'archive') showMenuPanel('menuArchive');
     else if (action === 'help') showMenuPanel('menuHelp');
@@ -394,30 +402,6 @@
       if ($('continueItem').dataset.kind === 'online') resumeOnline(load(STORAGE.session, null));
       else continueLocal();
     }
-  }
-
-  // Decorative title board: pieces flicker in and out of the fog.
-  let logoTimer = null;
-  function initLogoBoard() {
-    const board = $('logoBoard');
-    const initial = core.createInitialBoard();
-    for (let r = 0; r < 8; r += 1) {
-      for (let c = 0; c < 8; c += 1) {
-        const square = el('div', { class: `sq ${(r + c) % 2 ? 'dark' : 'light'} fog` });
-        square.style.setProperty('--fog-delay', `${-Math.random() * 9}s`);
-        const piece = initial[r][c];
-        if (piece) square.append(el('img', { class: 'piece', src: sprites.piece(piece.color, piece.type), alt: '' }));
-        board.append(square);
-      }
-    }
-    const squares = [...board.children];
-    clearInterval(logoTimer);
-    logoTimer = setInterval(() => {
-      if (board.classList.contains('hidden') || document.hidden) return;
-      const square = squares[Math.floor(Math.random() * squares.length)];
-      const img = square.querySelector('img');
-      if (img) img.style.visibility = img.style.visibility === 'hidden' ? 'visible' : 'hidden';
-    }, 260);
   }
 
   // ---------------------------------------------------------------------------
@@ -1024,6 +1008,7 @@
   }
 
   function enterGame(mode) {
+    leaveLobbyPanel();
     app.mode = mode;
     app.view = null;
     app.prevView = null;
@@ -1164,14 +1149,15 @@
     leaveLobbyPanel();
     leaveGameScreen();
     forgetAccount();
-    showMenuPanel('menuMain');
+    openLobbyPanel();
     toast('Game data was reset. Start again as a new guest.', 'warn');
     void syncDataVersion();
   }
 
   function lobbyStatusText() {
     if (lobbyState.status === 'connecting') return 'Connecting to the lobby...';
-    if (lobbyState.status === 'off') return lobbyState.player ? 'Lobby offline. Press FIND GAME to reconnect.' : 'Lobby offline. Press FIND GAME to retry.';
+    if (lobbyState.findWanted) return 'Connecting to find an opponent...';
+    if (lobbyState.status === 'off') return 'Offline. Try again, or play on this device.';
     if (lobbyState.status === 'queued' || lobbyState.status === 'queued-pending') {
       const queued = lobbyState.queued;
       const waiting = queued && queued.waiting
@@ -1180,7 +1166,7 @@
       return `Looking for a ${controlLabel(lobbyState.control)} opponent. ${waiting}.`;
     }
     if (lobbyState.status === 'matched') return 'Match found!';
-    return `Ready. Pick a time control, then FIND GAME.`;
+    return 'Ranked games. No signup needed.';
   }
 
   function renderLobby() {
@@ -1188,16 +1174,17 @@
     if (!panel) return;
     const player = lobbyState.player;
     $('lobbyIdentity').textContent = player
-      ? `${player.name} · ${player.rating}${player.provisional ? ' · provisional' : ''} · ${player.wins}W ${player.losses}L ${player.draws}D${player.secured ? ' · secured' : ' · guest'}`
-      : 'RANKED: play your first game to get a rating.';
+      ? `${player.name} · ${player.rating}`
+      : 'Play as a guest';
     $('lobbyIdentity').dataset.tone = player ? 'ready' : '';
     $('secureHint').classList.toggle('hidden', !player || player.secured);
     $('myProfileBtn').disabled = !player;
     $('lobbyStatus').textContent = lobbyStatusText();
-    const queued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+    const queued = lobbyState.findWanted || lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
     $('lobbyFind').classList.toggle('hidden', queued);
     $('lobbyCancel').classList.toggle('hidden', !queued);
     $('lobbyFind').disabled = lobbyState.status === 'matched';
+    $('lobbyNameInput').disabled = queued;
     document.querySelectorAll('[data-control]').forEach((button) => {
       button.setAttribute('aria-pressed', String(button.dataset.control === lobbyState.control));
       button.disabled = queued;
@@ -1207,13 +1194,14 @@
   async function openLobbySocket() {
     if (lobbyState.ws && (lobbyState.ws.readyState === WebSocket.OPEN || lobbyState.ws.readyState === WebSocket.CONNECTING)) return;
     await syncDataVersion();
-    if ($('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
+    if (app.mode || $('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
     clearTimeout(lobbyState.reconnectTimer);
     let ws;
     try {
       ws = new WebSocket(buildSocketUrl({ lobby: '1' }));
     } catch {
       lobbyState.status = 'off';
+      lobbyState.findWanted = false;
       renderLobby();
       return;
     }
@@ -1249,7 +1237,8 @@
         forgetAccount();
         toast('This device was signed out.', 'bad');
       }
-      const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+      const wasQueued = lobbyState.findWanted || lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+      lobbyState.findWanted = false;
       lobbyState.status = 'off';
       renderLobby();
       if (wasQueued && lobbyState.reconnectAttempts < 5) scheduleLobbyReconnect();
@@ -1276,7 +1265,7 @@
     lobbyState.reconnectAttempts += 1;
     const delay = Math.min(8000, 600 * 2 ** lobbyState.reconnectAttempts);
     lobbyState.reconnectTimer = setTimeout(() => {
-      if ($('menuLobby').classList.contains('hidden')) return;
+      if (app.mode || $('menuLobby').classList.contains('hidden')) return;
       if (lobbyState.status !== 'off') return;
       lobbyState.resumeQueue = lobbyState.control;
       openLobbySocket();
@@ -1290,6 +1279,7 @@
   }
 
   function openLobbyPanel() {
+    clearInterval(lobbyState.refreshTimer);
     const identity = loadIdentity();
     $('lobbyNameInput').value = settings.nickname || (identity && identity.name) || '';
     lobbyState.control = load(STORAGE.lobbyControl, lobbyState.control);
@@ -1297,12 +1287,15 @@
     showMenuPanel('menuLobby');
     renderLobby();
     openLobbySocket();
+  }
+
+  function openCommunityPanel() {
+    showMenuPanel('menuCommunity');
     refreshLobbyLists();
-    // Only the live list changes on its own; the leaderboard refreshes after your games and on demand.
-    // Once a minute keeps an open lobby tab cheap for the single lobby object on the free plan.
+    // Refresh live games only while someone is browsing them.
     clearInterval(lobbyState.refreshTimer);
     lobbyState.refreshTimer = setInterval(() => {
-      if (!document.hidden && !$('menuLobby').classList.contains('hidden')) fetchLive();
+      if (!document.hidden && !$('menuCommunity').classList.contains('hidden')) fetchLive();
     }, 60_000);
   }
 
@@ -1328,12 +1321,14 @@
     if (!lobbyState.player) {
       // The socket's hello is already on its way; queue as soon as the lobby answers.
       lobbyState.findWanted = true;
+      renderLobby();
       if (!lobbyState.ws) openLobbySocket();
       else if (lobbyState.status === 'off') openLobbySocket();
       return;
     }
     if (!lobbyState.ws || lobbyState.ws.readyState !== WebSocket.OPEN) {
       lobbyState.findWanted = true;
+      renderLobby();
       openLobbySocket();
       return;
     }
@@ -1353,8 +1348,10 @@
   }
 
   function cancelQueue() {
+    lobbyState.findWanted = false;
+    lobbyState.resumeQueue = null;
     lobbySend(TYPES.LOBBY_CANCEL, {});
-    lobbyState.status = 'ready';
+    lobbyState.status = lobbyState.ws && lobbyState.ws.readyState === WebSocket.OPEN ? 'ready' : 'off';
     lobbyState.queued = null;
     renderLobby();
   }
@@ -1387,7 +1384,7 @@
       class: `link-btn ${extraClass}`.trim(),
       type: 'button',
       text: label,
-      onclick: () => openProfile(name, 'menuLobby'),
+      onclick: () => openProfile(name, 'menuCommunity'),
     });
   }
 
@@ -1704,7 +1701,9 @@
   function leaveProfile() {
     sfx.play('click');
     if (profileState.returnTo === 'menuLobby') openLobbyPanel();
-    else showMenuPanel(profileState.returnTo || 'menuMain');
+    else if (profileState.returnTo === 'menuCommunity') openCommunityPanel();
+    else if (profileState.returnTo === 'menuAccount') openAccount();
+    else openLobbyPanel();
   }
 
   // --- Passkeys -----------------------------------------------------------------
@@ -1799,6 +1798,7 @@
   async function openAccount() {
     sfx.play('click');
     account.notice = '';
+    for (const id of ['accountKeyOptions', 'savedMethods', 'accountSignIn', 'accountDevices', 'keySignIn']) $(id).open = false;
     showMenuPanel('menuAccount');
     renderAccount();
     await refreshMe();
@@ -1849,12 +1849,26 @@
     const player = me && me.player;
     const security = (me && me.security) || { passkeys: [], hasKey: false, sessions: 0 };
     const available = passkeysAvailable();
+    $('accountTitle').textContent = player ? (player.secured ? 'YOUR ACCOUNT' : 'SAVE YOUR PROGRESS') : 'SIGN IN';
     $('accountSummary').textContent = account.notice || (player
-      ? `${player.name} · ${player.rating} · ${player.secured ? 'secured account' : 'guest: lives only in this browser'}`
-      : 'No account on this device yet. Open PLAY ONLINE to get one, or sign in below.');
+      ? `${player.name} · ${player.rating} · ${player.secured ? 'saved account' : 'guest on this browser'}`
+      : 'Sign in to bring your rating and games to this device.');
     $('accountSummary').dataset.tone = player && player.secured ? 'ready' : '';
     $('accountMethods').classList.toggle('hidden', !player);
     $('accountDevices').classList.toggle('hidden', !player || !player.secured);
+    $('myProfileBtn').hidden = !player;
+    $('myProfileBtn').disabled = !player;
+    $('savedMethods').classList.toggle('hidden', !security.passkeys.length && !security.hasKey);
+    $('accountHelp').textContent = player && player.secured ? 'Your progress is saved. Add a backup if you like.' : 'Keep your rating and games on any device.';
+    $('addPasskeyBtn').textContent = player && player.secured ? 'ADD PASSKEY' : 'SAVE WITH PASSKEY';
+    $('passkeyHelp').hidden = !available;
+    $('accountKeyOptions').querySelector('summary').textContent = player && player.secured ? 'Account key backup' : 'Use an account key instead';
+    $('signInSummary').textContent = player && player.secured ? 'Switch account' : 'Already have an account? Sign in';
+    if (!player && !loadIdentity()) $('accountSignIn').open = true;
+    if (!available) {
+      $('accountKeyOptions').open = true;
+      $('keySignIn').open = true;
+    }
 
     const rows = security.passkeys.map((passkey) => el('li', { class: 'method-row' },
       el('span', { class: 'method-name', text: `PASSKEY · ${passkey.label}` }),
@@ -1989,6 +2003,8 @@
     closeLobbySocket();
     account.notice = '';
     await refreshMe();
+    $('accountSignIn').open = false;
+    $('accountTitle').focus();
     sfx.play('join');
     toast(`Signed in as ${data.player.name}.`);
   }
@@ -2046,7 +2062,7 @@
         toast(result.data.message || 'Could not sign out.', 'bad');
         return;
       }
-      forgetAccount('Signed out. Sign in below, or open PLAY ONLINE to start as a new guest.');
+      forgetAccount('Signed out. Sign in below, or go back to play as a guest.');
       closeLobbySocket();
       toast('Signed out.');
     });
@@ -2357,7 +2373,7 @@
       // The account signed this device out: the seat is gone, so don't try to reconnect.
       leaveGameScreen();
       forgetAccount();
-      showMenuPanel('menuMain');
+      openLobbyPanel();
       toast('This device was signed out of the account.', 'bad');
       return;
     }
@@ -2458,7 +2474,7 @@
         leaveOnline();
         if (wasInGame) {
           app.mode = null;
-          showMenuPanel('menuMain');
+          openLobbyPanel();
         }
       }
     }
@@ -2537,7 +2553,7 @@
     app.replay = null;
     $('gameOver').classList.add('hidden');
     setRoomInUrl('');
-    showMenuPanel('menuMain');
+    openLobbyPanel();
   }
 
   function exportPgn() {
@@ -3054,12 +3070,6 @@
   // ---------------------------------------------------------------------------
 
   function wireMenu() {
-    $('pressStart').addEventListener('click', () => {
-      sfx.unlock();
-      sfx.play('start');
-      if (settings.music) sfx.setMusic(true);
-      showMenuPanel('menuMain');
-    });
     document.querySelectorAll('[data-action]').forEach((button) => {
       button.addEventListener('click', () => onMenuAction(button.dataset.action));
     });
@@ -3082,7 +3092,7 @@
       refreshLobbyLists();
     });
     $('myProfileBtn').addEventListener('click', () => {
-      if (lobbyState.player) openProfile(lobbyState.player.name, 'menuLobby');
+      if (lobbyState.player) openProfile(lobbyState.player.name, 'menuAccount');
     });
     $('accountBtn').addEventListener('click', openAccount);
     $('secureHintBtn').addEventListener('click', openAccount);
@@ -3182,9 +3192,18 @@
   }
 
   function wireChrome() {
+    // Browsers allow audio after the first gesture; a splash screen is unnecessary.
+    const unlockAudio = () => {
+      sfx.unlock();
+      if (settings.music) sfx.setMusic(true);
+      document.removeEventListener('pointerdown', unlockAudio);
+      document.removeEventListener('keydown', unlockAudio);
+    };
+    document.addEventListener('pointerdown', unlockAudio);
+    document.addEventListener('keydown', unlockAudio);
     $('brandBtn').addEventListener('click', () => {
       if (app.mode) backToMenu();
-      else showMenuPanel('menuMain');
+      else openLobbyPanel();
     });
     $('soundBtn').addEventListener('click', () => {
       settings.sound = !settings.sound;
@@ -3192,25 +3211,29 @@
       applySettings();
       sfx.play('click');
     });
-    $('musicBtn').addEventListener('click', () => {
-      settings.music = !settings.music;
-      saveSettings();
-      applySettings();
-      sfx.setMusic(settings.music);
-    });
     $('settingsBtn').addEventListener('click', () => {
       sfx.play('click');
+      $('serverUrlInput').disabled = Boolean(app.mode);
       $('settings').classList.remove('hidden');
       $('settingsClose').focus();
     });
     $('settingsClose').addEventListener('click', () => {
       const url = $('serverUrlInput').value.trim();
-      if (url && url !== settings.serverUrl) {
-        if (isWsUrl(url)) settings.serverUrl = url;
+      let changedServer = false;
+      if (!app.mode && url && url !== settings.serverUrl) {
+        if (isWsUrl(url)) {
+          leaveLobbyPanel();
+          settings.serverUrl = url;
+          lobbyState.player = null;
+          account.me = null;
+          changedServer = true;
+        }
         else toast('Server URL must start with ws:// or wss://', 'bad');
       }
       saveSettings();
       $('settings').classList.add('hidden');
+      if (changedServer) openLobbyPanel();
+      else $('settingsBtn').focus();
       sfx.play('click');
     });
     document.querySelectorAll('[data-theme-choice]').forEach((button) => {
@@ -3248,9 +3271,6 @@
         $('soundBtn').click();
       } else if (app.replay && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && document.activeElement !== boardEl) {
         stepReplay(event.key === 'ArrowLeft' ? 'prev' : 'next');
-      } else if (!$('menuScreen').classList.contains('hidden') && !$('pressStart').classList.contains('hidden') && (event.key === 'Enter' || event.key === ' ')) {
-        event.preventDefault();
-        $('pressStart').click();
       }
     });
     boardEl.addEventListener('keydown', (event) => {
@@ -3272,7 +3292,6 @@
     applySettings();
     $('umpireFace').src = sprites.umpire('idle');
     initBoard();
-    initLogoBoard();
     setInterval(updateClocks, 250);
 
     const params = new URLSearchParams(window.location.search);
@@ -3289,13 +3308,13 @@
     const gameParam = params.get('game');
     if (gameParam) {
       openServerGame(gameParam).then((ok) => {
-        if (!ok) showMenuPanel('title');
+        if (!ok) openLobbyPanel();
       });
       return;
     }
     const profileParam = params.get('p');
     if (profileParam) {
-      openProfile(profileParam, 'menuMain');
+      openProfile(profileParam, 'menuLobby');
       return;
     }
     const watchParam = protocol.normalizeRoomCode(params.get('watch'));
@@ -3320,7 +3339,7 @@
       setTimeout(() => $('joinGo').focus(), 0);
       return;
     }
-    showMenuPanel('title');
+    openLobbyPanel();
   }
 
   boot();
