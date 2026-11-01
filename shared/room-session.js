@@ -9,7 +9,7 @@
 
   // Message handling for one room, shared by the Node server and the Durable Object.
   //
-  // A conn is the transport's per-socket record: { id, role, playerId, roomCode }.
+  // A conn is the transport's per-socket record: { id, role, playerId, roomCode, ipHash }.
   // hooks = {
   //   connections(): conns attached to this room,
   //   send(conn, message), close(conn, code, reason),
@@ -23,7 +23,9 @@
   }
 
   function viewerOf(state, conn) {
-    if (conn.role !== 'player') return { role: 'spectator', color: null };
+    if (conn.role !== 'player') {
+      return { role: 'spectator', color: null, perspective: rl.spectatorPerspective(state, conn.ipHash) };
+    }
     const player = rl.getPlayer(state, conn.playerId);
     return { role: 'player', color: player ? player.color : null };
   }
@@ -104,13 +106,10 @@
     return null;
   }
 
-  // Lobby-arranged rooms: no spectators, and a seat needs the ticket the lobby handed out.
+  // Lobby-arranged rooms: anyone may watch, but a seat needs the ticket the lobby handed out.
   function joinReservedRoom(state, hooks, conn, envelope) {
     const payload = envelope.payload || {};
-    if (payload.spectator) {
-      sendError(state, hooks, conn, ERROR_CODES.SPECTATOR_DISABLED, 'Rated games are private: no spectators.');
-      return false;
-    }
+    if (payload.spectator) return joinAsSpectator(state, hooks, conn, payload);
     if (!rl.reservedSeatsValid(state)) {
       sendError(state, hooks, conn, ERROR_CODES.PLAYER_NOT_FOUND, 'This ranked game is no longer available.');
       return false;
@@ -150,6 +149,7 @@
       sendError(state, hooks, conn, assigned.reason, 'Could not take that seat.');
       return false;
     }
+    rl.noteSeatNetwork(state, assigned.player.id, conn.ipHash);
 
     seatConn(state, hooks, conn, assigned.player);
     hooks.send(conn, createMessage(TYPES.ROOM_JOINED, state.roomCode, conn.playerId, identityPayload(state, assigned.player)));

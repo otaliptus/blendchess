@@ -286,9 +286,11 @@ test('a reserved ranked room only opens with the lobby tickets', async () => {
   await intruder.send('join_room', { nickname: 'Intruder' });
   assert.equal(intruder.last('error').payload.errorCode, 'TICKET_INVALID');
 
+  // Anyone may watch a lobby game, and sees the whole board.
   const watcher = await open(hub, 'RATED1');
   await watcher.send('join_room', { spectator: true });
-  assert.equal(watcher.last('error').payload.errorCode, 'SPECTATOR_DISABLED');
+  assert.equal(watcher.last('room_joined').payload.role, 'spectator');
+  assert.equal(watcher.last('game_state').payload.game.revealed, true);
 
   const white = await open(hub, 'RATED1');
   await white.send('join_room', { ticket: 'w'.repeat(24), nickname: 'Cheater' });

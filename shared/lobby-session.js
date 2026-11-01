@@ -69,17 +69,83 @@
     });
   }
 
+  // --- Sessions ---------------------------------------------------------------
+  // A session is one device signed in to one player. The token goes to that device once; the
+  // store only ever holds its SHA-256.
+
+  const SESSION_TOUCH_MS = 60 * 60 * 1000;
+
+  async function createSession(store, record, method, now = Date.now()) {
+    const token = logic.makeToken();
+    const hash = await logic.sha256Hex(token);
+    await store.saveSession(hash, { playerId: record.id, method, createdAt: now, lastUsed: now });
+    const list = (Array.isArray(record.sessions) ? record.sessions : []).filter((item) => item !== hash);
+    list.push(hash);
+    while (list.length > logic.SESSIONS_PER_PLAYER) await store.removeSession(list.shift());
+    record.sessions = list;
+    await store.savePlayer(record);
+    return { token, hash };
+  }
+
+  // Resolves a bearer token to its player, or null. Touches lastUsed at most once an hour.
+  async function sessionForToken(store, token, now = Date.now()) {
+    if (typeof token !== 'string') return null;
+    const clean = token.trim().slice(0, 200);
+    if (!clean) return null;
+    const hash = await logic.sha256Hex(clean);
+    const found = await store.getSession(hash);
+    if (!found) return null;
+    const record = await store.getPlayer(found.playerId);
+    if (!record) return null;
+    if (!Array.isArray(record.sessions)) record.sessions = [];
+    if (!record.sessions.includes(hash)) {
+      // Sessions minted before accounts existed are adopted, so "sign out other devices" reaches them.
+      record.sessions.push(hash);
+      await store.savePlayer(record);
+    }
+    if (now - (found.lastUsed || 0) > SESSION_TOUCH_MS) {
+      found.lastUsed = now;
+      await store.saveSession(hash, found);
+    }
+    return { record, hash, session: found };
+  }
+
+  // --- Live games -------------------------------------------------------------
+  // Every lobby-arranged game in progress, so people can find one to watch.
+
+  function liveSide(record) {
+    return { id: record.id, name: record.name, rating: record.rating };
+  }
+
+  function upsertLive(store, entry) {
+    return withLock('live', async () => {
+      const now = Date.now();
+      const list = (await store.getLive()).filter((item) => item.roomCode !== entry.roomCode && logic.liveIsFresh(item, now));
+      list.unshift(entry);
+      await store.saveLive(list.slice(0, logic.LIVE_MAX));
+    });
+  }
+
+  function removeLive(store, roomCode) {
+    return withLock('live', async () => {
+      const list = await store.getLive();
+      const next = list.filter((item) => item.roomCode !== roomCode);
+      if (next.length !== list.length) await store.saveLive(next);
+    });
+  }
+
+  async function liveGames(store, now = Date.now()) {
+    return (await store.getLive()).filter((entry) => logic.liveIsFresh(entry, now));
+  }
+
   async function helloNow(store, hooks, conn, payload = {}) {
-    const token = typeof payload.token === 'string' ? payload.token.trim().slice(0, 200) : '';
     const wantedName = logic.cleanName(payload.nickname, '');
     const now = Date.now();
 
-    let record = null;
+    const found = await sessionForToken(store, payload.token, now);
+    let record = found ? found.record : null;
+    let sessionHash = found ? found.hash : '';
     let freshToken = '';
-    if (token) {
-      const hash = await logic.sha256Hex(token);
-      record = await store.playerByToken(hash);
-    }
 
     if (!record) {
       const ipHash = conn.ipHash || 'unknown';
@@ -92,11 +158,11 @@
       }
       record = logic.newPlayerRecord(wantedName, now);
       record.name = await logic.uniqueNameAsync(store, record.name, record.id);
-      freshToken = logic.makeToken();
-      const hash = await logic.sha256Hex(freshToken);
       await store.savePlayer(record);
       await store.saveName(record.name.toLowerCase(), record.id);
-      await store.saveToken(hash, record.id);
+      const created = await createSession(store, record, 'guest', now);
+      freshToken = created.token;
+      sessionHash = created.hash;
       await store.recordCreation(ipHash, now);
     } else if (wantedName && wantedName !== record.name) {
       const oldName = record.name.toLowerCase();
@@ -105,6 +171,8 @@
       if (newName !== oldName) {
         if (await store.nameOwner(oldName) === record.id) await store.removeName(oldName);
         await store.saveName(newName, record.id);
+        // The leaderboard keeps a copy of each name.
+        await store.bumpLeaderboard([record]);
       }
     }
 
@@ -120,6 +188,7 @@
     }
 
     conn.playerId = record.id;
+    conn.sessionHash = sessionHash;
     hooks.save(conn);
 
     send(hooks, conn, TYPES.LOBBY_READY, {
@@ -261,11 +330,20 @@
       }
 
       // Practice games between two accounts on the same network do not block queueing.
+      const gameKey = `${room.roomCode}:1`;
       if (!sameNetwork) {
-        const gameKey = `${room.roomCode}:1`;
         await store.saveActiveGame(first.playerId, { roomCode: room.roomCode, gameKey, at: now });
         await store.saveActiveGame(second.playerId, { roomCode: room.roomCode, gameKey, at: now });
       }
+      await upsertLive(store, {
+        roomCode: room.roomCode,
+        gameKey,
+        control: first.control,
+        rated: !sameNetwork,
+        startedAt: now,
+        w: liveSide(whiteRecord),
+        b: liveSide(blackRecord),
+      });
 
       whiteRecord.lastOpponent = blackRecord.id;
       whiteRecord.lastOpponentAt = now;
@@ -297,21 +375,44 @@
     return started;
   }
 
-  // A room announces a new game (rematch), so the lobby keeps blocking ranked queueing.
+  // Accepts the identities a room sends ({ playerId, color }) or bare ids in seat order.
+  function readIdentities(players) {
+    if (!Array.isArray(players) || players.length !== 2) return null;
+    const out = players.map((player, index) => {
+      if (typeof player === 'string') return { playerId: player, color: index === 0 ? 'w' : 'b' };
+      if (!player || typeof player !== 'object' || typeof player.playerId !== 'string' || !player.playerId) return null;
+      return { playerId: player.playerId, color: player.color === 'b' ? 'b' : 'w' };
+    });
+    if (out.includes(null) || out[0].color === out[1].color || out[0].playerId === out[1].playerId) return null;
+    return { w: out.find((item) => item.color === 'w'), b: out.find((item) => item.color === 'b') };
+  }
+
+  // A room announces a new game (a rematch): ranked games keep blocking the queue, and the game
+  // goes back on the live list either way.
   async function registerActiveNow(store, payload = {}) {
     const roomCode = String(payload.roomCode || '');
     const gameKey = String(payload.gameKey || '');
-    const players = Array.isArray(payload.players) ? payload.players : [];
-    if (!roomCode || !gameKey || players.length !== 2) return { ok: false, reason: 'INVALID' };
-    const records = [];
-    for (const playerId of players) {
-      const record = await store.getPlayer(String(playerId));
-      if (!record) return { ok: false, reason: 'UNKNOWN_PLAYER' };
-      records.push(record);
+    const seats = readIdentities(payload.players);
+    if (!roomCode || !gameKey || !seats) return { ok: false, reason: 'INVALID' };
+    const rated = payload.rated !== false;
+    const white = await store.getPlayer(seats.w.playerId);
+    const black = await store.getPlayer(seats.b.playerId);
+    if (!white || !black) return { ok: false, reason: 'UNKNOWN_PLAYER' };
+    const now = Date.now();
+    if (rated) {
+      for (const record of [white, black]) {
+        await store.saveActiveGame(record.id, { roomCode, gameKey, at: now });
+      }
     }
-    for (const record of records) {
-      await store.saveActiveGame(record.id, { roomCode, gameKey, at: Date.now() });
-    }
+    await upsertLive(store, {
+      roomCode,
+      gameKey,
+      control: logic.controlOf(payload.control) ? payload.control : null,
+      rated,
+      startedAt: now,
+      w: liveSide(white),
+      b: liveSide(black),
+    });
     return { ok: true };
   }
 
@@ -327,75 +428,114 @@
         released += 1;
       }
     }
+    if (roomCode) await removeLive(store, roomCode);
     return { ok: true, released };
   }
 
-  // Called by a room once, when a rated game ends. Idempotent per gameKey.
+  // Called by a room once per finished lobby game. Ranked games move ratings; practice games are
+  // only recorded. Idempotent per gameKey. `final` tells the room a retry can never succeed.
   async function reportNow(store, hooks, payload = {}) {
     const roomCode = String(payload.roomCode || '');
     const gameKey = String(payload.gameKey || '');
-    const players = Array.isArray(payload.players) ? payload.players : [];
-    if (!roomCode || !gameKey || players.length !== 2) return { ok: false, reason: 'INVALID' };
+    const seats = readIdentities(payload.players);
+    if (!roomCode || !gameKey || !seats) return { ok: false, reason: 'INVALID', final: true };
+    const rated = payload.rated !== false;
 
     const cached = await store.getReport(gameKey);
-    if (cached) return { ok: true, updates: cached.updates, duplicate: true };
+    if (cached) return { ok: true, updates: cached.updates || null, gameId: cached.gameId || null, duplicate: true };
 
-    const white = players.find((player) => player && typeof player === 'object' && player.color === 'w');
-    const black = players.find((player) => player && typeof player === 'object' && player.color === 'b');
-    if (!white || !black) return { ok: false, reason: 'INVALID' };
-    if (typeof white.playerId !== 'string' || typeof black.playerId !== 'string' || !white.playerId || !black.playerId) {
-      return { ok: false, reason: 'INVALID' };
-    }
+    const whiteRecord = await store.getPlayer(seats.w.playerId);
+    const blackRecord = await store.getPlayer(seats.b.playerId);
+    if (!whiteRecord || !blackRecord) return { ok: false, reason: 'UNKNOWN_PLAYER', final: true };
 
-    const whiteRecord = await store.getPlayer(String(white.playerId));
-    const blackRecord = await store.getPlayer(String(black.playerId));
-    if (!whiteRecord || !blackRecord) return { ok: false, reason: 'UNKNOWN_PLAYER' };
-
-    // Only a game the lobby itself arranged may move ratings.
-    for (const record of [whiteRecord, blackRecord]) {
-      const active = await store.getActiveGame(record.id);
-      if (!active || active.roomCode !== roomCode || active.gameKey !== gameKey) {
-        return { ok: false, reason: 'UNKNOWN_GAME' };
+    if (rated) {
+      // Only a game the lobby itself arranged may move ratings.
+      for (const record of [whiteRecord, blackRecord]) {
+        const active = await store.getActiveGame(record.id);
+        if (!active || active.roomCode !== roomCode || active.gameKey !== gameKey) {
+          return { ok: false, reason: 'UNKNOWN_GAME', final: true };
+        }
+      }
+    } else {
+      // Practice games carry no rating, but only games the lobby arranged are recorded.
+      const live = (await store.getLive()).find((entry) => entry.roomCode === roomCode);
+      const expected = [whiteRecord.id, blackRecord.id].sort().join(' ');
+      if (!live || [live.w.id, live.b.id].sort().join(' ') !== expected) {
+        return { ok: false, reason: 'UNKNOWN_GAME', final: true };
       }
     }
 
     const winner = payload.winner === 'w' || payload.winner === 'White' ? 'w'
       : payload.winner === 'b' || payload.winner === 'Black' ? 'b'
         : null;
-    const scoreWhite = winner === 'w' ? 1 : winner === 'b' ? 0 : 0.5;
-    const whiteBefore = whiteRecord.rating;
-    const blackBefore = blackRecord.rating;
-    const whiteUpdate = rating.applyResult(whiteRecord, blackBefore, scoreWhite);
-    const blackUpdate = rating.applyResult(blackRecord, whiteBefore, 1 - scoreWhite);
+    let updates = null;
+    if (rated) {
+      const scoreWhite = winner === 'w' ? 1 : winner === 'b' ? 0 : 0.5;
+      const whiteBefore = whiteRecord.rating;
+      const blackBefore = blackRecord.rating;
+      updates = {
+        w: rating.applyResult(whiteRecord, blackBefore, scoreWhite),
+        b: rating.applyResult(blackRecord, whiteBefore, 1 - scoreWhite),
+      };
+      for (const record of [whiteRecord, blackRecord]) record.peak = Math.max(Number(record.peak) || 0, record.rating);
+    }
 
-    await store.savePlayer(whiteRecord);
-    await store.savePlayer(blackRecord);
-    await store.bumpLeaderboard([whiteRecord, blackRecord]);
+    const details = payload.record && typeof payload.record === 'object' ? payload.record : {};
+    const side = (record, color) => ({
+      id: record.id,
+      name: record.name,
+      before: updates ? updates[color].before : record.rating,
+      after: updates ? updates[color].after : record.rating,
+    });
+    const game = {
+      id: logic.makeGameId(),
+      key: gameKey,
+      roomCode,
+      rated,
+      control: logic.controlOf(payload.control) ? payload.control : null,
+      white: side(whiteRecord, 'w'),
+      black: side(blackRecord, 'b'),
+      winner,
+      result: logic.cleanResult(payload.result),
+      startedAt: Math.max(0, Number(details.startedAt) || 0),
+      endedAt: Date.now(),
+      plies: logic.cleanPlies(details.plies),
+    };
+    await store.saveGame(game);
+    for (const record of [whiteRecord, blackRecord]) {
+      record.recent = [game.id, ...(Array.isArray(record.recent) ? record.recent : [])].slice(0, logic.RECENT_GAMES);
+      await store.savePlayer(record);
+    }
+    if (rated) {
+      await store.bumpLeaderboard([whiteRecord, blackRecord]);
+      await store.clearActiveGame(whiteRecord.id);
+      await store.clearActiveGame(blackRecord.id);
+    }
+    await removeLive(store, roomCode);
 
-    await store.clearActiveGame(whiteRecord.id);
-    await store.clearActiveGame(blackRecord.id);
-
-    const updates = { w: whiteUpdate, b: blackUpdate };
     await store.saveReport(gameKey, {
       updates,
+      gameId: game.id,
       roomCode,
-      result: String(payload.result || ''),
+      result: game.result,
       winner,
       at: Date.now(),
     });
 
-    for (const record of [whiteRecord, blackRecord]) {
-      for (const conn of hooks.connections()) {
-        if (conn.playerId === record.id) {
-          send(hooks, conn, TYPES.LOBBY_RATING, {
-            player: logic.summary(record),
-            update: updates[record.id === whiteRecord.id ? 'w' : 'b'],
-          });
+    if (rated) {
+      for (const record of [whiteRecord, blackRecord]) {
+        for (const conn of hooks.connections()) {
+          if (conn.playerId === record.id) {
+            send(hooks, conn, TYPES.LOBBY_RATING, {
+              player: logic.summary(record),
+              update: updates[record.id === whiteRecord.id ? 'w' : 'b'],
+            });
+          }
         }
       }
     }
 
-    return { ok: true, updates };
+    return { ok: true, updates, gameId: game.id };
   }
 
   function hello(store, hooks, conn, payload) {
@@ -458,6 +598,10 @@
   }
 
   const lobbySessionExports = {
+    withLock,
+    createSession,
+    sessionForToken,
+    liveGames,
     hello,
     queue,
     cancel,

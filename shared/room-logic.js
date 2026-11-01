@@ -61,6 +61,8 @@
       rated: Boolean(options.rated),
       control: options.control || null,
       reservedSeats: options.reservedSeats ? { ...options.reservedSeats } : null,
+      // Lobby games: the networks each player has used, by player id. Server-only, never in a view.
+      seatNetworks: options.seatNetworks ? { ...options.seatNetworks } : {},
       clockSpec: spec ? { ...spec } : null,
       clock: spec ? {
         baseMs: spec.baseMs,
@@ -283,8 +285,62 @@
     }
     state.reservedSeats = reserved;
     state.reservedAt = now;
-    state.spectatorView = 'fog';
+    // Anyone may watch a lobby game, and watchers see the whole board (see spectatorPerspective).
+    state.spectatorView = 'open';
+    state.seatNetworks = {};
+    for (const seat of seats) {
+      if (seat && seat.playerId) noteSeatNetwork(state, String(seat.playerId), seat.ipHash);
+    }
     return state;
+  }
+
+  function isLobbyRoom(state) {
+    return reservedSeatsValid(state);
+  }
+
+  function usableNetwork(ipHash) {
+    return typeof ipHash === 'string' && ipHash !== '' && ipHash !== 'unknown';
+  }
+
+  // Remembers every network a lobby player has played from during this room's life.
+  function noteSeatNetwork(state, playerId, ipHash) {
+    if (!usableNetwork(ipHash) || !playerId) return;
+    if (!state.seatNetworks) state.seatNetworks = {};
+    const list = state.seatNetworks[playerId] || [];
+    if (list.includes(ipHash)) return;
+    state.seatNetworks[playerId] = [...list, String(ipHash).slice(0, 64)].slice(-8);
+  }
+
+  // Watchers of a ranked game see the full board, except someone on the same network as one of
+  // the players: they see exactly what that player sees. That closes the easy cheat (a second
+  // tab on the same device or Wi-Fi) and is the natural view for a friend looking over your
+  // shoulder at a party. Returns 'w', 'b' or null.
+  function spectatorPerspective(state, ipHash) {
+    if (!state.rated || !usableNetwork(ipHash) || !state.seatNetworks) return null;
+    for (const [playerId, networks] of Object.entries(state.seatNetworks)) {
+      if (!Array.isArray(networks) || !networks.includes(ipHash)) continue;
+      const player = getPlayer(state, playerId);
+      if (player) return player.color;
+      const seat = ['w', 'b'].map((color) => state.reservedSeats && state.reservedSeats[color]).find((item) => item && item.playerId === playerId);
+      if (seat) return seat.color;
+    }
+    return null;
+  }
+
+  // The finished game as the lobby stores it: compact plies, see lobby-logic cleanPlies().
+  function gameRecord(state) {
+    const name = (pos) => (pos ? core.squareName(pos) : '');
+    return {
+      startedAt: (state.clock && state.clock.startedAt) || state.reservedAt || state.createdAt || 0,
+      plies: state.log.map((ply) => [
+        name(ply.from),
+        name(ply.to),
+        ply.forfeit ? '--' : ply.san || '',
+        ply.promotion || '',
+        ply.capture ? ply.capture.square || name(ply.capture) : '',
+        ply.forfeit ? 1 : 0,
+      ]),
+    };
   }
 
   function reservedSeatsValid(state) {
@@ -698,17 +754,20 @@
   }
 
   // What one member is allowed to know. viewer: { role: 'player' | 'spectator', color }.
+  // viewer.perspective ('w' | 'b') makes a spectator see exactly what that player sees.
   function createView(state, viewer = {}) {
     const role = viewer.role === 'player' ? 'player' : 'spectator';
-    const color = role === 'player' && (viewer.color === 'w' || viewer.color === 'b') ? viewer.color : null;
-    const reveal = state.gameOver || (role === 'spectator' && state.spectatorView === 'open');
+    const perspective = role === 'spectator' && (viewer.perspective === 'w' || viewer.perspective === 'b') ? viewer.perspective : null;
+    const seatColor = role === 'player' && (viewer.color === 'w' || viewer.color === 'b') ? viewer.color : null;
+    const color = seatColor || perspective;
+    const reveal = state.gameOver || (role === 'spectator' && !perspective && state.spectatorView === 'open');
     const inCheck = !state.gameOver && core.isInCheck(state.board, state.turn);
 
     return {
       roomCode: state.roomCode,
       gameId: state.gameId,
       boardVersion: state.boardVersion,
-      you: { role, color },
+      you: { role, color: seatColor, perspective },
       revealed: reveal,
       turn: state.turn,
       board: reveal ? core.cloneBoard(state.board) : redactBoard(state.board, color),
@@ -730,6 +789,8 @@
       reserved: Boolean(state.reservedSeats),
       control: state.control || null,
       ratings: state.ratingUpdates || null,
+      // The lobby's id for this finished game, once it is recorded: /?game=<id> replays it.
+      recordId: state.recordId || null,
       clock: state.clock ? {
         control: state.control || '',
         baseMs: state.clock.baseMs,
@@ -834,6 +895,10 @@
     assignPlayer,
     assignSpectator,
     applyReservation,
+    isLobbyRoom,
+    noteSeatNetwork,
+    spectatorPerspective,
+    gameRecord,
     reservedSeatsValid,
     findReservedSeat,
     assignReservedPlayer,

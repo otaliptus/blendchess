@@ -156,7 +156,7 @@ export class GameHub extends DurableObject {
     const clockDeadline = rl.nextClockDeadline(this.room, now);
     if (clockDeadline) next = Math.min(next, clockDeadline + 100);
     if (this.room.reportRetryAt) next = Math.min(next, this.room.reportRetryAt);
-    const waitingForSeat = this.room.rated && !this.room.gameOver && !rl.isReady(this.room) && this.room.log.length === 0;
+    const waitingForSeat = rl.isLobbyRoom(this.room) && !this.room.gameOver && !rl.isReady(this.room) && this.room.log.length === 0;
     if (waitingForSeat) next = Math.min(next, this.room.reservedAt + rl.JOIN_DEADLINE_MS + 100);
     // Never schedule an alarm in the past: the runtime would re-fire it immediately and loop.
     await this.ctx.storage.setAlarm(Math.max(next, now + 1000));
@@ -170,9 +170,10 @@ export class GameHub extends DurableObject {
     return rl.playerIdentities(this.room);
   }
 
-  // The lobby blocks ranked queueing while a player has an unfinished game, rematches included.
+  // Each new game in a lobby room (rematches included) goes back on the lobby's live list, and a
+  // ranked one keeps blocking the queue.
   async registerActive() {
-    if (!this.room || !this.room.rated || this.room.gameOver) return;
+    if (!this.room || !rl.isLobbyRoom(this.room) || this.room.gameOver) return;
     const gameKey = `${this.room.roomCode}:${this.room.gameId}`;
     if (this.room.activeGameKey === gameKey) return;
     this.room.activeGameKey = gameKey;
@@ -180,16 +181,22 @@ export class GameHub extends DurableObject {
       await this.lobby().fetch('https://lobby.internal/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode: this.room.roomCode, gameKey, players: this.ratedPlayers().map((player) => player.playerId) }),
+        body: JSON.stringify({
+          roomCode: this.room.roomCode,
+          gameKey,
+          rated: Boolean(this.room.rated),
+          control: this.room.control,
+          players: this.ratedPlayers(),
+        }),
       });
     } catch {
       this.room.activeGameKey = '';
     }
   }
 
-  // Exactly one report per game, retried by the alarm until the lobby acknowledges it.
+  // Exactly one report per lobby game, retried by the alarm until the lobby acknowledges it.
   async reportResult() {
-    if (!this.room || !this.room.rated || !this.room.gameOver || this.room.reported) return;
+    if (!this.room || !rl.isLobbyRoom(this.room) || !this.room.gameOver || this.room.reported) return;
     if (this.room.noContest) {
       // Nobody gets rated for an opponent who never arrived; just free both players.
       if (this.room.released) return;
@@ -219,10 +226,12 @@ export class GameHub extends DurableObject {
         body: JSON.stringify({
           roomCode: this.room.roomCode,
           gameKey,
+          rated: Boolean(this.room.rated),
+          control: this.room.control,
           players: this.ratedPlayers(),
           winner,
           result: this.room.result,
-          plies: this.room.log.length,
+          record: rl.gameRecord(this.room),
           finishedAt: Date.now(),
         }),
       });
@@ -230,13 +239,19 @@ export class GameHub extends DurableObject {
     } catch {
       result = null;
     }
+    if (result && !result.ok && result.final) {
+      // The lobby will never accept this game (it did not arrange it): stop retrying.
+      await this.persist();
+      return;
+    }
     if (!result || !result.ok) {
       this.room.reported = false;
       this.room.reportRetryAt = Date.now() + REPORT_RETRY_MS;
       await this.persist();
       return;
     }
-    this.room.ratingUpdates = result.updates;
+    this.room.ratingUpdates = result.updates || null;
+    this.room.recordId = result.gameId || null;
     await this.persist();
     session.broadcastViews(this.room, this.hooks());
   }
@@ -249,7 +264,7 @@ export class GameHub extends DurableObject {
   }
 
   async releaseRated() {
-    if (!this.room || !this.room.rated) return;
+    if (!this.room || !rl.isLobbyRoom(this.room)) return;
     // Reservation identities, not seated players: a room nobody joined still blocks both players.
     const players = rl.playerIdentities(this.room).map((player) => player.playerId);
     if (!players.length) return;
@@ -269,7 +284,7 @@ export class GameHub extends DurableObject {
     const now = Date.now();
     let changed = false;
 
-    if (this.room.rated && !this.room.gameOver) {
+    if (rl.isLobbyRoom(this.room) && !this.room.gameOver) {
       if (this.room.clock && this.room.clock.startedAt && rl.clockRemainingMs(this.room, now) <= 0) {
         rl.chargeClock(this.room, now);
         rl.finishByTimeout(this.room);
@@ -291,7 +306,7 @@ export class GameHub extends DurableObject {
     if (changed) {
       session.broadcastViews(this.room, this.hooks());
       await this.afterChange();
-    } else if (this.room.rated && this.room.gameOver && !this.room.reported) {
+    } else if (rl.isLobbyRoom(this.room) && this.room.gameOver && !this.room.reported) {
       await this.reportResult();
     }
 

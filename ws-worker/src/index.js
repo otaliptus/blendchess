@@ -6,12 +6,21 @@ import '../../shared/room-session.js';
 import '../../shared/rating.js';
 import '../../shared/lobby-logic.js';
 import '../../shared/lobby-session.js';
+import '../../shared/account-api.js';
 import { GameHub } from './room.js';
 import { LobbyHub } from './lobby.js';
 
 const { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, normalizeRoomCode } = globalThis.BlendChessProtocol;
 const { sha256Hex } = globalThis.BlendChessLobbyLogic;
+const accountApi = globalThis.BlendChessAccountApi;
 const CREATE_ATTEMPTS = 5;
+const MAX_API_BODY_BYTES = 16 * 1024;
+
+// Public reads that may be served from the edge cache for a few seconds (game records for a day).
+function isCacheableRead(method, path) {
+  return method === 'GET' && (path === '/api/leaderboard' || path === '/api/live'
+    || path.startsWith('/api/players/') || path.startsWith('/api/games/'));
+}
 
 function isWebSocketUpgrade(request) {
   const upgrade = request.headers.get('Upgrade');
@@ -54,32 +63,74 @@ async function forwardToLobby(env, request, ipHash) {
   return lobbyStub(env).fetch(new Request(request, { headers }));
 }
 
+// /api/* goes to the lobby, which owns accounts, profiles, game records and the live list.
+// /leaderboard is the pre-accounts path, kept so older clients keep working.
+async function handleApi(request, env, ctx, url) {
+  const origins = accountApi.parseOrigins(env.SITE_ORIGINS);
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: accountApi.preflightHeaders(request.headers.get('Origin') || '', origins) });
+  }
+  if (Number(request.headers.get('Content-Length') || 0) > MAX_API_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: 'TOO_LARGE' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  const path = url.pathname === '/leaderboard' ? '/api/leaderboard' : url.pathname;
+  // The edge cache only exists on a custom domain; on workers.dev these calls are no-ops.
+  const cache = isCacheableRead(request.method, path) && typeof caches !== 'undefined' ? caches.default : null;
+  // Only the parameters a route reads make up the key, so junk query strings cannot dodge the cache.
+  const limit = url.searchParams.get('limit');
+  const keyUrl = `${url.origin}${path}${path === '/api/leaderboard' && limit ? `?limit=${encodeURIComponent(limit)}` : ''}`;
+  const cacheKey = cache ? new Request(keyUrl, { method: 'GET' }) : null;
+  if (cache) {
+    try {
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+    } catch {
+      // cache unavailable: answer from the lobby
+    }
+  }
+
+  // Content-Length can be absent (chunked uploads), so the body itself is measured too.
+  const body = request.method === 'POST' ? await request.text() : undefined;
+  if (body !== undefined && body.length > MAX_API_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: 'TOO_LARGE' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  let response;
+  try {
+    const ipHash = await networkHash(request);
+    const target = new URL(request.url);
+    target.pathname = path;
+    const headers = new Headers(request.headers);
+    headers.set('X-IP-Hash', ipHash);
+    response = await lobbyStub(env).fetch(new Request(target.toString(), { method: request.method, headers, body }));
+  } catch {
+    const fallback = path === '/api/leaderboard' ? { players: [], total: 0 } : { error: 'UNAVAILABLE' };
+    return new Response(JSON.stringify(fallback), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    });
+  }
+  if (cache && response.status === 200) {
+    try {
+      ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    } catch {
+      // not cached this time
+    }
+  }
+  return response;
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (url.pathname === '/health') {
       return new Response('ok', { status: 200 });
     }
 
-    if (url.pathname === '/leaderboard') {
-      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
-      try {
-        const response = await lobbyStub(env).fetch(`https://lobby.internal/leaderboard?limit=${limit}`);
-        return new Response(response.body, {
-          status: response.status,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=5',
-          },
-        });
-      } catch {
-        return new Response(JSON.stringify({ players: [], total: 0 }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-        });
-      }
+    if (url.pathname === '/leaderboard' || url.pathname.startsWith('/api/')) {
+      return handleApi(request, env, ctx, url);
     }
 
     // Only the root path routes: internal Durable Object paths must never be forwarded from here.

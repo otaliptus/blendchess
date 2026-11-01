@@ -18,6 +18,7 @@ require('../../shared/room-session.js');
 require('../../shared/rating.js');
 const logic = require('../../shared/lobby-logic.js');
 require('../../shared/lobby-session.js');
+require('../../shared/account-api.js');
 
 class MockSocket {
   constructor() {
@@ -67,6 +68,9 @@ class MockRequest {
   async json() {
     return JSON.parse(this._body);
   }
+  async text() {
+    return this._body == null ? '' : String(this._body);
+  }
 }
 
 async function loadLobbyHubClass() {
@@ -90,6 +94,8 @@ async function loadLobbyHubClass() {
     TextDecoder,
     URL,
     Headers,
+    atob,
+    btoa,
     Request: MockRequest,
     Response: MockResponse,
     WebSocketPair: class {
@@ -101,11 +107,19 @@ async function loadLobbyHubClass() {
     BlendChessProtocol: globalThis.BlendChessProtocol,
     BlendChessLobbyLogic: globalThis.BlendChessLobbyLogic,
     BlendChessLobbySession: globalThis.BlendChessLobbySession,
+    BlendChessAccountApi: globalThis.BlendChessAccountApi,
   });
   context.globalThis = context;
 
   const module = new vm.SourceTextModule(source, { context, identifier: LOBBY_MODULE_PATH });
   await module.link(async (specifier) => {
+    if (specifier === '@simplewebauthn/server') {
+      // Passkey ceremonies are covered by the shared account tests; the Durable Object only routes.
+      const names = ['generateRegistrationOptions', 'verifyRegistrationResponse', 'generateAuthenticationOptions', 'verifyAuthenticationResponse'];
+      return new vm.SyntheticModule(names, function init() {
+        for (const name of names) this.setExport(name, async () => ({ challenge: 'test-challenge', verified: false }));
+      }, { context });
+    }
     if (specifier !== 'cloudflare:workers') throw new Error(`Unhandled import: ${specifier}`);
     return new vm.SyntheticModule(['DurableObject'], function init() {
       this.setExport('DurableObject', class DurableObject {
@@ -318,11 +332,46 @@ test('a reported game updates the stored rating and the leaderboard endpoint', a
   assert.equal(duplicateBody.duplicate, true);
   assert.equal(duplicateBody.updates.b.delta, 20);
 
-  const leaderboard = await hub.fetch(new MockRequest('https://lobby.internal/leaderboard?limit=10'));
-  const board = await leaderboard.json();
+  // Both are guests: rated, counted, but not listed until they secure their account.
+  const api = (path, init = {}) => hub.fetch(new MockRequest(`https://lobby.internal${path}`, init));
+  let board = await (await api('/api/leaderboard?limit=10')).json();
   assert.equal(board.total, 2);
+  assert.equal(board.players.length, 0);
+
+  const bobToken = b.last('lobby_ready').payload.token;
+  const secured = await api('/api/auth/key/create', {
+    method: 'POST',
+    headers: { Origin: 'https://blendchess.com', Authorization: `Bearer ${bobToken}`, 'X-IP-Hash': 'ip-b' },
+    body: '{}',
+  });
+  assert.equal(secured.status, 200);
+  assert.equal(secured.headers['Access-Control-Allow-Origin'], 'https://blendchess.com');
+  const securedBody = await secured.json();
+  assert.match(securedBody.key, /^BLND(-[0-9A-Z]{4}){6}$/);
+  assert.equal(securedBody.player.secured, true);
+
+  board = await (await api('/leaderboard?limit=10')).json();
+  assert.equal(board.players.length, 1);
   assert.equal(board.players[0].name, 'Bob');
   assert.equal(board.players[0].rating, 1220);
+
+  // The game is on Bob's public profile and can be replayed; it has left the live list.
+  const profile = await api('/api/players/bob');
+  assert.equal(profile.headers['Access-Control-Allow-Origin'], '*');
+  const profileBody = await profile.json();
+  assert.equal(profileBody.player.name, 'Bob');
+  assert.equal(profileBody.games.length, 1);
+  assert.equal(profileBody.games[0].outcome, 'win');
+  assert.equal(profileBody.games[0].delta, 20);
+  assert.equal(profileBody.games[0].id, body.gameId);
+  const game = await (await api(`/api/games/${body.gameId}`)).json();
+  assert.equal(game.game.result, 'checkmate');
+  assert.equal(game.game.black.name, 'Bob');
+  assert.deepEqual((await (await api('/api/live')).json()).games, []);
+
+  // Account routes refuse other sites.
+  const foreign = await api('/api/me', { headers: { Origin: 'https://evil.example', Authorization: `Bearer ${bobToken}` } });
+  assert.equal(foreign.status, 403);
 
   // A report for a game the lobby never reserved is refused.
   const forged = await hub.fetch(new MockRequest('https://lobby.internal/report', {

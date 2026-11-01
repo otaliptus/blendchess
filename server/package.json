@@ -10,6 +10,7 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "@simplewebauthn/server": "13.3.3",
     "nanoid": "^5.0.8",
     "ws": "^8.18.0"
   }

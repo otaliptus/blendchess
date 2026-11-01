@@ -241,10 +241,24 @@ test('a reported game moves both ratings exactly once', async () => {
   assert.equal(duplicate.duplicate, true);
   assert.equal(h.store.getPlayer(playerOf(a).id).rating, 1220, 'a duplicate report changes nothing');
 
+  // Guests are rated but only secured accounts are listed.
   const board = h.store.leaderboard(10);
   assert.equal(board.total, 2);
-  assert.equal(board.entries[0].rating, 1220);
+  assert.equal(board.entries.length, 0);
+  const winner = h.store.getPlayer(playerOf(a).id);
+  winner.keyHash = 'secured';
+  h.store.bumpLeaderboard([winner]);
+  assert.equal(h.store.leaderboard(10).entries[0].rating, 1220);
+  assert.equal(h.store.leaderboard(10).entries[0].secured, true);
   assert.equal(h.store.getActiveGame(playerOf(a).id), null);
+
+  // The game is on both profiles' history.
+  assert.equal(report.gameId, winner.recent[0]);
+  const game = h.store.getGame(report.gameId);
+  assert.equal(game.white.after, 1220);
+  assert.equal(game.black.after, 1180);
+  assert.equal(game.result, 'resign');
+  assert.equal(h.store.getPlayer(playerOf(b).id).recent[0], report.gameId);
 });
 
 test('a report for a game the lobby did not arrange is refused', async () => {

@@ -1,10 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
+import * as webauthn from '@simplewebauthn/server';
 
 const protocol = globalThis.BlendChessProtocol;
 const logic = globalThis.BlendChessLobbyLogic;
 const lobbySession = globalThis.BlendChessLobbySession;
+const accountApi = globalThis.BlendChessAccountApi;
+if (!protocol || !logic || !lobbySession || !accountApi) throw new Error('shared modules must load before lobby.js');
 const { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, createError, parseEnvelope } = protocol;
-if (!protocol || !logic || !lobbySession) throw new Error('shared modules must load before lobby.js');
 
 const MAX_SOCKETS = 2000;
 const MAX_SOCKETS_PER_IP = 6;
@@ -17,6 +19,7 @@ const CREATE_PER_IP = 12;
 const CREATE_GLOBAL = 400;
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MAX_API_BODY_BYTES = 16 * 1024;
 
 function makeRoomCode() {
   const bytes = new Uint8Array(ROOM_CODE_LENGTH);
@@ -81,13 +84,79 @@ class StorageLobbyStore {
     await this.write(`player:${record.id}`, record);
   }
 
-  async playerByToken(hash) {
-    const id = await this.read(`token:${hash}`);
-    return id ? this.getPlayer(id) : null;
+  async getSession(hash) {
+    const value = await this.read(`session:${hash}`);
+    if (value) return value;
+    // Identities minted before accounts existed: token:<hash> -> playerId.
+    const legacy = await this.read(`token:${hash}`);
+    return typeof legacy === 'string' ? { playerId: legacy, method: 'guest', createdAt: 0, lastUsed: 0 } : null;
   }
 
-  async saveToken(hash, id) {
-    await this.write(`token:${hash}`, id);
+  async saveSession(hash, data) {
+    await this.write(`session:${hash}`, data);
+  }
+
+  async removeSession(hash) {
+    await this.remove(`session:${hash}`);
+    await this.remove(`token:${hash}`);
+  }
+
+  async getCredential(id) {
+    return this.read(`cred:${id}`);
+  }
+
+  async saveCredential(id, data) {
+    await this.write(`cred:${id}`, data);
+  }
+
+  async removeCredential(id) {
+    await this.remove(`cred:${id}`);
+  }
+
+  async keyOwner(hash) {
+    return this.read(`key:${hash}`);
+  }
+
+  async saveKey(hash, playerId) {
+    await this.write(`key:${hash}`, playerId);
+  }
+
+  async removeKey(hash) {
+    await this.remove(`key:${hash}`);
+  }
+
+  async getChallenge(id) {
+    const value = await this.read(`chal:${id}`);
+    return value && value.expiresAt > Date.now() ? value : null;
+  }
+
+  async saveChallenge(id, data) {
+    await this.write(`chal:${id}`, data);
+  }
+
+  async removeChallenge(id) {
+    await this.remove(`chal:${id}`);
+  }
+
+  async getGame(id) {
+    return this.read(`game:${id}`);
+  }
+
+  async getGames(ids) {
+    const games = await Promise.all(ids.map((id) => this.read(`game:${id}`)));
+    return games.filter(Boolean);
+  }
+
+  async saveGame(game) {
+    await this.write(`game:${game.id}`, game);
+  }
+
+  async getLive() {
+    return ((await this.read('live')) || []).map((entry) => ({ ...entry }));
+  }
+
+  async saveLive(entries) {
+    await this.write('live', entries.slice(0, logic.LIVE_MAX));
   }
 
   async nameOwner(lower) {
@@ -148,12 +217,11 @@ class StorageLobbyStore {
     for (const record of records) {
       const index = top.findIndex((entry) => entry.id === record.id);
       if (index >= 0) top.splice(index, 1);
-      if (record.games > 0) {
-        top.push(logic.summary(record));
-        if (!(await this.read(`played:${record.id}`))) {
-          await this.write(`played:${record.id}`, 1);
-          stats.ranked += 1;
-        }
+      // Only secured accounts are listed; every player with a game counts towards the total.
+      if (logic.onLeaderboard(record)) top.push(logic.summary(record));
+      if (record.games > 0 && !(await this.read(`played:${record.id}`))) {
+        await this.write(`played:${record.id}`, 1);
+        stats.ranked += 1;
       }
     }
     top.sort((a, b) => b.rating - a.rating || b.games - a.games);
@@ -180,6 +248,7 @@ export class LobbyHub extends DurableObject {
     this.ctx = ctx;
     this.env = env;
     this.store = new StorageLobbyStore(ctx.storage);
+    this.origins = accountApi.parseOrigins(env && env.SITE_ORIGINS);
     this.rates = new Map();
     this.creationHits = new Map();
     this.globalHits = [];
@@ -284,13 +353,11 @@ export class LobbyHub extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
 
+    // The public HTTP API (/api/*), forwarded by index.js with the caller's network hash.
+    if (url.pathname.startsWith('/api/') || url.pathname === '/leaderboard') return this.api(request, url);
+
     // Internal calls from room Durable Objects and the Worker router. External clients cannot
     // reach these paths: index.js never forwards them.
-    if (url.pathname === '/leaderboard') {
-      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
-      const data = await this.store.leaderboard(limit);
-      return json({ players: data.entries, total: data.total });
-    }
     if (url.pathname === '/report' && request.method === 'POST') {
       return this.runInternal(async () => {
         const body = await request.json().catch(() => null);
@@ -336,6 +403,36 @@ export class LobbyHub extends DurableObject {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ id: crypto.randomUUID(), playerId: '', ipHash, role: 'lobby' });
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async api(request, url) {
+    const req = {
+      method: request.method,
+      path: url.pathname === '/leaderboard' ? '/api/leaderboard' : url.pathname,
+      query: { limit: url.searchParams.get('limit') },
+      origin: request.headers.get('Origin') || '',
+      authorization: request.headers.get('Authorization') || '',
+      ipHash: request.headers.get('X-IP-Hash') || 'unknown',
+      body: null,
+    };
+    let result = null;
+    if (request.method === 'POST') {
+      const text = await request.text();
+      if (text.length > MAX_API_BODY_BYTES) {
+        result = { status: 413, body: { error: 'TOO_LARGE' }, public: false, cacheSeconds: 0 };
+      } else if (text) {
+        try {
+          req.body = JSON.parse(text);
+        } catch {
+          result = { status: 400, body: { error: 'INVALID', message: 'Body must be JSON.' }, public: false, cacheSeconds: 0 };
+        }
+      }
+    }
+    if (!result) result = await accountApi.handle(this.store, { origins: this.origins, webauthn, hooks: this.hooks() }, req);
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: accountApi.responseHeaders(req, result, this.origins),
+    });
   }
 
   runInternal(work) {
@@ -450,18 +547,25 @@ export class LobbyHub extends DurableObject {
     await this.scheduleAlarm();
   }
 
+  // Once a day: drop report markers older than a week and sign-in challenges that expired.
   async pruneReportsIfDue() {
     const last = (await this.ctx.storage.get('lastPrune')) || 0;
     const now = Date.now();
     if (now - last < PRUNE_INTERVAL_MS) return;
-    let cursor;
-    for (let page = 0; page < 5; page += 1) {
-      const batch = await this.ctx.storage.list({ prefix: 'report:', limit: 1000, startAfter: cursor });
-      for (const [key, value] of batch) {
-        if (value && now - (value.at || 0) > REPORT_TTL_MS) await this.ctx.storage.delete(key);
+    const expired = {
+      'report:': (value) => now - (value.at || 0) > REPORT_TTL_MS,
+      'chal:': (value) => (value.expiresAt || 0) <= now,
+    };
+    for (const [prefix, isExpired] of Object.entries(expired)) {
+      let cursor;
+      for (let page = 0; page < 5; page += 1) {
+        const batch = await this.ctx.storage.list({ prefix, limit: 1000, startAfter: cursor });
+        for (const [key, value] of batch) {
+          if (value && isExpired(value)) await this.store.remove(key);
+        }
+        if (batch.size < 1000) break;
+        cursor = [...batch.keys()].at(-1);
       }
-      if (batch.size < 1000) break;
-      cursor = [...batch.keys()].at(-1);
     }
     await this.ctx.storage.put('lastPrune', now);
   }
