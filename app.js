@@ -2105,9 +2105,17 @@
 
     const lines = [];
     let illegalTries = 0;
+    // Your own failed tries collapse to the latest one, so retrying doesn't stack lines in the banner.
+    let ownTries = 0;
+    let lastOwnTry = null;
     for (const event of recent) {
-      if (event.kind === 'illegal' && event.color !== viewer) {
-        illegalTries += 1;
+      if (event.kind === 'illegal') {
+        if (viewer && event.color === viewer) {
+          ownTries += 1;
+          lastOwnTry = event;
+        } else {
+          illegalTries += 1;
+        }
         continue;
       }
       const line = describeEvent(event, viewer, view);
@@ -2116,6 +2124,10 @@
     if (illegalTries) {
       const who = playerName(recent.find((event) => event.kind === 'illegal' && event.color !== viewer).color, view);
       lines.unshift({ text: `${who} tried ${illegalTries > 1 ? `${illegalTries} illegal moves` : 'an illegal move'}.`, tone: 'warn' });
+    }
+    if (lastOwnTry) {
+      const line = describeEvent(lastOwnTry, viewer, view);
+      if (line) lines.push(ownTries > 1 ? { ...line, text: `${line.text} ${ownTries} tries so far.` } : line);
     }
     const tone = lines.reduce((worst, line) => (TONE_RANK[line.tone || ''] > TONE_RANK[worst] ? line.tone : worst), '');
     return { text: lines.map((line) => line.text).join(' '), tone };
