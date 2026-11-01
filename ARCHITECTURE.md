@@ -6,6 +6,8 @@
 | --- | --- |
 | `chess-core.js` | Rules engine: move generation, check, terminal states, SAN, plausible moves for the fog |
 | `shared/protocol.js` | Message types, error codes, envelope parsing |
+| `ws-worker/src/data-version.js` | Checks the release's data version before loading stored state; intentional resets erase storage and retire old sockets |
+| `client/dataVersion.js` | Applies a server-announced reset to that server's browser data |
 | `shared/engine-facade.js` | Validates a move intent against the legal moves |
 | `shared/room-logic.js` | Room and game authority, **per-viewer redaction** (`createView`), clocks, reserved seats, PGN |
 | `shared/room-session.js` | Message handling for one room, written against a tiny transport interface |
@@ -82,7 +84,9 @@ ratings, finished-game records and the live list. It never holds a game.
 - **Securing an account.** A player can add passkeys (WebAuthn, discoverable credentials, verified with
   `@simplewebauthn/server`; `cred:<id>` holds the public key, counter and RP ID) and one account key
   (120 bits of Crockford base32, stored as `key:<sha256>`; high entropy means no slow hash is needed).
-  Either makes the account *secured*, which is what puts it on the leaderboard. The RP ID is the page's
+  Either makes the account *secured*, which is what puts it on the leaderboard. Passkeys are enabled
+  on the production Pages hostname as well as the custom domain; each has its own RP ID. Account keys
+  let a player carry their account between them and register a passkey on the destination. The RP ID is the page's
   host without `www.`, so `blendchess.com` and `www.blendchess.com` share passkeys. Challenges are
   stored (the object may hibernate during the prompt), single use, tied to the origin that asked for
   them, and expire after five minutes; their ids start with the expiry so expired ones are swept in

@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { prepareStorage, socketIsCurrent } from './data-version.js';
 
 const protocol = globalThis.BlendChessProtocol;
 const rl = globalThis.BlendChessRoomLogic;
@@ -94,6 +95,7 @@ export class GameHub extends DurableObject {
     this.rates = new Map();
     this.chains = new Map();
     ctx.blockConcurrencyWhile(async () => {
+      await prepareStorage(ctx, { room: true });
       this.room = (await ctx.storage.get('room')) || null;
       this.reconcilePresence();
     });
@@ -104,7 +106,7 @@ export class GameHub extends DurableObject {
   }
 
   liveConns() {
-    return this.ctx.getWebSockets().map((ws) => this.conn(ws)).filter((conn) => !this.closing.has(conn.id) && !this.evicted.has(conn.id));
+    return this.ctx.getWebSockets().filter(socketIsCurrent).map((ws) => this.conn(ws)).filter((conn) => !this.closing.has(conn.id) && !this.evicted.has(conn.id));
   }
 
   hooks() {
@@ -153,6 +155,7 @@ export class GameHub extends DurableObject {
   // retry, or plain idle cleanup.
   async persist() {
     if (!this.room) return;
+    this.room.dataVersion = protocol.DATA_VERSION;
     await this.ctx.storage.put('room', this.room);
     const now = Date.now();
     let next = now + ROOM_TTL_MS;
@@ -368,7 +371,7 @@ export class GameHub extends DurableObject {
     const create = request.headers.get('X-Room-Create') === '1';
     const ipHash = request.headers.get('X-IP-Hash') || 'unknown';
     if (create && this.room) return new Response('Room code taken.', { status: 409 });
-    const counted = this.ctx.getWebSockets().filter((ws) => !this.evicted.has((ws.deserializeAttachment() || {}).id));
+    const counted = this.ctx.getWebSockets().filter((ws) => socketIsCurrent(ws) && !this.evicted.has((ws.deserializeAttachment() || {}).id));
     if (counted.length >= MAX_SOCKETS_PER_ROOM) {
       // Live lobby games are listed publicly, so watchers (or idle sockets) can fill a room. A player
       // coming back to a seat (the client marks those connections seat=1, and must then present a
@@ -386,7 +389,7 @@ export class GameHub extends DurableObject {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ id: crypto.randomUUID(), roomCode, create, role: null, playerId: '', ipHash });
+    server.serializeAttachment({ id: crypto.randomUUID(), roomCode, create, role: null, playerId: '', ipHash, dataVersion: protocol.DATA_VERSION });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -430,6 +433,7 @@ export class GameHub extends DurableObject {
   }
 
   async processMessage(ws, data) {
+    if (!socketIsCurrent(ws)) return;
     const conn = this.conn(ws);
     const hooks = this.hooks();
     const sendError = (code, message) => hooks.send(conn, createError(conn.roomCode || '', conn.playerId || '', code, message));
@@ -474,6 +478,7 @@ export class GameHub extends DurableObject {
   }
 
   async handleDisconnect(ws) {
+    if (!socketIsCurrent(ws)) return;
     const conn = this.conn(ws);
     this.closing.add(conn.id);
     this.rates.delete(conn.id);

@@ -30,8 +30,9 @@ class MockSocket {
     if (this.closed) throw new Error('closed');
     this.inbox.push(JSON.parse(text));
   }
-  close() {
+  close(code) {
     this.closed = true;
+    this.closeCode = code;
   }
   serializeAttachment(value) {
     this.attachment = structuredClone(value);
@@ -73,7 +74,8 @@ class MockRequest {
   }
 }
 
-async function loadLobbyHubClass() {
+// Keep the fixtures at v1 so bumping the production version still exercises the v1 -> v2 reset.
+async function loadLobbyHubClass(dataVersion = 1) {
   const source = await readFile(LOBBY_MODULE_PATH, 'utf8');
   const context = vm.createContext({
     console,
@@ -104,7 +106,7 @@ async function loadLobbyHubClass() {
         this[1] = new MockSocket();
       }
     },
-    BlendChessProtocol: globalThis.BlendChessProtocol,
+    BlendChessProtocol: { ...globalThis.BlendChessProtocol, DATA_VERSION: dataVersion },
     BlendChessLobbyLogic: globalThis.BlendChessLobbyLogic,
     BlendChessLobbySession: globalThis.BlendChessLobbySession,
     BlendChessAccountApi: globalThis.BlendChessAccountApi,
@@ -113,6 +115,9 @@ async function loadLobbyHubClass() {
 
   const module = new vm.SourceTextModule(source, { context, identifier: LOBBY_MODULE_PATH });
   await module.link(async (specifier) => {
+    if (specifier === './data-version.js') {
+      return new vm.SourceTextModule(await readFile(new URL('../src/data-version.js', import.meta.url), 'utf8'), { context });
+    }
     if (specifier === '@simplewebauthn/server') {
       // Passkey ceremonies are covered by the shared account tests; the Durable Object only routes.
       const names = ['generateRegistrationOptions', 'verifyRegistrationResponse', 'generateAuthenticationOptions', 'verifyAuthenticationResponse'];
@@ -135,6 +140,56 @@ async function loadLobbyHubClass() {
 }
 
 const LobbyHub = await loadLobbyHubClass();
+
+test('a release reset erases accounts and records once, closes old sockets, and blocks data-version rollback', async () => {
+  const { hub, ctx } = await createLobby();
+  const player = await open(hub);
+  await player.send('lobby_hello', { nickname: 'BeforeReset' });
+  const token = player.last('lobby_ready').payload.token;
+  const { key } = await (await apiCall(hub, '/api/auth/key/create', { token, body: {} })).json();
+  // Include the other stored data families, not just identity.
+  for (const name of ['game:old', 'cred:old', 'top', 'live', 'revocations']) ctx.storageMap.set(name, { old: true });
+  const NextLobby = await loadLobbyHubClass(2);
+  const nextCtx = createCtx(ctx.storageMap);
+  nextCtx.sockets.push(player.ws);
+  const next = new NextLobby(nextCtx, createEnv());
+  await nextCtx.ready;
+  assert.equal(player.ws.closeCode, protocol.DATA_RESET_CLOSE_CODE);
+  assert.equal((await apiCall(next, '/api/me', { token })).status, 401);
+  assert.equal((await apiCall(next, '/api/auth/key/login', { body: { key } })).status, 401);
+  assert.equal((await apiCall(next, '/api/players/BeforeReset')).status, 404);
+  for (const name of ['game:old', 'cred:old', 'top', 'live', 'revocations']) assert.equal(ctx.storageMap.has(name), false);
+  assert.equal(ctx.storageMap.get('dataVersion'), 2);
+  const before = [...ctx.storageMap];
+  await next.webSocketMessage(player.ws, JSON.stringify(protocol.createMessage('lobby_hello', '', '', { nickname: 'StaleSocket' })));
+  assert.deepEqual([...ctx.storageMap], before, 'stale messages cannot create accounts after the reset');
+
+  const fresh = await open(next);
+  await fresh.send('lobby_hello', { nickname: 'AfterReset' });
+  const freshToken = fresh.last('lobby_ready').payload.token;
+  const restoredCtx = createCtx(ctx.storageMap);
+  const restored = new NextLobby(restoredCtx, createEnv());
+  await restoredCtx.ready;
+  assert.equal((await apiCall(restored, '/api/me', { token: freshToken })).status, 200, 'same version keeps new accounts');
+
+  const rollbackCtx = createCtx(ctx.storageMap);
+  new LobbyHub(rollbackCtx, createEnv());
+  await assert.rejects(rollbackCtx.ready, /rollback across a data reset/);
+  assert.equal(ctx.storageMap.get('dataVersion'), 2);
+});
+
+test('version 1 preserves unversioned stored accounts on the first deployment', async () => {
+  const { hub, ctx } = await createLobby();
+  const player = await open(hub);
+  await player.send('lobby_hello', { nickname: 'LegacyAccount' });
+  const token = player.last('lobby_ready').payload.token;
+  ctx.storageMap.delete('dataVersion');
+  const restoredCtx = createCtx(ctx.storageMap);
+  const restored = new LobbyHub(restoredCtx, createEnv());
+  await restoredCtx.ready;
+  assert.equal((await apiCall(restored, '/api/me', { token })).status, 200);
+  assert.equal(ctx.storageMap.get('dataVersion'), 1);
+});
 
 function createCtx(storageMap = new Map()) {
   const sockets = [];

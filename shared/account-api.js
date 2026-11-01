@@ -434,6 +434,8 @@
     const now = Date.now();
 
     if (req.method === 'GET') {
+      // Bypasses the Worker's edge cache; clients fetch this with cache: no-store.
+      if (path === '/api/config') return reply(200, { dataVersion: protocol.DATA_VERSION }, 1);
       if (path === '/api/leaderboard') return leaderboard(store, req.query && req.query.limit);
       if (path === '/api/live') return liveList(store);
       if (path.startsWith('/api/players/')) {

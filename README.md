@@ -30,7 +30,8 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 - **Secure it to keep it.** In `ACCOUNT`, add a **passkey** (your phone or computer's face, fingerprint or PIN; it syncs through your password manager) or get an **account key** (`BLND-XXXX-...`, a code you save somewhere safe; it works on any device). Either one lets you sign in on another device and keeps your rating if you clear the browser. Having both is a backup.
 - **Devices.** Each browser you sign in on gets its own session. `SIGN OUT OTHER DEVICES` ends all of them but the one you're on, including any ranked game they are sitting in (their clock keeps running).
 - **Leaderboard.** Guests are rated like everyone else, but only secured accounts are listed.
-- Passkeys are offered on `blendchess.com` (and on `localhost` for development); a passkey belongs to the domain it was made on. Account keys work everywhere.
+- Passkeys are offered on `blendchess.pages.dev`, `blendchess.com` (including `www`) and `localhost` for development. A passkey belongs to the domain it was made on. To move the same account between Pages and the custom domain, sign in with an account key and add a passkey on the new domain.
+- Normal deployments preserve accounts and games. An intentional full reset is controlled by `DATA_VERSION` in `shared/protocol.js`; see [release resets](ws-worker/README.md#intentional-release-resets). The initial value `1` preserves all existing data.
 
 ## Ranked play
 

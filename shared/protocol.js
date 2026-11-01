@@ -1,6 +1,10 @@
 (function installBlendChessProtocol() {
   // 2.x: the server sends every member its own redacted view of the game.
   const PROTOCOL_VERSION = '2.0.0';
+  // Increase only for an intentional full data reset. Ordinary releases keep this unchanged.
+  // Version 1 adopts all data written before release resets existed. Never decrease it.
+  const DATA_VERSION = 1;
+  const DATA_RESET_CLOSE_CODE = 4002;
 
   const TYPES = {
     CREATE_ROOM: 'create_room',
@@ -146,6 +150,8 @@
 
   const protocolExports = {
     PROTOCOL_VERSION,
+    DATA_VERSION,
+    DATA_RESET_CLOSE_CODE,
     TYPES,
     ERROR_CODES,
     ROOM_LESS_TYPES,

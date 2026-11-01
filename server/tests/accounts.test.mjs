@@ -115,6 +115,37 @@ test('account keys are 120-bit, grouped, and forgiving about how they are typed'
 
 // --- Passkeys ---------------------------------------------------------------------
 
+test('pages.dev passkeys sign in on pages.dev and cannot be used as custom-domain passkeys', async () => {
+  const h = makeLobby();
+  const ann = await h.guest('Ann');
+  const origin = 'https://blendchess.pages.dev';
+  const options = await h.call('POST', '/api/auth/passkey/register/options', { token: ann.token, origin });
+  assert.equal(options.body.options.rp.id, 'blendchess.pages.dev');
+  const registered = await h.call('POST', '/api/auth/passkey/register/verify', {
+    token: ann.token, origin,
+    body: { challengeId: options.body.challengeId, response: {
+      id: 'pages-credential', challenge: options.body.options.challenge, origin, rpID: 'blendchess.pages.dev',
+    } },
+  });
+  assert.equal(registered.status, 200);
+  const login = await h.call('POST', '/api/auth/passkey/login/options', { origin });
+  const signedIn = await h.call('POST', '/api/auth/passkey/login/verify', {
+    origin, body: { challengeId: login.body.challengeId, response: { id: 'pages-credential', challenge: login.body.options.challenge, origin } },
+  });
+  assert.equal(signedIn.status, 200);
+  assert.equal(signedIn.body.player.id, ann.player.id);
+  assert.equal((await passkeyLogin(h, 'pages-credential')).status, 401);
+});
+
+test('release configuration is public and bypasses the edge cache', async () => {
+  const h = makeLobby();
+  const result = await h.call('GET', '/api/config', { origin: '' });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { dataVersion: protocol.DATA_VERSION });
+  assert.equal(accountApi.routeOf('GET', '/api/config').cacheKey, null);
+  assert.equal(accountApi.responseHeaders('', result, [])['Access-Control-Allow-Origin'], '*');
+});
+
 test('a passkey secures a guest account and signs in a new device as the same player', async () => {
   const h = makeLobby();
   const ann = await h.guest('Ann');

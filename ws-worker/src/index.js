@@ -75,7 +75,9 @@ async function handleApi(request, env, ctx, url) {
   // The edge cache only exists on a custom domain; on workers.dev these calls are no-ops.
   const { path, cacheKey: key } = accountApi.routeOf(request.method, url.pathname, url.searchParams);
   const cache = key && typeof caches !== 'undefined' ? caches.default : null;
-  const cacheKey = cache ? new Request(`${url.origin}${key}`, { method: 'GET' }) : null;
+  const keyUrl = new URL(key || '/', url.origin);
+  keyUrl.searchParams.set('dataVersion', String(globalThis.BlendChessProtocol.DATA_VERSION));
+  const cacheKey = cache ? new Request(keyUrl, { method: 'GET' }) : null;
   if (cache) {
     try {
       const hit = await cache.match(cacheKey);
