@@ -334,3 +334,44 @@ test('signing other devices out ends the old device’s game: socket closed, tic
   assert.ok(view);
   for (const client of [ann, bea, beaGame, retry]) client.close();
 });
+
+test('playing a friend: an invite with options starts the game for whoever opens it', async () => {
+  const ann = await connect('lobby=1');
+  const bob = await connect('lobby=1');
+  ann.send('lobby_hello', '', { nickname: 'InviteAnn' });
+  await ann.next((message) => message.type === 'lobby_ready');
+  bob.send('lobby_hello', '', { nickname: 'InviteBob' });
+  await bob.next((message) => message.type === 'lobby_ready');
+
+  ann.send('lobby_invite', '', { control: 'untimed', hardMode: true, party: false });
+  const invited = (await ann.next((message) => message.type === 'lobby_invited')).payload;
+  assert.equal(invited.rated, false);
+  bob.send('lobby_accept', '', { code: invited.code });
+  const annMatch = (await ann.next((message) => message.type === 'match_found')).payload;
+  const bobMatch = (await bob.next((message) => message.type === 'match_found')).payload;
+  assert.equal(annMatch.roomCode, bobMatch.roomCode);
+  assert.equal(annMatch.clock, null);
+
+  const roomCode = annMatch.roomCode;
+  const annGame = await connect(`room=${roomCode}&seat=1`);
+  annGame.send('join_room', roomCode, { ticket: annMatch.ticket });
+  await annGame.next((message) => message.type === 'room_joined');
+  const bobGame = await connect(`room=${roomCode}&seat=1`);
+  bobGame.send('join_room', roomCode, { ticket: bobMatch.ticket });
+  await bobGame.next((message) => message.type === 'room_joined');
+  const view = (await bobGame.next((message) => isView(message) && !message.payload.game.waitingForStart)).payload.game;
+  assert.equal(view.hardMode, true);
+  assert.equal(view.rated, false);
+  assert.equal(view.clock, null);
+
+  // Party mode is off: a watcher stays in the fog.
+  const watcher = await connect(`room=${roomCode}`);
+  watcher.send('join_room', roomCode, { spectator: true });
+  const watched = (await watcher.next(isView)).payload.game;
+  assert.equal(watched.revealed, false);
+
+  // A used invite is gone.
+  bob.send('lobby_accept', '', { code: invited.code });
+  assert.equal((await bob.next((message) => message.type === 'lobby_error')).payload.errorCode, 'INVITE_NOT_FOUND');
+  for (const client of [ann, bob, annGame, bobGame, watcher]) client.close();
+});

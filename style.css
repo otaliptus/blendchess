@@ -1584,6 +1584,49 @@ button {
   color: var(--accent-2);
 }
 
+/* Play a friend: the four toggles in two columns, then the code box and the two buttons. */
+.invite-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
+.invite-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px 8px;
+  margin-top: 4px;
+}
+
+.invite-actions .field {
+  flex: 1;
+  min-width: 160px;
+  margin-bottom: 4px;
+}
+
+/* An invite that is out: the QR beside its code, what was asked for, and the share buttons. */
+.invite-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+}
+
+.invite-box .qr {
+  width: 140px;
+}
+
+.invite-details {
+  flex: 1;
+  min-width: 200px;
+}
+
+.invite-details .menu-row {
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
 /* Nothing to report (ready, not searching): no blank gap above the buttons. */
 .lobby-status:empty {
   min-height: 0;
@@ -2274,6 +2317,10 @@ button {
 }
 
 @media (max-width: 560px) {
+  .invite-options {
+    grid-template-columns: 1fr;
+  }
+
   #musicBtn {
     display: none;
   }

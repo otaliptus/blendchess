@@ -31,6 +31,10 @@
     LOBBY_ERROR: 'lobby_error',
     LOBBY_RATING: 'lobby_rating',
     MATCH_FOUND: 'match_found',
+    // Playing a friend: an invite is a private place in the lobby, matched by its code.
+    LOBBY_INVITE: 'lobby_invite',
+    LOBBY_INVITED: 'lobby_invited',
+    LOBBY_ACCEPT: 'lobby_accept',
   };
 
   const ERROR_CODES = {
@@ -53,10 +57,11 @@
     TICKET_INVALID: 'TICKET_INVALID',
     SPECTATOR_DISABLED: 'SPECTATOR_DISABLED',
     RATED_LOCKED: 'RATED_LOCKED',
+    INVITE_NOT_FOUND: 'INVITE_NOT_FOUND',
   };
 
   // Lobby messages have no room code: the lobby is a single shared connection.
-  const ROOM_LESS_TYPES = new Set([TYPES.CREATE_ROOM, TYPES.LOBBY_HELLO, TYPES.LOBBY_QUEUE, TYPES.LOBBY_CANCEL]);
+  const ROOM_LESS_TYPES = new Set([TYPES.CREATE_ROOM, TYPES.LOBBY_HELLO, TYPES.LOBBY_QUEUE, TYPES.LOBBY_CANCEL, TYPES.LOBBY_INVITE, TYPES.LOBBY_ACCEPT]);
 
   const DRAW_REASON_ALIASES = {
     threefold: 'threefold',

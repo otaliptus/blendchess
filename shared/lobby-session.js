@@ -134,7 +134,7 @@
     const entry = {
       roomCode,
       gameKey,
-      control: logic.controlOf(control) ? control : null,
+      control: logic.knownControl(control),
       rated,
       startedAt: Date.now(),
       w: liveSide(white),
@@ -263,6 +263,11 @@
       return false;
     }
 
+    // Queueing withdraws any invite of this player: one thing at a time.
+    const invites = await store.getInvites();
+    const invitesAfter = invites.filter((item) => item.playerId !== record.id);
+    if (invitesAfter.length !== invites.length) await store.saveInvites(invitesAfter);
+
     entries.push({
       playerId: record.id,
       connId: conn.id,
@@ -287,8 +292,12 @@
     const entries = await store.getQueue();
     const next = entries.filter((entry) => entry.playerId !== conn.playerId);
     if (next.length !== entries.length) await store.saveQueue(next);
+    // Cancel also withdraws an invite.
+    const invites = await store.getInvites();
+    const invitesAfter = invites.filter((item) => item.playerId !== conn.playerId);
+    if (invitesAfter.length !== invites.length) await store.saveInvites(invitesAfter);
     send(hooks, conn, TYPES.LOBBY_CANCELLED, {});
-    return next.length !== entries.length;
+    return next.length !== entries.length || invitesAfter.length !== invites.length;
   }
 
   // Pairs whoever can be paired and starts a room for each pair.
@@ -322,30 +331,10 @@
         }
         continue;
       }
+      // Two accounts on one network get an unrated practice game: no farming your own rating.
       const sameNetwork = Boolean(first.ipHash) && first.ipHash !== 'unknown' && first.ipHash === second.ipHash;
-      const order = Math.random() < 0.5 ? [first, second] : [second, first];
-      const [whiteEntry, blackEntry] = order;
-      const whiteRecord = await store.getPlayer(whiteEntry.playerId);
-      const blackRecord = await store.getPlayer(blackEntry.playerId);
-      if (!whiteRecord || !blackRecord) continue;
-
-      // Each seat belongs to the session of the socket that receives the match: signing that
-      // session out later takes the seat away.
-      const whiteConn = connFor(hooks, whiteEntry);
-      const blackConn = connFor(hooks, blackEntry);
-      const sessionOf = (conn) => (conn && conn.sessionHash) || '';
-      const seats = [
-        { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: sessionOf(whiteConn) },
-        { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: sessionOf(blackConn) },
-      ];
-
-      let room = null;
-      try {
-        room = await hooks.createRatedRoom({ control: first.control, rated: !sameNetwork, seats });
-      } catch {
-        room = null;
-      }
-      if (!room) {
+      const game = { control: first.control, rated: !sameNetwork, hardMode: false, spectatorView: 'open' };
+      if (!(await startGame(store, hooks, first, second, game, now))) {
         // Put both back and keep searching.
         const back = await store.getQueue();
         back.push(first, second);
@@ -355,45 +344,162 @@
         }
         continue;
       }
-
-      // Practice games between two accounts on the same network do not block queueing.
-      const gameKey = `${room.roomCode}:1`;
-      if (!sameNetwork) {
-        await store.saveActiveGame(first.playerId, { roomCode: room.roomCode, gameKey, at: now });
-        await store.saveActiveGame(second.playerId, { roomCode: room.roomCode, gameKey, at: now });
-      }
-      await upsertLive(store, { roomCode: room.roomCode, gameKey, control: first.control, rated: !sameNetwork, white: whiteRecord, black: blackRecord });
-
-      whiteRecord.lastOpponent = blackRecord.id;
-      whiteRecord.lastOpponentAt = now;
-      blackRecord.lastOpponent = whiteRecord.id;
-      blackRecord.lastOpponentAt = now;
-      rememberSeat(whiteRecord, room.roomCode, seats[0].session, now);
-      rememberSeat(blackRecord, room.roomCode, seats[1].session, now);
-      await store.savePlayer(whiteRecord);
-      await store.savePlayer(blackRecord);
-
-      const control = logic.controlOf(first.control);
-      const tell = (conn, seat, opponentRecord, ticket) => {
-        send(hooks, conn, TYPES.MATCH_FOUND, {
-          roomCode: room.roomCode,
-          ticket,
-          color: seat.color,
-          control: control.id,
-          clock: { baseMs: control.baseMs, incMs: control.incMs },
-          rated: !sameNetwork,
-          opponent: {
-            name: opponentRecord.name,
-            rating: opponentRecord.rating,
-            provisional: opponentRecord.games < rating.PROVISIONAL_GAMES,
-          },
-        });
-      };
-      tell(whiteConn, seats[0], blackRecord, room.tickets.w);
-      tell(blackConn, seats[1], whiteRecord, room.tickets.b);
       started += 1;
     }
     return started;
+  }
+
+  // Starts a lobby game between two players, from matchmaking or an accepted invite: reserves a
+  // room with a ticket for each seat, records it, and tells both sockets where to go.
+  // `first`/`second` are { playerId, connId, ipHash }; `game` is { control, rated, hardMode,
+  // spectatorView }. Returns the room code, or null when no room could be made.
+  async function startGame(store, hooks, first, second, game, now = Date.now()) {
+    const [whiteEntry, blackEntry] = Math.random() < 0.5 ? [first, second] : [second, first];
+    const whiteRecord = await store.getPlayer(whiteEntry.playerId);
+    const blackRecord = await store.getPlayer(blackEntry.playerId);
+    if (!whiteRecord || !blackRecord) return null;
+
+    // Each seat belongs to the session of the socket that receives the match: signing that
+    // session out later takes the seat away.
+    const whiteConn = connFor(hooks, whiteEntry);
+    const blackConn = connFor(hooks, blackEntry);
+    const sessionOf = (conn) => (conn && conn.sessionHash) || '';
+    const seats = [
+      { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: sessionOf(whiteConn) },
+      { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: sessionOf(blackConn) },
+    ];
+
+    let room = null;
+    try {
+      room = await hooks.createRatedRoom({ ...game, seats });
+    } catch {
+      room = null;
+    }
+    if (!room) return null;
+
+    // Unrated games do not block queueing.
+    const gameKey = `${room.roomCode}:1`;
+    if (game.rated) {
+      await store.saveActiveGame(whiteRecord.id, { roomCode: room.roomCode, gameKey, at: now });
+      await store.saveActiveGame(blackRecord.id, { roomCode: room.roomCode, gameKey, at: now });
+    }
+    await upsertLive(store, { roomCode: room.roomCode, gameKey, control: game.control, rated: game.rated, white: whiteRecord, black: blackRecord });
+
+    whiteRecord.lastOpponent = blackRecord.id;
+    whiteRecord.lastOpponentAt = now;
+    blackRecord.lastOpponent = whiteRecord.id;
+    blackRecord.lastOpponentAt = now;
+    rememberSeat(whiteRecord, room.roomCode, seats[0].session, now);
+    rememberSeat(blackRecord, room.roomCode, seats[1].session, now);
+    await store.savePlayer(whiteRecord);
+    await store.savePlayer(blackRecord);
+
+    const spec = logic.controlOf(game.control);
+    const tell = (conn, seat, opponentRecord, ticket) => {
+      send(hooks, conn, TYPES.MATCH_FOUND, {
+        roomCode: room.roomCode,
+        ticket,
+        color: seat.color,
+        control: game.control,
+        clock: spec ? { baseMs: spec.baseMs, incMs: spec.incMs } : null,
+        rated: game.rated,
+        hardMode: game.hardMode,
+        opponent: {
+          name: opponentRecord.name,
+          rating: opponentRecord.rating,
+          provisional: opponentRecord.games < rating.PROVISIONAL_GAMES,
+        },
+      });
+    };
+    tell(whiteConn, seats[0], blackRecord, room.tickets.w);
+    tell(blackConn, seats[1], whiteRecord, room.tickets.b);
+    return room.roomCode;
+  }
+
+  // --- Invites ----------------------------------------------------------------------
+  // Playing a friend: the inviter waits in the lobby with a code; whoever opens the link (or types
+  // the code) starts the game. Invites ignore networks: friends on one Wi-Fi play like anyone else.
+
+  function makeInviteCode(invites) {
+    const { ROOM_CODE_ALPHABET: alphabet, ROOM_CODE_LENGTH: length } = protocol;
+    for (;;) {
+      const bytes = new Uint8Array(length);
+      crypto.getRandomValues(bytes);
+      const code = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
+      if (!invites.some((item) => item.code === code)) return code;
+    }
+  }
+
+  async function playerOf(store, hooks, conn) {
+    const record = conn.playerId ? await store.getPlayer(conn.playerId) : null;
+    if (!record) fail(hooks, conn, ERROR_CODES.NOT_AUTHENTICATED, 'Say hello first.');
+    return record;
+  }
+
+  async function activeRated(store, playerId, now) {
+    const active = await store.getActiveGame(playerId);
+    return Boolean(active && now - active.at < logic.ACTIVE_GAME_TTL_MS);
+  }
+
+  async function inviteNow(store, hooks, conn, payload = {}) {
+    const record = await playerOf(store, hooks, conn);
+    if (!record) return false;
+    const options = logic.inviteOptions(payload);
+    const now = Date.now();
+    if (options.rated && await activeRated(store, record.id, now)) {
+      fail(hooks, conn, ERROR_CODES.ALREADY_IN_GAME, 'Finish your current rated game first.');
+      return false;
+    }
+    // One thing at a time: an invite replaces a place in the queue and any older invite.
+    const queue = await store.getQueue();
+    const queueAfter = queue.filter((entry) => entry.playerId !== record.id);
+    if (queueAfter.length !== queue.length) await store.saveQueue(queueAfter);
+    const invites = (await store.getInvites()).filter((item) => item.playerId !== record.id && now - item.createdAt < logic.INVITE_TTL_MS);
+    if (invites.length >= logic.MAX_QUEUE) {
+      fail(hooks, conn, ERROR_CODES.QUEUE_FULL, 'The lobby is full right now. Try again in a minute.');
+      return false;
+    }
+    const code = makeInviteCode(invites);
+    invites.push({ code, playerId: record.id, connId: conn.id, ipHash: conn.ipHash || '', createdAt: now, ...options });
+    await store.saveInvites(invites);
+    send(hooks, conn, TYPES.LOBBY_INVITED, { code, ...options });
+    return true;
+  }
+
+  async function acceptNow(store, hooks, conn, payload = {}) {
+    const record = await playerOf(store, hooks, conn);
+    if (!record) return false;
+    const code = protocol.normalizeRoomCode(payload.code);
+    const now = Date.now();
+    const invites = (await store.getInvites()).filter((item) => now - item.createdAt < logic.INVITE_TTL_MS);
+    const invite = invites.find((item) => item.code === code);
+    // The inviter must still be in the lobby to be sent to the game.
+    if (!invite || !connFor(hooks, invite)) {
+      if (invite) await store.saveInvites(invites.filter((item) => item !== invite));
+      fail(hooks, conn, ERROR_CODES.INVITE_NOT_FOUND, 'That invite has expired. Ask your friend for a new one.');
+      return false;
+    }
+    if (invite.playerId === record.id) {
+      fail(hooks, conn, ERROR_CODES.INVITE_NOT_FOUND, 'That is your own invite: send it to a friend.');
+      return false;
+    }
+    if (invite.rated && (await activeRated(store, record.id, now) || await activeRated(store, invite.playerId, now))) {
+      fail(hooks, conn, ERROR_CODES.ALREADY_IN_GAME, 'One of you is still in a rated game.');
+      return false;
+    }
+    // The invite is used up; the friend leaves the queue and drops any invite of their own.
+    await store.saveInvites(invites.filter((item) => item !== invite && item.playerId !== record.id));
+    const queue = await store.getQueue();
+    const queueAfter = queue.filter((entry) => entry.playerId !== record.id && entry.playerId !== invite.playerId);
+    if (queueAfter.length !== queue.length) await store.saveQueue(queueAfter);
+    const friend = { playerId: record.id, connId: conn.id, ipHash: conn.ipHash || '' };
+    const game = { control: invite.control, rated: invite.rated, hardMode: invite.hardMode, spectatorView: invite.spectatorView };
+    if (!(await startGame(store, hooks, invite, friend, game, now))) {
+      await store.saveInvites([...(await store.getInvites()), invite]);
+      fail(hooks, conn, ERROR_CODES.RATE_LIMIT, 'Could not start the game. Try again.');
+      return false;
+    }
+    return true;
   }
 
   // The identities a room sends: [{ playerId, color }, { playerId, color }].
@@ -504,7 +610,7 @@
       key: gameKey,
       roomCode,
       rated,
-      control: logic.controlOf(payload.control) ? payload.control : null,
+      control: logic.knownControl(payload.control),
       white: side(whiteRecord, 'w'),
       black: side(blackRecord, 'b'),
       winner,
@@ -565,6 +671,14 @@
     return withLock('queue', () => cancelNow(store, hooks, conn));
   }
 
+  function invite(store, hooks, conn, payload) {
+    return withLock('queue', () => inviteNow(store, hooks, conn, payload));
+  }
+
+  function accept(store, hooks, conn, payload) {
+    return withLock('queue', () => acceptNow(store, hooks, conn, payload));
+  }
+
   function tryMatch(store, hooks) {
     return withLock('queue', () => tryMatchNow(store, hooks));
   }
@@ -597,6 +711,10 @@
         return queue(store, hooks, conn, payload);
       case TYPES.LOBBY_CANCEL:
         return cancel(store, hooks, conn);
+      case TYPES.LOBBY_INVITE:
+        return invite(store, hooks, conn, payload);
+      case TYPES.LOBBY_ACCEPT:
+        return accept(store, hooks, conn, payload);
       default:
         fail(hooks, conn, ERROR_CODES.INVALID_PAYLOAD, `Unsupported lobby message: ${envelope.type}`);
         return false;
@@ -620,6 +738,8 @@
     hello,
     queue,
     cancel,
+    invite,
+    accept,
     tryMatch,
     report,
     registerActive,

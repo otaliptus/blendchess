@@ -112,6 +112,27 @@ is unfinished answers `lobby_error` with `ALREADY_IN_GAME`. Matched players rece
 The client then opens `?room=ABCD12` and sends `join_room` with `"payload": { "ticket": "…" }`.
 `rated` is false when both players share a network; the game is then a practice game.
 
+### `lobby_invite` / `lobby_accept` (playing a friend)
+
+```json
+{ "type": "lobby_invite", "payload": { "control": "10+0", "rated": true, "hardMode": false, "party": true }, "version": "2.0.0" }
+```
+
+`control` is `5+3`, `10+0` or `untimed`; an untimed game is never rated. `party: false` keeps watchers in
+the fog. The inviter gets `{ "type": "lobby_invited", "payload": { "code": "K7Q2MX", "control", "rated",
+"hardMode", "spectatorView" } }` and waits in the lobby; the link is `?invite=K7Q2MX`. An invite replaces a
+place in the queue (and any older invite), and `lobby_queue` or `lobby_cancel` withdraws it. It expires
+after ten minutes, or as soon as the inviter has no lobby socket.
+
+```json
+{ "type": "lobby_accept", "payload": { "code": "K7Q2MX" }, "version": "2.0.0" }
+```
+
+Both players then receive `match_found` as above (`clock` is `null` for an untimed game, and `hardMode`
+is set). Invites ignore networks. An unknown, expired, used or own code answers `lobby_error` with
+`INVITE_NOT_FOUND`; a rated invite while either player has an unfinished rated game answers
+`ALREADY_IN_GAME`.
+
 `lobby_rating` is pushed when a rated game ends while the player is still connected to the lobby:
 
 ```json

@@ -39,6 +39,43 @@
     return CONTROL_IDS.includes(value) ? CONTROLS[value] : null;
   }
 
+  // A game with a friend may also have no clock at all.
+  const UNTIMED = 'untimed';
+
+  // What a lobby room is told when it is reserved; both transports send exactly this. `match` is
+  // { control, rated, hardMode, spectatorView, seats }. Null for a control nobody offers.
+  function reservationFor(match, roomCode, tickets) {
+    const spec = controlOf(match.control);
+    if (!spec && match.control !== UNTIMED) return null;
+    return {
+      roomCode,
+      rated: Boolean(match.rated && spec),
+      control: match.control,
+      clock: spec ? { baseMs: spec.baseMs, incMs: spec.incMs } : null,
+      hardMode: Boolean(match.hardMode),
+      spectatorView: match.spectatorView === 'fog' ? 'fog' : 'open',
+      seats: match.seats.map((seat) => ({ ...seat, ticket: tickets[seat.color] || '' })),
+    };
+  }
+
+  // A control id worth storing: one the pool offers, or 'untimed'.
+  function knownControl(value) {
+    return controlOf(value) || value === UNTIMED ? value : null;
+  }
+  const INVITE_TTL_MS = 10 * 60 * 1000;
+
+  // What an invite asks for. A game without a clock is never ranked: nothing would end an
+  // abandoned one. Party mode (on unless turned off) lets watchers see the whole board.
+  function inviteOptions(payload = {}) {
+    const control = payload.control === UNTIMED || controlOf(payload.control) ? payload.control : DEFAULT_CONTROL;
+    return {
+      control,
+      rated: payload.rated !== false && control !== UNTIMED,
+      hardMode: Boolean(payload.hardMode),
+      spectatorView: payload.party === false ? 'fog' : 'open',
+    };
+  }
+
   function cleanName(value, fallback, max = NAME_MAX) {
     const text = String(value || '')
       .replace(/[\u0000-\u001f\u007f<>]/g, '')
@@ -333,6 +370,7 @@
     const creations = new Map();
     const reports = new Map();
     let queue = [];
+    let invites = [];
     let live = [];
     let top = [];
 
@@ -409,6 +447,10 @@
       removeName(lower) {
         names.delete(lower);
       },
+      getInvites: () => invites.map((entry) => ({ ...entry })),
+      saveInvites(entries) {
+        invites = entries.slice(0, MAX_QUEUE).map((entry) => ({ ...entry }));
+      },
       getQueue: () => queue.map((entry) => ({ ...entry })),
       saveQueue(entries) {
         queue = entries.map((entry) => ({ ...entry }));
@@ -475,7 +517,12 @@
     CONTROLS,
     CONTROL_IDS,
     DEFAULT_CONTROL,
+    UNTIMED,
+    INVITE_TTL_MS,
     controlOf,
+    knownControl,
+    inviteOptions,
+    reservationFor,
     cleanName,
     makeToken,
     makePlayerId,
