@@ -18,9 +18,9 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 ## Modes
 
 - `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
-- `Online`: create a room, send the invite link, play. Reconnects resume your seat automatically.
-- `Play Online`: ranked matchmaking. Pick Blitz 5+3 or Rapid 10+0, get paired by rating, play with a server-enforced clock, and climb the Elo leaderboard.
-- `Watch`: every game the lobby arranges is listed under **Live now** and anyone can watch it with the whole board visible. In private rooms spectators see the fog, unless the host turns on **party mode**.
+- `Play Online`: pick Blitz 5+3 or Rapid 10+0, then either **Find game** to get paired by rating, or **Invite a friend** to get a link, a QR code and a short code. Your friend opens the link (or types the code under **Join**) and the game starts. Every online game has the same server clock, rating, watchers and replays; reconnects resume your seat automatically.
+- Friend games have four toggles: **Ranked** (on by default; counts for both ratings), **Party mode** (on: watchers see the whole board; off: they see the fog), **Hard mode** (an illegal try costs your turn) and **No clock** (take your time; never ranked).
+- `Watch`: every online game is listed under **Live now** for anyone to watch.
 - `Profiles`: every player has a public page with their rating, record and recent games. Each game opens as a full replay with a shareable link (`?game=...`); profiles are at `?p=name`.
 - `Archive`: finished games are saved on your device for replay and PGN export.
 
@@ -44,10 +44,10 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 The server is the authority for everything that decides a rating:
 
-- Ranked rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat.
+- Online rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat.
 - Anyone can watch a lobby game and sees the whole board live. Players are trusted not to watch their own games.
 - Results are reported by the room itself, once per game, and the lobby only accepts results for games it arranged. Duplicate reports change nothing.
-- Two accounts on the same network get an unrated practice game instead.
+- Two accounts on the same network that meet through **Find game** get an unrated practice game instead. Friend invites ignore networks: you chose who you play.
 - Rating changes are clamped, new identities are rate limited per network, and the queue, room creation, socket count, message size and message rate are all capped.
 - Options (hard mode, party mode) are fixed in lobby-arranged games.
 
@@ -64,7 +64,7 @@ What it cannot stop: someone running an engine locally, two accounts on differen
 ## How to play
 
 1. Open the game in your browser and press start.
-2. Pick `Play Online` for a rated game and the leaderboard, `Local Duel` for pass-and-play, or `Create Room` / `Join Room` (with the invite link or code) to play a friend.
+2. Pick `Play Online` to find an opponent or invite a friend, or `Local Duel` for pass-and-play on one device.
 3. Click or drag your pieces. Dots mark squares that *might* be legal; dashed corners are pawn captures worth a try. Keyboard works too: arrows, Enter, Esc.
 4. Offer a draw or resign when needed. After the game: replay, PGN, rematch.
 

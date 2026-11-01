@@ -49,9 +49,10 @@ function readReservation(body) {
   const roomCode = typeof body.roomCode === 'string' ? body.roomCode.toUpperCase().slice(0, 6) : '';
   if (!/^[A-Z0-9]{6}$/.test(roomCode)) return null;
   const control = typeof body.control === 'string' ? body.control.slice(0, 12) : '';
+  // No clock is allowed (a friendly game); a clock must be sane.
   const clock = body.clock && typeof body.clock === 'object' ? body.clock : null;
-  const baseMs = clock ? Number(clock.baseMs) : NaN;
-  if (!Number.isFinite(baseMs) || baseMs <= 0 || baseMs > 60 * 60 * 1000) return null;
+  const baseMs = clock ? Number(clock.baseMs) : 0;
+  if (clock && (!Number.isFinite(baseMs) || baseMs <= 0 || baseMs > 60 * 60 * 1000)) return null;
   const seats = Array.isArray(body.seats) ? body.seats : [];
   if (seats.length !== 2) return null;
   const seen = new Set();
@@ -76,7 +77,9 @@ function readReservation(body) {
     roomCode,
     rated: Boolean(body.rated),
     control,
-    clock: { baseMs, incMs: Math.max(0, Number(clock.incMs) || 0) },
+    clock: clock ? { baseMs, incMs: Math.max(0, Number(clock.incMs) || 0) } : null,
+    hardMode: Boolean(body.hardMode),
+    spectatorView: body.spectatorView === 'fog' ? 'fog' : 'open',
     seats: cleaned,
   };
 }

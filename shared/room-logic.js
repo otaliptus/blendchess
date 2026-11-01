@@ -288,8 +288,9 @@
     }
     state.reservedSeats = reserved;
     state.reservedAt = now;
-    // Anyone may watch a lobby game, and every watcher sees the whole board: players are trusted.
-    state.spectatorView = 'open';
+    state.hardMode = Boolean(reservation.hardMode);
+    // Party mode, the default for lobby games: watchers see the whole board. Players are trusted.
+    state.spectatorView = reservation.spectatorView === 'fog' ? 'fog' : 'open';
     // The lobby registered game 1 when it made the match; only rematches announce themselves.
     state.activeGameKey = lobbyGameKey(state);
     // DISABLED: the same-network watcher rule (see spectatorPerspective). Uncomment to collect the

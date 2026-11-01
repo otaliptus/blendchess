@@ -180,6 +180,14 @@ class StorageLobbyStore {
     await this.remove(`name:${lower}`);
   }
 
+  async getInvites() {
+    return ((await this.read('invites')) || []).map((entry) => ({ ...entry }));
+  }
+
+  async saveInvites(entries) {
+    await this.write('invites', entries.slice(0, logic.MAX_QUEUE));
+  }
+
   async getQueue() {
     return (await this.read('queue')) || [];
   }
@@ -319,18 +327,12 @@ export class LobbyHub extends DurableObject {
 
   // A reserved room lives in its own Durable Object; the lobby only hands out the tickets.
   async createRatedRoom(match) {
-    const spec = logic.controlOf(match.control);
-    if (!spec) return null;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const roomCode = makeRoomCode();
       const tickets = { w: logic.makeToken(), b: logic.makeToken() };
-      const body = JSON.stringify({
-        roomCode,
-        rated: match.rated,
-        control: spec.id,
-        clock: { baseMs: spec.baseMs, incMs: spec.incMs },
-        seats: match.seats.map((seat) => ({ ...seat, ticket: tickets[seat.color] || '' })),
-      });
+      const reservation = logic.reservationFor(match, roomCode, tickets);
+      if (!reservation) return null;
+      const body = JSON.stringify(reservation);
       const stub = this.env.GAME_HUB.get(this.env.GAME_HUB.idFromName(roomCode));
       let response;
       try {

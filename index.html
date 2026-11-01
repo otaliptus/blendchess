@@ -52,12 +52,6 @@
           <button class="menu-item" type="button" data-action="local">
             <span class="menu-label">LOCAL DUEL</span>
           </button>
-          <button class="menu-item" type="button" data-action="create">
-            <span class="menu-label">CREATE ROOM</span>
-          </button>
-          <button class="menu-item" type="button" data-action="join">
-            <span class="menu-label">JOIN ROOM</span>
-          </button>
           <button class="menu-item" type="button" data-action="archive">
             <span class="menu-label">ARCHIVE</span>
           </button>
@@ -93,6 +87,55 @@
             <button class="px-btn ghost" type="button" data-action="back">BACK</button>
             <button id="lobbyCancel" class="px-btn danger hidden" type="button">CANCEL</button>
             <button id="lobbyFind" class="px-btn primary" type="button">FIND GAME</button>
+          </div>
+          <div class="leaderboard-block" aria-labelledby="friendTitle">
+            <div class="leaderboard-head">
+              <h3 id="friendTitle" class="lobby-subtitle">PLAY A FRIEND</h3>
+            </div>
+            <div id="inviteSetup">
+              <div class="invite-options">
+                <label class="toggle">
+                  <input id="inviteRated" type="checkbox" checked />
+                  <span class="toggle-box" aria-hidden="true"></span>
+                  <span class="toggle-text">RANKED<small>counts for both ratings</small></span>
+                </label>
+                <label class="toggle">
+                  <input id="inviteParty" type="checkbox" checked />
+                  <span class="toggle-box" aria-hidden="true"></span>
+                  <span class="toggle-text">PARTY MODE<small>watchers see the whole board</small></span>
+                </label>
+                <label class="toggle">
+                  <input id="inviteHard" type="checkbox" />
+                  <span class="toggle-box" aria-hidden="true"></span>
+                  <span class="toggle-text">HARD MODE<small>an illegal try costs your turn</small></span>
+                </label>
+                <label class="toggle">
+                  <input id="inviteUntimed" type="checkbox" />
+                  <span class="toggle-box" aria-hidden="true"></span>
+                  <span class="toggle-text">NO CLOCK<small>take your time, never ranked</small></span>
+                </label>
+              </div>
+              <div class="invite-actions">
+                <label class="field">
+                  <span class="field-label">FRIEND'S CODE</span>
+                  <input id="inviteCodeInput" class="code-input" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC123" />
+                </label>
+                <button id="acceptBtn" class="px-btn" type="button">JOIN</button>
+                <button id="inviteBtn" class="px-btn primary" type="button">INVITE A FRIEND</button>
+              </div>
+            </div>
+            <div id="inviteBox" class="invite-box hidden">
+              <canvas id="inviteQr" class="qr" role="img" aria-label="QR code with the invite link"></canvas>
+              <div class="invite-details">
+                <p id="inviteCode" class="big-code"></p>
+                <p id="inviteSummary" class="field-help"></p>
+                <div class="menu-row wrap">
+                  <button id="inviteCopy" class="px-btn" type="button">COPY LINK</button>
+                  <button id="inviteShare" class="px-btn" type="button">SHARE</button>
+                  <button id="inviteCancel" class="px-btn danger" type="button">CANCEL</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="leaderboard-block">
             <div class="leaderboard-head">
@@ -172,20 +215,11 @@
         </section>
 
         <section id="menuSetup" class="menu px-panel hidden" aria-labelledby="setupTitle">
-          <h2 id="setupTitle" class="menu-title">NEW DUEL</h2>
-          <label class="field" id="nicknameField">
-            <span class="field-label">YOUR NAME</span>
-            <input id="nicknameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
-          </label>
+          <h2 id="setupTitle" class="menu-title">LOCAL DUEL</h2>
           <label class="toggle">
             <input id="hardModeInput" type="checkbox" />
             <span class="toggle-box" aria-hidden="true"></span>
             <span class="toggle-text">HARD MODE<small>an illegal try costs your turn (unless you're in check)</small></span>
-          </label>
-          <label class="toggle" id="openSpectatorsField">
-            <input id="openSpectatorsInput" type="checkbox" />
-            <span class="toggle-box" aria-hidden="true"></span>
-            <span class="toggle-text">PARTY MODE<small>spectators see the whole board live. Only for watchers you trust.</small></span>
           </label>
           <div class="menu-row">
             <button class="px-btn ghost" type="button" data-action="back">BACK</button>

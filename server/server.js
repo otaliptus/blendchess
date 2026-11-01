@@ -100,22 +100,15 @@ function playerIdentitiesOf(state) {
 
 // Called by the lobby when two players are paired: reserve both seats in a fresh room.
 function createRatedRoom(match) {
-  const spec = lobbyLogic.controlOf(match.control);
-  if (!spec) return null;
   const room = createRoom();
   if (!room) return null;
   const tickets = { w: lobbyLogic.makeToken(), b: lobbyLogic.makeToken() };
-  const seats = match.seats.map((seat) => ({ ...seat, ticket: tickets[seat.color] || '' }));
-  if (!seats.every((seat) => seat.ticket)) {
+  const reservation = lobbyLogic.reservationFor(match, room.state.roomCode, tickets);
+  if (!reservation) {
     rooms.delete(room.state.roomCode);
     return null;
   }
-  rl.applyReservation(room.state, {
-    rated: match.rated,
-    control: spec.id,
-    clock: { baseMs: spec.baseMs, incMs: spec.incMs },
-    seats,
-  });
+  rl.applyReservation(room.state, reservation);
   return { roomCode: room.state.roomCode, tickets };
 }
 

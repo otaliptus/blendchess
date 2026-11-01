@@ -94,6 +94,11 @@ ratings, finished-game records and the live list. It never holds a game.
 - **Queue.** Entries live in storage (Worker) or memory (Node) and carry the socket id, so an eviction
   drops players whose sockets are gone. Matching pairs the closest ratings within a window that widens
   with wait time; controls never mix; immediate rematches are suppressed.
+- **Invites.** Playing a friend uses the same machinery: an invite is a private place in the lobby,
+  matched by its code instead of by rating, with its own options (rated, hard mode, party mode, or no
+  clock, which is never rated). `startGame` in `lobby-session.js` starts every lobby game, from the queue
+  or from an accepted invite, and `reservationFor` in `lobby-logic.js` is what both transports send the
+  room. Invites ignore networks.
 - **Rooms.** The lobby picks a room code, generates two tickets, and asks the `GameHub` for that code to
   `POST /reserve` with both seats. The room stores the tickets (server-side only) and accepts a seat
   only from the matching ticket. This is the only way a lobby room is created, and its `/reserve` path
