@@ -76,6 +76,11 @@
     return `${FILES[pos.c]}${8 - pos.r}`;
   }
 
+  // The inverse of squareName: 'e4' -> { r: 4, c: 4 }, or null for anything else.
+  function squareFromName(name) {
+    return /^[a-h][1-8]$/.test(name || '') ? { r: 8 - Number(name[1]), c: FILES.indexOf(name[0]) } : null;
+  }
+
   function createMove(from, to, options = {}) {
     return {
       from: { ...from },
@@ -761,6 +766,7 @@
     otherColor,
     colorName,
     squareName,
+    squareFromName,
     createMove,
     findKing,
     pieceAttacksSquare,

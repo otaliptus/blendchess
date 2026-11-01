@@ -18,6 +18,7 @@ require('../../shared/room-session.js');
 require('../../shared/rating.js');
 const logic = require('../../shared/lobby-logic.js');
 require('../../shared/lobby-session.js');
+require('../../shared/account-api.js');
 
 class MockSocket {
   constructor() {
@@ -67,6 +68,9 @@ class MockRequest {
   async json() {
     return JSON.parse(this._body);
   }
+  async text() {
+    return this._body == null ? '' : String(this._body);
+  }
 }
 
 async function loadLobbyHubClass() {
@@ -90,6 +94,8 @@ async function loadLobbyHubClass() {
     TextDecoder,
     URL,
     Headers,
+    atob,
+    btoa,
     Request: MockRequest,
     Response: MockResponse,
     WebSocketPair: class {
@@ -101,11 +107,19 @@ async function loadLobbyHubClass() {
     BlendChessProtocol: globalThis.BlendChessProtocol,
     BlendChessLobbyLogic: globalThis.BlendChessLobbyLogic,
     BlendChessLobbySession: globalThis.BlendChessLobbySession,
+    BlendChessAccountApi: globalThis.BlendChessAccountApi,
   });
   context.globalThis = context;
 
   const module = new vm.SourceTextModule(source, { context, identifier: LOBBY_MODULE_PATH });
   await module.link(async (specifier) => {
+    if (specifier === '@simplewebauthn/server') {
+      // Passkey ceremonies are covered by the shared account tests; the Durable Object only routes.
+      const names = ['generateRegistrationOptions', 'verifyRegistrationResponse', 'generateAuthenticationOptions', 'verifyAuthenticationResponse'];
+      return new vm.SyntheticModule(names, function init() {
+        for (const name of names) this.setExport(name, async () => ({ challenge: 'test-challenge', verified: false }));
+      }, { context });
+    }
     if (specifier !== 'cloudflare:workers') throw new Error(`Unhandled import: ${specifier}`);
     return new vm.SyntheticModule(['DurableObject'], function init() {
       this.setExport('DurableObject', class DurableObject {
@@ -151,20 +165,27 @@ function createCtx(storageMap = new Map()) {
         storageMap.set(key, structuredClone(value));
       },
       async delete(key) {
-        storageMap.delete(key);
+        for (const item of Array.isArray(key) ? key : [key]) storageMap.delete(item);
       },
       async deleteAll() {
         storageMap.clear();
       },
       async list(options = {}) {
         const result = new Map();
-        for (const [key, value] of storageMap) {
-          if (!options.prefix || key.startsWith(options.prefix)) result.set(key, structuredClone(value));
+        for (const key of [...storageMap.keys()].sort()) {
+          if (options.prefix && !key.startsWith(options.prefix)) continue;
+          if (options.end && key >= options.end) continue;
+          if (options.startAfter && key <= options.startAfter) continue;
+          if (options.limit && result.size >= options.limit) break;
+          result.set(key, structuredClone(storageMap.get(key)));
         }
         return result;
       },
       async setAlarm(time) {
         this.alarmAt = time;
+      },
+      async getAlarm() {
+        return this.alarmAt ?? null;
       },
       async deleteAlarm() {
         this.alarmAt = null;
@@ -197,6 +218,19 @@ async function createLobby() {
 function upgradeRequest(ipHash = 'ip-a') {
   const headers = new Map([['upgrade', 'websocket'], ['x-ip-hash', ipHash]]);
   return { url: 'https://lobby.internal/?lobby=1', headers: { get: (name) => headers.get(name.toLowerCase()) || null } };
+}
+
+// An HTTP request to the lobby's API. GET without a body unless `body` is given; account routes
+// need the site origin, which is the default.
+function apiCall(hub, path, { token = '', body, origin = 'https://blendchess.com', ipHash = 'ip-a' } = {}) {
+  const headers = { 'X-IP-Hash': ipHash };
+  if (origin) headers.Origin = origin;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return hub.fetch(new MockRequest(`https://lobby.internal${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }));
 }
 
 async function open(hub, ipHash = 'ip-a') {
@@ -318,11 +352,42 @@ test('a reported game updates the stored rating and the leaderboard endpoint', a
   assert.equal(duplicateBody.duplicate, true);
   assert.equal(duplicateBody.updates.b.delta, 20);
 
-  const leaderboard = await hub.fetch(new MockRequest('https://lobby.internal/leaderboard?limit=10'));
-  const board = await leaderboard.json();
+  // Both are guests: rated, counted, but not listed until they secure their account.
+  const api = (path, options) => apiCall(hub, path, options);
+  let board = await (await api('/api/leaderboard?limit=10')).json();
   assert.equal(board.total, 2);
+  assert.equal(board.players.length, 0);
+
+  const bobToken = b.last('lobby_ready').payload.token;
+  const secured = await api('/api/auth/key/create', { token: bobToken, body: {}, ipHash: 'ip-b' });
+  assert.equal(secured.status, 200);
+  assert.equal(secured.headers['Access-Control-Allow-Origin'], 'https://blendchess.com');
+  const securedBody = await secured.json();
+  assert.match(securedBody.key, /^BLND(-[0-9A-Z]{4}){6}$/);
+  assert.equal(securedBody.player.secured, true);
+
+  board = await (await api('/leaderboard?limit=10')).json();
+  assert.equal(board.players.length, 1);
   assert.equal(board.players[0].name, 'Bob');
   assert.equal(board.players[0].rating, 1220);
+
+  // The game is on Bob's public profile and can be replayed; it has left the live list.
+  const profile = await api('/api/players/bob');
+  assert.equal(profile.headers['Access-Control-Allow-Origin'], '*');
+  const profileBody = await profile.json();
+  assert.equal(profileBody.player.name, 'Bob');
+  assert.equal(profileBody.games.length, 1);
+  assert.equal(profileBody.games[0].outcome, 'win');
+  assert.equal(profileBody.games[0].delta, 20);
+  assert.equal(profileBody.games[0].id, body.gameId);
+  const game = await (await api(`/api/games/${body.gameId}`)).json();
+  assert.equal(game.game.result, 'checkmate');
+  assert.equal(game.game.black.name, 'Bob');
+  assert.deepEqual((await (await api('/api/live')).json()).games, []);
+
+  // Account routes refuse other sites.
+  const foreign = await api('/api/me', { token: bobToken, origin: 'https://evil.example' });
+  assert.equal(foreign.status, 403);
 
   // A report for a game the lobby never reserved is refused.
   const forged = await hub.fetch(new MockRequest('https://lobby.internal/report', {
@@ -357,4 +422,165 @@ test('the queue survives an eviction but drops sockets that are gone', async () 
   const again = new LobbyHub(hub.ctx, env);
   await hub.ctx.ready;
   assert.equal((await again.store.getQueue()).length, 0);
+});
+
+test('a passkey challenge survives the lobby hibernating mid-prompt, and expired ones are swept', async () => {
+  const storageMap = new Map();
+  const first = new LobbyHub(createCtx(storageMap), createEnv());
+  // An expired challenge left over from earlier.
+  storageMap.set('chal:000000001-old', { kind: 'login', challenge: 'x', expiresAt: 1 });
+
+  const options = await (await apiCall(first, '/api/auth/passkey/login/options', { body: {} })).json();
+  assert.ok(options.challengeId);
+  assert.ok(storageMap.has(`chal:${options.challengeId}`), 'stored, not only in memory');
+  assert.ok(!storageMap.has('chal:000000001-old'), 'the expired challenge was swept');
+
+  // The object is evicted and recreated over the same storage while the person uses their passkey.
+  const second = new LobbyHub(createCtx(storageMap), createEnv());
+  const verify = await apiCall(second, '/api/auth/passkey/login/verify', {
+    body: { challengeId: options.challengeId, response: { id: 'unknown-credential', response: {} } },
+  });
+  const body = await verify.json();
+  assert.equal(body.error, 'PASSKEY_UNKNOWN', 'the challenge was still there; only the credential is unknown');
+  assert.ok(!storageMap.has(`chal:${options.challengeId}`), 'used challenges are deleted');
+});
+
+test('guests stored on the leaderboard before accounts are not listed, and leave on the next update', async () => {
+  const storageMap = new Map([
+    ['top', [
+      { id: 'old-guest', name: 'OldGuest', rating: 1300, games: 4, wins: 3, losses: 1, draws: 0, provisional: true },
+    ]],
+    ['stats', { ranked: 1 }],
+  ]);
+  const hub = new LobbyHub(createCtx(storageMap), createEnv());
+  const read = async () => (await apiCall(hub, '/api/leaderboard?limit=10')).json();
+  assert.deepEqual((await read()).players, []);
+  assert.equal((await read()).total, 1);
+
+  const record = { ...logic.newPlayerRecord('Secured'), games: 1, keyHash: 'k' };
+  await hub.store.bumpLeaderboard([record]);
+  assert.deepEqual(storageMap.get('top').map((entry) => entry.name), ['Secured']);
+});
+
+test('a seat revocation the room does not acknowledge is kept and retried until it is', async () => {
+  const storageMap = new Map();
+  const ctx = createCtx(storageMap);
+  const hub = new LobbyHub(ctx, createEnv());
+  await ctx.ready;
+  const a = await open(hub, 'ip-a');
+  const b = await open(hub, 'ip-b');
+  await a.send('lobby_hello', { nickname: 'Ann' });
+  await b.send('lobby_hello', { nickname: 'Bob' });
+  await a.send('lobby_queue', { control: '10+0' });
+  await b.send('lobby_queue', { control: '10+0' });
+  const roomCode = a.last('match_found').payload.roomCode;
+  const annToken = a.last('lobby_ready').payload.token;
+
+  // The room is unreachable when Ann signs her other devices out.
+  const revokeCalls = [];
+  let healthy = false;
+  hub.env.GAME_HUB = {
+    idFromName: (name) => name,
+    get: (name) => ({
+      async fetch(url, init) {
+        revokeCalls.push({ room: name, url: String(url), body: JSON.parse(init.body) });
+        return healthy ? new MockResponse('{"ok":true,"revoked":true}', { status: 200 }) : new MockResponse('{"error":"busy"}', { status: 503 });
+      },
+    }),
+  };
+  const { key } = await (await apiCall(hub, '/api/auth/key/create', { token: annToken, body: {} })).json();
+  const login = await apiCall(hub, '/api/auth/key/login', { body: { key }, ipHash: 'ip-c' });
+  const secondToken = (await login.json()).token;
+  assert.equal((await apiCall(hub, '/api/auth/logout-others', { token: secondToken, body: {} })).status, 200);
+  assert.equal(revokeCalls.length, 1);
+  assert.equal(revokeCalls[0].room, roomCode);
+  assert.equal(storageMap.get('revocations').length, 1, 'the failed revocation is stored');
+  assert.ok(ctx.storage.alarmAt - Date.now() <= 15_000, 'and a retry is scheduled');
+
+  // Still failing when the retry comes due: kept. Then the room answers: cleared.
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    clock += 16_000;
+    await hub.alarm();
+    assert.equal(storageMap.get('revocations').length, 1);
+    assert.ok(storageMap.get('revocations')[0].nextAttemptAt > clock, 'the next attempt has a fixed time');
+    healthy = true;
+    clock += 16_000;
+    await hub.alarm();
+    assert.deepEqual(storageMap.get('revocations'), []);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.deepEqual(revokeCalls.at(-1).body.sessions, revokeCalls[0].body.sessions);
+  assert.equal(revokeCalls.at(-1).url, 'https://room.internal/revoke');
+});
+
+test('steady lobby traffic cannot postpone a revocation retry or a match tick', async () => {
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    const ctx = createCtx(new Map());
+    const hub = new LobbyHub(ctx, createEnv());
+    await ctx.ready;
+    // Stand-in for the runtime: an alarm that comes due is cleared and its handler runs.
+    const advance = async (ms) => {
+      clock += ms;
+      if (ctx.storage.alarmAt !== null && ctx.storage.alarmAt <= clock) {
+        ctx.storage.alarmAt = null;
+        await hub.alarm();
+      }
+    };
+    const pinger = await open(hub, 'ip-p');
+    await pinger.send('lobby_hello', { nickname: 'Pinger' });
+    const token = pinger.last('lobby_ready').payload.token;
+    // Ordinary traffic: a valid message the lobby fully processes (and that changes nothing).
+    const chatter = async () => {
+      const before = pinger.ws.inbox.length;
+      await pinger.send('lobby_hello', { token, nickname: 'Pinger' });
+      assert.equal(pinger.ws.inbox[before].type, 'lobby_ready', 'the message was accepted');
+    };
+
+    // A match tick: someone waits alone; a message every 2 s must not push the 5 s tick back.
+    await pinger.send('lobby_queue', { control: '10+0' });
+    const tick = ctx.storage.alarmAt;
+    assert.ok(tick <= clock + 5_000);
+    await advance(2_000);
+    await chatter();
+    assert.equal(ctx.storage.alarmAt, tick, 'the match tick stayed put');
+    await pinger.send('lobby_cancel', {});
+    await advance(4_000);
+
+    // A revocation the room refuses, then a room that recovers at once.
+    const calls = [];
+    let healthy = false;
+    hub.env.GAME_HUB = {
+      idFromName: (name) => name,
+      get: () => ({
+        async fetch() {
+          calls.push(clock);
+          return healthy ? new MockResponse('{"ok":true}', { status: 200 }) : new MockResponse('{}', { status: 503 });
+        },
+      }),
+    };
+    await hub.revokeSeats([{ roomCode: 'ROOM01', sessions: ['session-1'] }]);
+    assert.equal(calls.length, 1);
+    const retryAt = hub.ctx.storage.alarmAt;
+    assert.ok(retryAt <= clock + 15_000);
+    healthy = true;
+
+    // Two minutes of a valid message every 10 seconds.
+    for (let i = 0; i < 12; i += 1) {
+      await advance(10_000);
+      await chatter();
+      if (i === 0) assert.equal(ctx.storage.alarmAt, retryAt, 'traffic did not move the retry');
+    }
+    assert.ok(calls.length >= 2, 'the retry ran');
+    assert.ok(calls[1] <= retryAt + 10_000, 'on time, not after the traffic stopped');
+    assert.equal((await hub.store.read('revocations')).length, 0);
+  } finally {
+    Date.now = realNow;
+  }
 });

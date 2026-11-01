@@ -1,7 +1,8 @@
 import http from 'node:http';
 import { customAlphabet } from 'nanoid';
 import { WebSocketServer } from 'ws';
-import { protocol, rl, session, lobbyLogic, lobbySession } from './shared.js';
+import * as webauthn from '@simplewebauthn/server';
+import { protocol, rl, session, lobbyLogic, lobbySession, accountApi } from './shared.js';
 
 const { TYPES, ERROR_CODES, createError, parseEnvelope } = protocol;
 
@@ -13,6 +14,8 @@ const RATE_LIMIT_WINDOW_MS = 1_000;
 const RATE_LIMIT_MAX_MESSAGES = 40;
 const LOBBY_RATE_LIMIT_MAX_MESSAGES = 30;
 const TICK_MS = 500;
+// Sites allowed to call the account routes (localhost is always allowed).
+const SITE_ORIGINS = accountApi.parseOrigins(process.env.SITE_ORIGINS);
 
 const makeRoomCode = customAlphabet(protocol.ROOM_CODE_ALPHABET, protocol.ROOM_CODE_LENGTH);
 const makeConnectionId = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 12);
@@ -24,10 +27,10 @@ const rooms = new Map();
 const lobbyStore = lobbyLogic.createMemoryStore();
 const lobbyConnections = new Set();
 
-// Loopback addresses are not a shared network: two tabs on the dev machine are different people.
+// One network is an IPv4 address or an IPv6 /64. Loopback is not a shared network: two tabs on the
+// dev machine are different people.
 function networkOf(req) {
-  const address = req.socket.remoteAddress || 'unknown';
-  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) ? 'unknown' : address;
+  return lobbyLogic.networkKey(req.socket.remoteAddress);
 }
 
 function send(conn, message) {
@@ -116,22 +119,23 @@ function createRatedRoom(match) {
   return { roomCode: room.state.roomCode, tickets };
 }
 
-// Keeps the lobby's "you are in a game" marker on the current game, including rematches.
+// Each new game in a lobby room (rematches included) goes back on the live list, and a ranked one
+// keeps the lobby's "you are in a game" marker.
 async function registerActive(room) {
   const state = room.state;
-  if (!state.rated || state.gameOver) return;
-  const gameKey = `${state.roomCode}:${state.gameId}`;
+  if (!rl.isLobbyRoom(state) || state.gameOver) return;
+  const gameKey = rl.lobbyGameKey(state);
   if (state.activeGameKey === gameKey) return;
   state.activeGameKey = gameKey;
-  const result = await lobbySession.registerActive(lobbyStore, { roomCode: state.roomCode, gameKey, players: playerIdentitiesOf(state).map((player) => player.playerId) });
+  const result = await lobbySession.registerActive(lobbyStore, rl.lobbyActiveMessage(state));
   if (!result.ok) state.activeGameKey = '';
 }
 
-// After a rated game ends, the room sends the result to the lobby exactly once, then re-broadcasts
-// the views with the rating changes attached.
+// After a lobby game ends, the room sends the result to the lobby exactly once, then re-broadcasts
+// the views with the rating changes and the record id attached.
 async function reportResult(room) {
   const state = room.state;
-  if (!state.rated || !state.gameOver || state.reported) return false;
+  if (!rl.isLobbyRoom(state) || !state.gameOver || state.reported || room.reporting) return false;
   const players = playerIdentitiesOf(state).map((player) => player.playerId);
   if (state.noContest) {
     // Nobody gets rated for an opponent who never arrived; just free both players.
@@ -141,23 +145,23 @@ async function reportResult(room) {
     }
     return false;
   }
-  state.reported = true;
-  const gameKey = `${state.roomCode}:${state.gameId}`;
-  const winner = state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null;
-  const result = await lobbySession.report(lobbyStore, lobbyHooks(), {
-    roomCode: state.roomCode,
-    gameKey,
-    players: playerIdentitiesOf(state),
-    winner,
-    result: state.result,
-    plies: state.log.length,
-    finishedAt: Date.now(),
-  });
+  // `reported` turns true only once the lobby has the result (a rematch waits for it);
+  // `room.reporting` keeps a second change from sending the same report meanwhile.
+  room.reporting = true;
+  let result;
+  try {
+    result = await lobbySession.report(lobbyStore, lobbyHooks(), rl.lobbyReportMessage(state));
+  } finally {
+    room.reporting = false;
+  }
   if (!result.ok) {
-    state.reported = false;
+    // A final rejection (a game the lobby never arranged) is not retried.
+    if (result.final) state.reported = true;
     return false;
   }
-  state.ratingUpdates = result.updates;
+  state.reported = true;
+  state.ratingUpdates = result.updates || null;
+  state.recordId = result.gameId || null;
   session.broadcastViews(state, hooksFor(room));
   return true;
 }
@@ -169,7 +173,7 @@ async function afterRoomChange(room) {
 
 async function releaseRated(room) {
   const state = room.state;
-  if (!state.rated) return;
+  if (!rl.isLobbyRoom(state)) return;
   await reportResult(room);
   const players = playerIdentitiesOf(state).map((player) => player.playerId);
   if (players.length) await lobbySession.release(lobbyStore, { roomCode: state.roomCode, players });
@@ -180,7 +184,7 @@ async function tickRatedGames() {
   const now = Date.now();
   for (const room of rooms.values()) {
     const state = room.state;
-    if (!state.rated || state.gameOver) continue;
+    if (!rl.isLobbyRoom(state) || state.gameOver) continue;
 
     if (state.clock && state.clock.startedAt) {
       if (rl.clockRemainingMs(state, now) <= 0) {
@@ -305,6 +309,59 @@ async function handleLobbyMessage(conn, rawData) {
   await lobbySession.handleMessage(lobbyStore, lobbyHooks(), conn, parsed.envelope);
 }
 
+// Signed-out sessions lose their seats in lobby rooms: tickets and resume tokens stop working and
+// their game sockets close.
+async function revokeSeats(list) {
+  for (const { roomCode, sessions } of list) {
+    const room = rooms.get(roomCode);
+    if (room && session.revokeSessions(room.state, hooksFor(room), sessions)) await afterRoomChange(room);
+  }
+}
+
+// Reads a request body as text, giving up past the API's size limit.
+function readBody(req) {
+  return new Promise((resolve) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > accountApi.MAX_BODY_BYTES) {
+        resolve({ text: '', tooLarge: true });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve({ text: Buffer.concat(chunks).toString('utf8'), tooLarge: false }));
+    req.on('error', () => resolve({ text: '', tooLarge: true }));
+  });
+}
+
+let apiContext = null;
+
+// /api/*: accounts, profiles, game records, live games, leaderboard. Same handler as the Worker.
+async function handleApi(req, res) {
+  const origin = req.headers.origin || '';
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, accountApi.preflightHeaders(origin, SITE_ORIGINS));
+    res.end();
+    return;
+  }
+  const body = req.method === 'POST' ? await readBody(req) : { text: '', tooLarge: false };
+  apiContext = apiContext || { origins: SITE_ORIGINS, webauthn, hooks: lobbyHooks(), revokeSeats };
+  const result = await accountApi.handleHttp(lobbyStore, apiContext, {
+    method: req.method,
+    url: req.url,
+    origin,
+    authorization: req.headers.authorization || '',
+    ipHash: networkOf(req),
+    bodyText: body.text,
+    bodyTooLarge: body.tooLarge,
+  });
+  res.writeHead(result.status, accountApi.responseHeaders(origin, result, SITE_ORIGINS));
+  res.end(JSON.stringify(result.body));
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/health') {
@@ -312,15 +369,12 @@ const server = http.createServer((req, res) => {
     res.end('ok');
     return;
   }
-  if (url.pathname === '/leaderboard') {
-    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
-    const data = lobbyStore.leaderboard(limit);
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Cache-Control': 'no-store',
+  if (accountApi.isApiPath(url.pathname)) {
+    handleApi(req, res).catch((error) => {
+      console.error('api failed', error);
+      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'SERVER_ERROR' }));
     });
-    res.end(JSON.stringify({ players: data.entries, total: data.total }));
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -340,6 +394,10 @@ wss.on('connection', (ws, req) => {
     ipHash: networkOf(req),
     recentMessages: [],
   };
+
+  // A protocol error on one socket (an oversized frame, say) must not take the whole process down:
+  // without a listener, ws re-throws it as an uncaught exception. The socket closes on its own.
+  ws.on('error', (error) => console.warn('socket error:', error.message));
 
   if (url.searchParams.get('lobby') === '1') {
     lobbyConnections.add(conn);

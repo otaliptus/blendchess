@@ -54,8 +54,27 @@ async function connect(query = '') {
 }
 
 const isView = (message) => message.type === 'game_state' && message.payload.game;
+const SITE = 'http://localhost:5173';
+// Public reads may be served from the Worker's edge cache for a few seconds: poll until fresh.
+async function eventually(check, timeout = 12_000) {
+  const started = Date.now();
+  for (;;) {
+    if (await check()) return true;
+    if (Date.now() - started > timeout) return false;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+const api = (path, { token, origin = SITE, method = 'GET', body } = {}) => fetch(`${HTTP_URL}${path}`, {
+  method,
+  headers: {
+    ...(origin ? { Origin: origin } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(body ? { 'Content-Type': 'application/json' } : {}),
+  },
+  body: body ? JSON.stringify(body) : undefined,
+});
 
-test('ranked lobby: queue, match, tickets, a rated game and a leaderboard', async () => {
+test('ranked lobby: queue, match, tickets, watching, a rated game, profiles and replays', async () => {
   const alice = await connect('lobby=1');
   const bob = await connect('lobby=1');
   alice.send('lobby_hello', '', { nickname: 'AliceRank' });
@@ -92,13 +111,20 @@ test('ranked lobby: queue, match, tickets, a rated game and a leaderboard', asyn
   const blocked = await alice.next((message) => message.type === 'lobby_error');
   assert.equal(blocked.payload.errorCode, 'ALREADY_IN_GAME');
 
-  // No ticket, no seat; no spectators either.
+  // The game is on the live list for anyone to find.
+  const live = await (await api('/api/live', { origin: '' })).json();
+  const listed = live.games.find((game) => game.roomCode === roomCode);
+  assert.ok(listed, 'the new game is live');
+  assert.equal(listed.rated, true);
+  assert.equal(listed.control, '5+3');
+
+  // No ticket, no seat; but anyone may watch.
   const intruder = await connect(`room=${roomCode}`);
   intruder.send('join_room', roomCode, { nickname: 'Intruder' });
   assert.equal((await intruder.next((message) => message.type === 'error')).payload.errorCode, 'TICKET_INVALID');
   const watcher = await connect(`room=${roomCode}`);
-  watcher.send('join_room', roomCode, { spectator: true });
-  assert.equal((await watcher.next((message) => message.type === 'error')).payload.errorCode, 'SPECTATOR_DISABLED');
+  watcher.send('join_room', roomCode, { spectator: true, nickname: 'Fan' });
+  assert.equal((await watcher.next((message) => message.type === 'room_joined')).payload.role, 'spectator');
 
   const white = await connect(`room=${roomCode}`);
   white.send('join_room', roomCode, { ticket: whiteMatch.payload.ticket });
@@ -121,6 +147,11 @@ test('ranked lobby: queue, match, tickets, a rated game and a leaderboard', asyn
   black.send('move_intent', roomCode, { from: sq('e7'), to: sq('e5') });
   await white.next((message) => isView(message) && message.payload.game.turn === 'w' && message.payload.game.moves.length === 2);
 
+  // The watcher (on a different network from both players) sees the whole board live.
+  const watched = await watcher.next((message) => isView(message) && message.payload.game.moves.length === 2);
+  assert.equal(watched.payload.game.revealed, true);
+  assert.deepEqual(watched.payload.game.moves.map((move) => move.san), ['e4', 'e5']);
+
   white.send('resign', roomCode);
   const over = await black.next((message) => isView(message) && message.payload.game.gameOver && message.payload.game.ratings);
   assert.equal(over.payload.game.winner, 'Black');
@@ -128,23 +159,36 @@ test('ranked lobby: queue, match, tickets, a rated game and a leaderboard', asyn
   assert.equal(over.payload.game.ratings.w.delta, -20);
   assert.equal(over.payload.game.ratings.b.delta, 20);
 
+  // The old path still answers; guests are rated and counted but only secured accounts are listed.
   const boardResponse = await fetch(`${HTTP_URL}/leaderboard?limit=10`);
   assert.equal(boardResponse.status, 200);
   const board = await boardResponse.json();
-  const names = board.players.map((player) => player.name);
-  assert.ok(names.includes(aliceReady.payload.player.name), `leaderboard lists Alice, got ${names}`);
-  assert.ok(names.includes(bobReady.payload.player.name));
   assert.ok(board.total >= 2);
-  // White resigned, so whoever sat as Black won the rating points.
+  assert.ok(!board.players.some((player) => player.name === aliceReady.payload.player.name), 'guests are not listed');
+
+  // White resigned, so whoever sat as Black won the rating points. Both profiles show the game.
   const whiteReady = whiteMatch === aliceMatch ? aliceReady : bobReady;
   const blackReady = whiteMatch === aliceMatch ? bobReady : aliceReady;
-  const winnerEntry = board.players.find((player) => player.name === blackReady.payload.player.name);
-  const loserEntry = board.players.find((player) => player.name === whiteReady.payload.player.name);
-  assert.equal(winnerEntry.rating, 1220);
-  assert.equal(winnerEntry.games, 1);
-  assert.equal(winnerEntry.wins, 1);
-  assert.equal(loserEntry.rating, 1180);
-  assert.equal(loserEntry.losses, 1);
+  const winner = await (await api(`/api/players/${encodeURIComponent(blackReady.payload.player.name)}`, { origin: '' })).json();
+  const loser = await (await api(`/api/players/${encodeURIComponent(whiteReady.payload.player.name)}`, { origin: '' })).json();
+  assert.equal(winner.player.rating, 1220);
+  assert.equal(winner.player.wins, 1);
+  assert.equal(winner.player.peak, 1220);
+  assert.equal(loser.player.rating, 1180);
+  assert.equal(loser.player.losses, 1);
+  assert.equal(winner.games[0].outcome, 'win');
+  assert.equal(loser.games[0].outcome, 'loss');
+  assert.equal(loser.games[0].delta, -20);
+  assert.equal(winner.live, null, 'a finished game is no longer live');
+
+  // Everyone in the room learns the record id, and the record replays the game.
+  assert.equal(over.payload.game.recordId, winner.games[0].id);
+  const record = await (await api(`/api/games/${winner.games[0].id}`, { origin: '' })).json();
+  assert.equal(record.game.result, 'resign');
+  assert.equal(record.game.winner, 'b');
+  assert.deepEqual(record.game.plies.map((ply) => ply[2]), ['e4', 'e5']);
+  const gone = await eventually(async () => !(await (await api('/api/live', { origin: '' })).json()).games.some((game) => game.roomCode === roomCode));
+  assert.ok(gone, 'a finished game leaves the live list');
 
   // The rating also reaches the lobby socket, so the lobby UI updates without a reload.
   const ratingMessage = await alice.next((message) => message.type === 'lobby_rating');
@@ -179,9 +223,9 @@ test('lobby rejects unauthenticated queueing and oversized frames', async () => 
   client.close();
 });
 
-// Only meaningful against the Worker: the Node server has no HTTP routes at all.
+// Only meaningful against the Worker: the Node server has no internal routes at all.
 test('internal Durable Object paths are not reachable from the internet', { skip: !EXTERNAL_URL }, async () => {
-  for (const path of ['/report', '/active', '/release', '/reserve', '/limit/create']) {
+  for (const path of ['/report', '/active', '/release', '/reserve', '/revoke', '/limit/create']) {
     const response = await fetch(`${HTTP_URL}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -189,4 +233,104 @@ test('internal Durable Object paths are not reachable from the internet', { skip
     });
     assert.notEqual(response.status, 200, `${path} must not answer like an internal endpoint`);
   }
+});
+
+test('accounts: an account key signs in a second device; signing out others ends the first', async () => {
+  const first = await connect('lobby=1');
+  first.send('lobby_hello', '', { nickname: 'KeyKeeper' });
+  const ready = await first.next((message) => message.type === 'lobby_ready');
+  const firstToken = ready.payload.token;
+  assert.equal(ready.payload.player.secured, false);
+
+  // Account routes only answer the site itself.
+  assert.equal((await api('/api/me', { token: firstToken, origin: '' })).status, 403);
+  assert.equal((await api('/api/me', { token: firstToken, origin: 'https://evil.example' })).status, 403);
+  const preflight = await fetch(`${HTTP_URL}/api/auth/key/create`, {
+    method: 'OPTIONS',
+    headers: { Origin: SITE, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' },
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), SITE);
+
+  const created = await api('/api/auth/key/create', { token: firstToken, method: 'POST', body: {} });
+  assert.equal(created.status, 200);
+  const { key, player } = await created.json();
+  assert.equal(player.secured, true);
+
+  // The key works however it is typed.
+  const loose = key.toLowerCase().replace(/-/g, ' ');
+  const signedIn = await api('/api/auth/key/login', { method: 'POST', body: { key: loose } });
+  assert.equal(signedIn.status, 200);
+  const second = await signedIn.json();
+  assert.equal(second.player.id, ready.payload.player.id);
+  assert.notEqual(second.token, firstToken);
+
+  const me = await (await api('/api/me', { token: second.token })).json();
+  assert.equal(me.security.hasKey, true);
+  assert.equal(me.security.sessions, 2);
+
+  const wrong = await api('/api/auth/key/login', { method: 'POST', body: { key: 'BLND-0000-0000-0000-0000-0000-0000' } });
+  assert.equal(wrong.status, 401);
+
+  // Passkey sign-in starts with a challenge for this site's domain.
+  const options = await (await api('/api/auth/passkey/login/options', { method: 'POST', body: {} })).json();
+  assert.ok(options.challengeId);
+  assert.equal(options.options.rpId, 'localhost');
+
+  // Signing out the other devices revokes the first token and closes its lobby socket.
+  const closed = new Promise((resolve) => first.ws.on('close', (code) => resolve(code)));
+  const after = await (await api('/api/auth/logout-others', { token: second.token, method: 'POST', body: {} })).json();
+  assert.equal(after.security.sessions, 1);
+  assert.equal(await closed, 4001);
+  assert.equal((await api('/api/me', { token: firstToken })).status, 401);
+
+  // The second device's lobby hello lands on the same player without minting a new one.
+  const again = await connect('lobby=1');
+  again.send('lobby_hello', '', { token: second.token });
+  const back = await again.next((message) => message.type === 'lobby_ready');
+  assert.equal(back.payload.player.id, ready.payload.player.id);
+  assert.equal(back.payload.token, undefined);
+
+  assert.equal((await api('/api/auth/logout', { token: second.token, method: 'POST', body: {} })).status, 200);
+  assert.equal((await api('/api/me', { token: second.token })).status, 401);
+  again.close();
+});
+
+test('signing other devices out ends the old device’s game: socket closed, ticket refused', async () => {
+  const ann = await connect('lobby=1');
+  const bea = await connect('lobby=1');
+  ann.send('lobby_hello', '', { nickname: 'RevokeAnn' });
+  const annReady = await ann.next((message) => message.type === 'lobby_ready');
+  bea.send('lobby_hello', '', { nickname: 'RevokeBea' });
+  await bea.next((message) => message.type === 'lobby_ready');
+  ann.send('lobby_queue', '', { control: '10+0' });
+  await ann.next((message) => message.type === 'lobby_queued');
+  bea.send('lobby_queue', '', { control: '10+0' });
+  const annMatch = (await ann.next((message) => message.type === 'match_found')).payload;
+  const beaMatch = (await bea.next((message) => message.type === 'match_found')).payload;
+  const roomCode = annMatch.roomCode;
+
+  const annGame = await connect(`room=${roomCode}&seat=1`);
+  annGame.send('join_room', roomCode, { ticket: annMatch.ticket });
+  await annGame.next((message) => message.type === 'room_joined');
+  const beaGame = await connect(`room=${roomCode}&seat=1`);
+  beaGame.send('join_room', roomCode, { ticket: beaMatch.ticket });
+  await beaGame.next((message) => message.type === 'room_joined');
+
+  // Ann's account gets a key; a second device signs in with it and signs every other device out.
+  const { key } = await (await api('/api/auth/key/create', { token: annReady.payload.token, method: 'POST', body: {} })).json();
+  const second = await (await api('/api/auth/key/login', { method: 'POST', body: { key } })).json();
+  const closed = new Promise((resolve) => annGame.ws.on('close', (code) => resolve(code)));
+  assert.equal((await api('/api/auth/logout-others', { token: second.token, method: 'POST', body: {} })).status, 200);
+  assert.equal(await closed, 4001, 'the old device is thrown out of the game');
+
+  // Neither the ticket nor a fresh connection gets the seat back.
+  const retry = await connect(`room=${roomCode}&seat=1`);
+  retry.send('join_room', roomCode, { ticket: annMatch.ticket });
+  assert.equal((await retry.next((message) => message.type === 'error')).payload.errorCode, 'TICKET_INVALID');
+
+  // Bea is unaffected and sees Ann as disconnected.
+  const view = await beaGame.next((message) => isView(message) && message.payload.game.players.some((seat) => !seat.connected));
+  assert.ok(view);
+  for (const client of [ann, bea, beaGame, retry]) client.close();
 });

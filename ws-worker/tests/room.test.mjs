@@ -150,13 +150,17 @@ function reserveRequest(body) {
   };
 }
 
-function upgradeRequest(roomCode, create) {
+function upgradeRequest(roomCode, create, { ipHash = '', seat = false } = {}) {
   const headers = new Map([['upgrade', 'websocket'], ['x-room-code', roomCode], ['x-room-create', create ? '1' : '0']]);
-  return { headers: { get: (name) => headers.get(name.toLowerCase()) || null } };
+  if (ipHash) headers.set('x-ip-hash', ipHash);
+  return {
+    url: `https://room.internal/?room=${roomCode}${seat ? '&seat=1' : ''}`,
+    headers: { get: (name) => headers.get(name.toLowerCase()) || null },
+  };
 }
 
-async function open(hub, roomCode, create = false) {
-  const response = await hub.fetch(upgradeRequest(roomCode, create));
+async function open(hub, roomCode, create = false, options = {}) {
+  const response = await hub.fetch(upgradeRequest(roomCode, create, options));
   assert.equal(response.status, 101);
   const serverSocket = hub.ctx.sockets.at(-1);
   const client = {
@@ -286,9 +290,11 @@ test('a reserved ranked room only opens with the lobby tickets', async () => {
   await intruder.send('join_room', { nickname: 'Intruder' });
   assert.equal(intruder.last('error').payload.errorCode, 'TICKET_INVALID');
 
+  // Anyone may watch a lobby game, and sees the whole board.
   const watcher = await open(hub, 'RATED1');
   await watcher.send('join_room', { spectator: true });
-  assert.equal(watcher.last('error').payload.errorCode, 'SPECTATOR_DISABLED');
+  assert.equal(watcher.last('room_joined').payload.role, 'spectator');
+  assert.equal(watcher.last('game_state').payload.game.revealed, true);
 
   const white = await open(hub, 'RATED1');
   await white.send('join_room', { ticket: 'w'.repeat(24), nickname: 'Cheater' });
@@ -364,4 +370,36 @@ test('the alarm is never scheduled in the past', async () => {
   const before = Date.now();
   await hub.alarm();
   assert.ok(ctx.storage.alarmAt === null || ctx.storage.alarmAt >= before, 'no past alarm');
+});
+
+test('a full room makes way for a returning player, never for another watcher', async () => {
+  const { hub } = await createHub(new Map());
+  await hub.fetch(reserveRequest({
+    roomCode: 'FULL01',
+    rated: true,
+    control: '5+3',
+    clock: { baseMs: 300_000, incMs: 3000 },
+    seats: [
+      { color: 'w', playerId: 'lobby-white', nickname: 'Wendy', rating: 1200, ticket: 'w'.repeat(24) },
+      { color: 'b', playerId: 'lobby-black', nickname: 'Boris', rating: 1300, ticket: 'b'.repeat(24) },
+    ],
+  }));
+  // 64 sockets from 16 networks: watchers and idle connections fill the room.
+  const crowd = [];
+  for (let i = 0; i < 64; i += 1) {
+    const client = await open(hub, 'FULL01', false, { ipHash: `net-${Math.floor(i / 4)}` });
+    if (i % 2 === 0) await client.send('join_room', { spectator: true });
+    crowd.push(client);
+  }
+  const extraWatcher = await hub.fetch(upgradeRequest('FULL01', false, { ipHash: 'net-late' }));
+  assert.equal(extraWatcher.status, 429);
+
+  // The player's connection (seat=1) gets in by closing an idle socket first.
+  const white = await open(hub, 'FULL01', false, { ipHash: 'net-white', seat: true });
+  const idleClosed = crowd.filter((client) => client.ws.closed);
+  assert.equal(idleClosed.length, 1);
+  assert.equal(idleClosed[0], crowd[1], 'a socket that never joined goes first');
+  await white.send('join_room', { ticket: 'w'.repeat(24) });
+  assert.equal(white.last('room_joined').payload.color, 'w');
+  assert.equal(hub.room.spectatorOrder.length, 32, 'watchers keep their places');
 });

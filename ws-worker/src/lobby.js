@@ -1,10 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
+import * as webauthn from '@simplewebauthn/server';
 
 const protocol = globalThis.BlendChessProtocol;
 const logic = globalThis.BlendChessLobbyLogic;
 const lobbySession = globalThis.BlendChessLobbySession;
+const accountApi = globalThis.BlendChessAccountApi;
+if (!protocol || !logic || !lobbySession || !accountApi) throw new Error('shared modules must load before lobby.js');
 const { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, createError, parseEnvelope } = protocol;
-if (!protocol || !logic || !lobbySession) throw new Error('shared modules must load before lobby.js');
 
 const MAX_SOCKETS = 2000;
 const MAX_SOCKETS_PER_IP = 6;
@@ -17,6 +19,10 @@ const CREATE_PER_IP = 12;
 const CREATE_GLOBAL = 400;
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const REVOKE_RETRY_MS = 15 * 1000;
+// A lobby room lives at most a day; after that there is no seat left to revoke.
+const REVOKE_GIVE_UP_MS = 24 * 60 * 60 * 1000;
+const REVOKE_MAX_PENDING = 500;
 
 function makeRoomCode() {
   const bytes = new Uint8Array(ROOM_CODE_LENGTH);
@@ -81,13 +87,84 @@ class StorageLobbyStore {
     await this.write(`player:${record.id}`, record);
   }
 
-  async playerByToken(hash) {
-    const id = await this.read(`token:${hash}`);
-    return id ? this.getPlayer(id) : null;
+  // A session is token:<sha256 of the token> -> player id: the same key identities used before
+  // accounts existed, so those keep working as sessions.
+  async sessionOwner(hash) {
+    return this.read(`token:${hash}`);
   }
 
-  async saveToken(hash, id) {
-    await this.write(`token:${hash}`, id);
+  async saveSession(hash, playerId) {
+    await this.write(`token:${hash}`, playerId);
+  }
+
+  async removeSession(hash) {
+    await this.remove(`token:${hash}`);
+  }
+
+  async getCredential(id) {
+    return this.read(`cred:${id}`);
+  }
+
+  async saveCredential(id, data) {
+    await this.write(`cred:${id}`, data);
+  }
+
+  async removeCredential(id) {
+    await this.remove(`cred:${id}`);
+  }
+
+  async keyOwner(hash) {
+    return this.read(`key:${hash}`);
+  }
+
+  async saveKey(hash, playerId) {
+    await this.write(`key:${hash}`, playerId);
+  }
+
+  async removeKey(hash) {
+    await this.remove(`key:${hash}`);
+  }
+
+  // Passkey challenges are stored, not kept in memory: the object can hibernate while someone is
+  // still at the passkey prompt. They bypass the read cache and are deleted once used.
+  async getChallenge(id) {
+    const value = await this.storage.get(`chal:${id}`);
+    return value && value.expiresAt > Date.now() ? value : null;
+  }
+
+  async saveChallenge(id, data) {
+    await this.storage.put(`chal:${id}`, data);
+    await this.sweepChallenges();
+  }
+
+  async removeChallenge(id) {
+    await this.storage.delete(`chal:${id}`);
+  }
+
+  // Challenge ids start with their expiry (logic.makeChallengeId), so everything before "now" has
+  // expired. Each new challenge sweeps up to 128 old ones, which keeps up with however many are made.
+  async sweepChallenges() {
+    const end = `chal:${logic.expiryStamp(Date.now())}`;
+    const expired = await this.storage.list({ prefix: 'chal:', end, limit: 128 });
+    if (expired.size) await this.storage.delete([...expired.keys()]);
+  }
+
+  // Game records are large and write-once: they go straight to storage instead of the read cache,
+  // where they would push out the small hot keys (sessions, players, queue, live, top).
+  async getGame(id) {
+    return (await this.storage.get(`game:${id}`)) ?? null;
+  }
+
+  async saveGame(game) {
+    await this.storage.put(`game:${game.id}`, game);
+  }
+
+  async getLive() {
+    return ((await this.read('live')) || []).map((entry) => ({ ...entry }));
+  }
+
+  async saveLive(entries) {
+    await this.write('live', entries.slice(0, logic.LIVE_MAX));
   }
 
   async nameOwner(lower) {
@@ -143,26 +220,31 @@ class StorageLobbyStore {
 
   // Keeps a small sorted board instead of scanning every player on each request.
   async bumpLeaderboard(records = []) {
-    const top = ((await this.read('top')) || []).slice();
+    // Entries from before accounts (or from accounts that later removed their sign-in methods)
+    // carry no `secured`: they are dropped here and filtered out on read.
+    const stored = (await this.read('top')) || [];
+    const top = stored.filter((entry) => entry && entry.secured);
     const stats = (await this.read('stats')) || { ranked: 0 };
+    let ranked = stats.ranked;
     for (const record of records) {
       const index = top.findIndex((entry) => entry.id === record.id);
       if (index >= 0) top.splice(index, 1);
-      if (record.games > 0) {
-        top.push(logic.summary(record));
-        if (!(await this.read(`played:${record.id}`))) {
-          await this.write(`played:${record.id}`, 1);
-          stats.ranked += 1;
-        }
+      // Only secured accounts are listed; every player with a game counts towards the total.
+      if (logic.onLeaderboard(record)) top.push(logic.summary(record));
+      if (record.games > 0 && !(await this.read(`played:${record.id}`))) {
+        await this.write(`played:${record.id}`, 1);
+        ranked += 1;
       }
     }
     top.sort((a, b) => b.rating - a.rating || b.games - a.games);
-    await this.write('top', top.slice(0, logic.LEADERBOARD_SIZE));
-    await this.write('stats', stats);
+    const next = top.slice(0, logic.LEADERBOARD_SIZE);
+    // Many calls change nothing (a guest renaming, a key made before any game): skip those writes.
+    if (JSON.stringify(next) !== JSON.stringify(stored)) await this.write('top', next);
+    if (ranked !== stats.ranked) await this.write('stats', { ...stats, ranked });
   }
 
   async leaderboard(limit) {
-    const top = (await this.read('top')) || [];
+    const top = ((await this.read('top')) || []).filter((entry) => entry && entry.secured);
     const stats = (await this.read('stats')) || { ranked: 0 };
     return { entries: top.slice(0, limit), total: stats.ranked };
   }
@@ -180,6 +262,7 @@ export class LobbyHub extends DurableObject {
     this.ctx = ctx;
     this.env = env;
     this.store = new StorageLobbyStore(ctx.storage);
+    this.origins = accountApi.parseOrigins(env && env.SITE_ORIGINS);
     this.rates = new Map();
     this.creationHits = new Map();
     this.globalHits = [];
@@ -275,22 +358,33 @@ export class LobbyHub extends DurableObject {
 
   // The alarm either retries matching while someone waits, or comes back once a day to prune
   // old report markers. It is always in the future.
-  async scheduleAlarm() {
+  // The alarm wakes for the earliest of: a match tick while someone waits, the next revocation
+  // retry (a fixed time stored with it), or the daily prune. setAlarm replaces any earlier alarm, and
+  // this runs after every lobby message, so an alarm already due sooner is left alone: otherwise
+  // steady traffic would keep pushing retries and match ticks into the future. Only the alarm handler
+  // itself (whose alarm has just fired) always sets the next one.
+  async scheduleAlarm({ fromAlarm = false } = {}) {
+    const now = Date.now();
     const entries = await this.store.getQueue();
-    const next = entries.length ? Date.now() + MATCH_TICK_MS : Date.now() + PRUNE_INTERVAL_MS;
+    let next = entries.length ? now + MATCH_TICK_MS : now + PRUNE_INTERVAL_MS;
+    for (const item of (await this.store.read('revocations')) || []) {
+      next = Math.min(next, Math.max(now + 1000, Number(item.nextAttemptAt) || now));
+    }
+    if (!fromAlarm) {
+      const current = await this.ctx.storage.getAlarm();
+      if (current !== null && current <= next) return;
+    }
     await this.ctx.storage.setAlarm(next);
   }
 
   async fetch(request) {
     const url = new URL(request.url);
 
+    // The public HTTP API (/api/*), forwarded by index.js with the caller's network hash.
+    if (accountApi.isApiPath(url.pathname)) return this.api(request);
+
     // Internal calls from room Durable Objects and the Worker router. External clients cannot
     // reach these paths: index.js never forwards them.
-    if (url.pathname === '/leaderboard') {
-      const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
-      const data = await this.store.leaderboard(limit);
-      return json({ players: data.entries, total: data.total });
-    }
     if (url.pathname === '/report' && request.method === 'POST') {
       return this.runInternal(async () => {
         const body = await request.json().catch(() => null);
@@ -336,6 +430,81 @@ export class LobbyHub extends DurableObject {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ id: crypto.randomUUID(), playerId: '', ipHash, role: 'lobby' });
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async api(request) {
+    // Built once: the hooks read the live sockets when called.
+    this.apiContext = this.apiContext || {
+      origins: this.origins,
+      webauthn,
+      hooks: this.hooks(),
+      revokeSeats: (rooms) => this.revokeSeats(rooms),
+    };
+    const origin = request.headers.get('Origin') || '';
+    const result = await accountApi.handleHttp(this.store, this.apiContext, {
+      method: request.method,
+      url: request.url,
+      origin,
+      authorization: request.headers.get('Authorization') || '',
+      ipHash: request.headers.get('X-IP-Hash') || 'unknown',
+      bodyText: request.method === 'POST' ? await request.text() : '',
+    });
+    return new Response(JSON.stringify(result.body), {
+      status: result.status,
+      headers: accountApi.responseHeaders(origin, result, this.origins),
+    });
+  }
+
+  // Signed-out sessions lose their seats: each room cancels them and closes their game sockets.
+  // The sessions are already gone by now, so a room that cannot be reached must not be forgotten:
+  // every revocation is stored first (one entry per room per sign-out) and removed only once its
+  // room acknowledges it. Failures get a fixed time for the next attempt; the alarm retries them
+  // every 15 seconds for up to a day (a lobby room never lives longer).
+  async revokeSeats(rooms) {
+    const now = Date.now();
+    const entries = rooms.map(({ roomCode, sessions }) => ({ id: logic.makeToken(12), roomCode, sessions, since: now, nextAttemptAt: now }));
+    await this.updateRevocations((pending) => [...pending, ...entries]);
+    await this.sendRevocations(entries);
+    await this.scheduleAlarm();
+  }
+
+  async updateRevocations(change) {
+    return lobbySession.withLock('revocations', async () => {
+      const pending = (await this.store.read('revocations')) || [];
+      const next = change(pending.slice()).slice(-REVOKE_MAX_PENDING);
+      await this.store.write('revocations', next);
+    });
+  }
+
+  // Sends these entries (default: every pending one whose retry is due), then removes the
+  // acknowledged ones, reschedules the failures, and drops anything older than a day.
+  async sendRevocations(targets = null) {
+    const now = Date.now();
+    const pending = (await this.store.read('revocations')) || [];
+    const due = targets || pending.filter((item) => item.nextAttemptAt <= now);
+    const expired = pending.some((item) => now - item.since >= REVOKE_GIVE_UP_MS);
+    if (!due.length && !expired) return;
+    const results = await Promise.all(due.map(async ({ id, roomCode, sessions }) => {
+      try {
+        const response = await this.env.GAME_HUB.get(this.env.GAME_HUB.idFromName(roomCode)).fetch('https://room.internal/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessions }),
+        });
+        const body = response.ok ? await response.json().catch(() => null) : null;
+        if (body && body.ok) return { id, done: true };
+        console.error('seat revocation not acknowledged', roomCode, response.status);
+      } catch (error) {
+        console.error('seat revocation failed', roomCode, error);
+      }
+      return { id, done: false };
+    }));
+    const done = new Set(results.filter((item) => item.done).map((item) => item.id));
+    const failed = new Set(results.filter((item) => !item.done).map((item) => item.id));
+    const retryAt = Date.now() + REVOKE_RETRY_MS;
+    await this.updateRevocations((list) => list
+      .filter((item) => !done.has(item.id) && now - item.since < REVOKE_GIVE_UP_MS)
+      .map((item) => (failed.has(item.id) ? { ...item, nextAttemptAt: retryAt } : item)));
   }
 
   runInternal(work) {
@@ -443,13 +612,15 @@ export class LobbyHub extends DurableObject {
   async alarm() {
     try {
       await lobbySession.tryMatch(this.store, this.hooks());
+      await this.sendRevocations();
       await this.pruneReportsIfDue();
     } catch (error) {
       console.error('lobby alarm failed', error);
     }
-    await this.scheduleAlarm();
+    await this.scheduleAlarm({ fromAlarm: true });
   }
 
+  // Once a day: drop report markers older than a week.
   async pruneReportsIfDue() {
     const last = (await this.ctx.storage.get('lastPrune')) || 0;
     const now = Date.now();
@@ -458,7 +629,7 @@ export class LobbyHub extends DurableObject {
     for (let page = 0; page < 5; page += 1) {
       const batch = await this.ctx.storage.list({ prefix: 'report:', limit: 1000, startAfter: cursor });
       for (const [key, value] of batch) {
-        if (value && now - (value.at || 0) > REPORT_TTL_MS) await this.ctx.storage.delete(key);
+        if (value && now - (value.at || 0) > REPORT_TTL_MS) await this.store.remove(key);
       }
       if (batch.size < 1000) break;
       cursor = [...batch.keys()].at(-1);

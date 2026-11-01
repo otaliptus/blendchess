@@ -241,10 +241,26 @@ test('a reported game moves both ratings exactly once', async () => {
   assert.equal(duplicate.duplicate, true);
   assert.equal(h.store.getPlayer(playerOf(a).id).rating, 1220, 'a duplicate report changes nothing');
 
+  // Guests are rated but only secured accounts are listed.
   const board = h.store.leaderboard(10);
   assert.equal(board.total, 2);
-  assert.equal(board.entries[0].rating, 1220);
+  assert.equal(board.entries.length, 0);
+  const winner = h.store.getPlayer(playerOf(a).id);
+  winner.keyHash = 'secured';
+  h.store.bumpLeaderboard([winner]);
+  assert.equal(h.store.leaderboard(10).entries[0].rating, 1220);
+  assert.equal(h.store.leaderboard(10).entries[0].secured, true);
   assert.equal(h.store.getActiveGame(playerOf(a).id), null);
+
+  // The game is on both profiles' history.
+  assert.equal(report.gameId, winner.recent[0].id);
+  assert.equal(winner.recent[0].outcome, 'win');
+  assert.equal(winner.recent[0].delta, 20);
+  const game = h.store.getGame(report.gameId);
+  assert.equal(game.white.after, 1220);
+  assert.equal(game.black.after, 1180);
+  assert.equal(game.result, 'resign');
+  assert.equal(h.store.getPlayer(playerOf(b).id).recent[0].outcome, 'loss');
 });
 
 test('a report for a game the lobby did not arrange is refused', async () => {
@@ -284,9 +300,9 @@ test('a game released by a dead room frees both players without a rating change'
 test('a rematch registers the new game so queueing stays blocked', async () => {
   const h = makeLobby();
   const { a, b, matchA } = await pair(h);
-  const players = [playerOf(a).id, playerOf(b).id];
+  const players = [{ playerId: playerOf(a).id, color: 'b' }, { playerId: playerOf(b).id, color: 'w' }];
   const gameKey = `${matchA.payload.roomCode}:2`;
   const registered = await lobbySession.registerActive(h.store, { roomCode: matchA.payload.roomCode, gameKey, players });
   assert.equal(registered.ok, true);
-  assert.equal(h.store.getActiveGame(players[0]).gameKey, gameKey);
+  assert.equal(h.store.getActiveGame(players[0].playerId).gameKey, gameKey);
 });

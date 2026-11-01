@@ -2,6 +2,11 @@
   "name": "blendchess-ws",
   "main": "src/index.js",
   "compatibility_date": "2026-02-12",
+  "vars": {
+    // Sites allowed to call the account routes and create passkeys (localhost is always allowed).
+    // Passkeys belong to the domain they were made on, so keep blendchess.com once it is live.
+    "SITE_ORIGINS": "https://blendchess.com,https://www.blendchess.com,https://blendchess.pages.dev"
+  },
   "durable_objects": {
     "bindings": [
       {

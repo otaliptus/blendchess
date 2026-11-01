@@ -128,6 +128,22 @@
     });
   }
 
+  // base64url, for WebAuthn ids and keys. Browsers, Node and Workers all have btoa/atob.
+  function toBase64Url(bytes) {
+    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let binary = '';
+    for (let i = 0; i < view.length; i += 1) binary += String.fromCharCode(view[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function fromBase64Url(text) {
+    const base64 = String(text || '').replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
   const protocolExports = {
     PROTOCOL_VERSION,
     TYPES,
@@ -137,6 +153,8 @@
     ROOM_CODE_ALPHABET,
     ROOM_CODE_LENGTH,
     normalizeRoomCode,
+    toBase64Url,
+    fromBase64Url,
     createMessage,
     validateEnvelope,
     parseEnvelope,

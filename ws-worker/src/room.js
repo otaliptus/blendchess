@@ -68,6 +68,7 @@ function readReservation(body) {
       nickname: rl.cleanNickname(seat.nickname, seat.color === 'w' ? 'White' : 'Black'),
       rating: Number.isFinite(Number(seat.rating)) ? Number(seat.rating) : null,
       ipHash: typeof seat.ipHash === 'string' ? seat.ipHash.slice(0, 64) : '',
+      session: typeof seat.session === 'string' ? seat.session.slice(0, 128) : '',
     });
   }
   return {
@@ -88,6 +89,8 @@ export class GameHub extends DurableObject {
     this.room = null;
     this.roomCode = '';
     this.closing = new Set();
+    // Sockets closed to make way for a returning player; they no longer count against the caps.
+    this.evicted = new Set();
     this.rates = new Map();
     this.chains = new Map();
     ctx.blockConcurrencyWhile(async () => {
@@ -101,7 +104,7 @@ export class GameHub extends DurableObject {
   }
 
   liveConns() {
-    return this.ctx.getWebSockets().map((ws) => this.conn(ws)).filter((conn) => !this.closing.has(conn.id));
+    return this.ctx.getWebSockets().map((ws) => this.conn(ws)).filter((conn) => !this.closing.has(conn.id) && !this.evicted.has(conn.id));
   }
 
   hooks() {
@@ -156,7 +159,7 @@ export class GameHub extends DurableObject {
     const clockDeadline = rl.nextClockDeadline(this.room, now);
     if (clockDeadline) next = Math.min(next, clockDeadline + 100);
     if (this.room.reportRetryAt) next = Math.min(next, this.room.reportRetryAt);
-    const waitingForSeat = this.room.rated && !this.room.gameOver && !rl.isReady(this.room) && this.room.log.length === 0;
+    const waitingForSeat = rl.isLobbyRoom(this.room) && !this.room.gameOver && !rl.isReady(this.room) && this.room.log.length === 0;
     if (waitingForSeat) next = Math.min(next, this.room.reservedAt + rl.JOIN_DEADLINE_MS + 100);
     // Never schedule an alarm in the past: the runtime would re-fire it immediately and loop.
     await this.ctx.storage.setAlarm(Math.max(next, now + 1000));
@@ -170,26 +173,31 @@ export class GameHub extends DurableObject {
     return rl.playerIdentities(this.room);
   }
 
-  // The lobby blocks ranked queueing while a player has an unfinished game, rematches included.
+  // Each new game in a lobby room (rematches included) goes back on the lobby's live list, and a
+  // ranked one keeps blocking the queue.
   async registerActive() {
-    if (!this.room || !this.room.rated || this.room.gameOver) return;
-    const gameKey = `${this.room.roomCode}:${this.room.gameId}`;
+    if (!this.room || !rl.isLobbyRoom(this.room) || this.room.gameOver) return;
+    const gameKey = rl.lobbyGameKey(this.room);
     if (this.room.activeGameKey === gameKey) return;
     this.room.activeGameKey = gameKey;
+    let ok = false;
     try {
-      await this.lobby().fetch('https://lobby.internal/active', {
+      const response = await this.lobby().fetch('https://lobby.internal/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomCode: this.room.roomCode, gameKey, players: this.ratedPlayers().map((player) => player.playerId) }),
+        body: JSON.stringify(rl.lobbyActiveMessage(this.room)),
       });
+      ok = Boolean((await response.json()).ok);
     } catch {
-      this.room.activeGameKey = '';
+      ok = false;
     }
+    // Not acknowledged: the next change in the room tries again.
+    if (!ok && this.room) this.room.activeGameKey = '';
   }
 
-  // Exactly one report per game, retried by the alarm until the lobby acknowledges it.
+  // Exactly one report per lobby game, retried by the alarm until the lobby acknowledges it.
   async reportResult() {
-    if (!this.room || !this.room.rated || !this.room.gameOver || this.room.reported) return;
+    if (!this.room || !rl.isLobbyRoom(this.room) || !this.room.gameOver || this.room.reported || this.reporting) return;
     if (this.room.noContest) {
       // Nobody gets rated for an opponent who never arrived; just free both players.
       if (this.room.released) return;
@@ -207,38 +215,43 @@ export class GameHub extends DurableObject {
       }
       return;
     }
-    const gameKey = `${this.room.roomCode}:${this.room.gameId}`;
-    this.room.reported = true;
-    this.room.reportRetryAt = 0;
-    const winner = this.room.winner === 'White' ? 'w' : this.room.winner === 'Black' ? 'b' : null;
+    // `reported` turns true only once the lobby has the result, and a rematch waits for it, so the
+    // game being reported cannot change underneath this request. `reporting` (memory only) keeps a
+    // second change from sending the same report while this one is in flight.
+    const room = this.room;
+    const gameId = room.gameId;
+    room.reportRetryAt = 0;
     let result = null;
+    this.reporting = true;
     try {
       const response = await this.lobby().fetch('https://lobby.internal/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomCode: this.room.roomCode,
-          gameKey,
-          players: this.ratedPlayers(),
-          winner,
-          result: this.room.result,
-          plies: this.room.log.length,
-          finishedAt: Date.now(),
-        }),
+        body: JSON.stringify(rl.lobbyReportMessage(room)),
       });
       result = await response.json();
     } catch {
       result = null;
+    } finally {
+      this.reporting = false;
     }
-    if (!result || !result.ok) {
-      this.room.reported = false;
-      this.room.reportRetryAt = Date.now() + REPORT_RETRY_MS;
+    if (this.room !== room || room.gameId !== gameId) return;
+    if (result && !result.ok && result.final) {
+      // The lobby will never accept this game (it did not arrange it): stop retrying.
+      room.reported = true;
       await this.persist();
       return;
     }
-    this.room.ratingUpdates = result.updates;
+    if (!result || !result.ok) {
+      room.reportRetryAt = Date.now() + REPORT_RETRY_MS;
+      await this.persist();
+      return;
+    }
+    room.reported = true;
+    room.ratingUpdates = result.updates || null;
+    room.recordId = result.gameId || null;
     await this.persist();
-    session.broadcastViews(this.room, this.hooks());
+    session.broadcastViews(room, this.hooks());
   }
 
   async afterChange() {
@@ -249,7 +262,7 @@ export class GameHub extends DurableObject {
   }
 
   async releaseRated() {
-    if (!this.room || !this.room.rated) return;
+    if (!this.room || !rl.isLobbyRoom(this.room)) return;
     // Reservation identities, not seated players: a room nobody joined still blocks both players.
     const players = rl.playerIdentities(this.room).map((player) => player.playerId);
     if (!players.length) return;
@@ -269,7 +282,7 @@ export class GameHub extends DurableObject {
     const now = Date.now();
     let changed = false;
 
-    if (this.room.rated && !this.room.gameOver) {
+    if (rl.isLobbyRoom(this.room) && !this.room.gameOver) {
       if (this.room.clock && this.room.clock.startedAt && rl.clockRemainingMs(this.room, now) <= 0) {
         rl.chargeClock(this.room, now);
         rl.finishByTimeout(this.room);
@@ -291,7 +304,7 @@ export class GameHub extends DurableObject {
     if (changed) {
       session.broadcastViews(this.room, this.hooks());
       await this.afterChange();
-    } else if (this.room.rated && this.room.gameOver && !this.room.reported) {
+    } else if (rl.isLobbyRoom(this.room) && this.room.gameOver && !this.room.reported) {
       await this.reportResult();
     }
 
@@ -335,6 +348,16 @@ export class GameHub extends DurableObject {
 
       return this.reserve(request);
     }
+    // POST /revoke, from the lobby only: these sessions were signed out, so their seats go.
+    if (url.pathname === '/revoke') {
+      if (request.method !== 'POST') return new Response('Method not allowed.', { status: 405 });
+      const body = await request.json().catch(() => null);
+      const sessions = body && Array.isArray(body.sessions) ? body.sessions.slice(0, 32) : [];
+      if (!this.room || !sessions.length) return json({ ok: true, revoked: false });
+      const revoked = session.revokeSessions(this.room, this.hooks(), sessions);
+      if (revoked) await this.afterChange();
+      return json({ ok: true, revoked });
+    }
 
     const upgrade = request.headers.get('Upgrade');
     if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
@@ -345,10 +368,18 @@ export class GameHub extends DurableObject {
     const create = request.headers.get('X-Room-Create') === '1';
     const ipHash = request.headers.get('X-IP-Hash') || 'unknown';
     if (create && this.room) return new Response('Room code taken.', { status: 409 });
-    if (this.ctx.getWebSockets().length >= MAX_SOCKETS_PER_ROOM) return new Response('Room is crowded.', { status: 429 });
-    const sameIp = this.ctx.getWebSockets().filter((ws) => {
+    const counted = this.ctx.getWebSockets().filter((ws) => !this.evicted.has((ws.deserializeAttachment() || {}).id));
+    if (counted.length >= MAX_SOCKETS_PER_ROOM) {
+      // Live lobby games are listed publicly, so watchers (or idle sockets) can fill a room. A player
+      // coming back to a seat (the client marks those connections seat=1, and must then present a
+      // ticket or resume token) makes room by dropping a socket that holds no seat.
+      const victim = url.searchParams.get('seat') === '1' ? this.evictionCandidate(counted) : null;
+      if (!victim) return new Response('Room is crowded.', { status: 429 });
+      await this.evict(victim);
+    }
+    const sameIp = counted.filter((ws) => {
       const attachment = ws.deserializeAttachment();
-      return attachment && attachment.ipHash === ipHash;
+      return attachment && attachment.ipHash === ipHash && !this.evicted.has(attachment.id);
     }).length;
     if (sameIp >= MAX_SOCKETS_PER_IP) return new Response('Too many connections from this network.', { status: 429 });
 
@@ -357,6 +388,23 @@ export class GameHub extends DurableObject {
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ id: crypto.randomUUID(), roomCode, create, role: null, playerId: '', ipHash });
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Sockets that never joined go first, then the newest watcher.
+  evictionCandidate(sockets) {
+    const roleOf = (ws) => (ws.deserializeAttachment() || {}).role || null;
+    return sockets.find((ws) => !roleOf(ws)) || [...sockets].reverse().find((ws) => roleOf(ws) === 'spectator') || null;
+  }
+
+  async evict(ws) {
+    const id = (ws.deserializeAttachment() || {}).id;
+    if (id) this.evicted.add(id);
+    try {
+      ws.close(1013, 'The room is full and a player needed the space.');
+    } catch {
+      // already closed
+    }
+    await this.handleDisconnect(ws);
   }
 
   isRateLimited(connId) {
@@ -438,6 +486,7 @@ export class GameHub extends DurableObject {
 
   async webSocketClose(ws, code) {
     await this.handleDisconnect(ws);
+    this.evicted.delete((ws.deserializeAttachment() || {}).id);
     try {
       ws.close(code === 1005 || code === 1006 ? 1000 : code, 'closed');
     } catch {

@@ -61,6 +61,8 @@
       rated: Boolean(options.rated),
       control: options.control || null,
       reservedSeats: options.reservedSeats ? { ...options.reservedSeats } : null,
+      // Lobby games: the networks each player has used, by player id. Server-only, never in a view.
+      seatNetworks: options.seatNetworks ? { ...options.seatNetworks } : {},
       clockSpec: spec ? { ...spec } : null,
       clock: spec ? {
         baseMs: spec.baseMs,
@@ -278,13 +280,135 @@
         nickname: cleanNickname(seat && seat.nickname, color === 'w' ? 'White' : 'Black'),
         rating: Number.isFinite(Number(seat && seat.rating)) ? Number(seat.rating) : null,
         ticket: String((seat && seat.ticket) || ''),
+        // The lobby session the seat was matched from (server-side only, never in a view).
+        session: String((seat && seat.session) || '').slice(0, 128),
+        revoked: false,
         joined: false,
       };
     }
     state.reservedSeats = reserved;
     state.reservedAt = now;
-    state.spectatorView = 'fog';
+    // Anyone may watch a lobby game, and every watcher sees the whole board: players are trusted.
+    state.spectatorView = 'open';
+    // The lobby registered game 1 when it made the match; only rematches announce themselves.
+    state.activeGameKey = lobbyGameKey(state);
+    // DISABLED: the same-network watcher rule (see spectatorPerspective). Uncomment to collect the
+    // networks it needs; also uncomment the two call sites in room-session.js.
+    // state.seatNetworks = {};
+    // for (const seat of seats) {
+    //   if (seat && seat.playerId) noteSeatNetwork(state, String(seat.playerId), seat.ipHash);
+    // }
     return state;
+  }
+
+  function isLobbyRoom(state) {
+    return reservedSeatsValid(state);
+  }
+
+  function usableNetwork(ipHash) {
+    return typeof ipHash === 'string' && ipHash !== '' && ipHash !== 'unknown';
+  }
+
+  // Remembers every network a lobby player has played from during this room's life.
+  // Only used by the disabled spectatorPerspective rule.
+  function noteSeatNetwork(state, playerId, ipHash) {
+    if (!usableNetwork(ipHash) || !playerId) return;
+    if (!state.seatNetworks) state.seatNetworks = {};
+    const list = state.seatNetworks[playerId] || [];
+    if (list.includes(ipHash)) return;
+    state.seatNetworks[playerId] = [...list, String(ipHash).slice(0, 64)].slice(-8);
+  }
+
+  // DISABLED (not called): players are trusted, so every watcher sees the full board. Kept for a
+  // possible return: in a ranked game it limits a watcher on a network either player has used to
+  // that player's view. Returns 'w', 'b' or null. Enabling it takes the commented-out lines in
+  // applyReservation above and in room-session.js (viewerOf, joinReservedRoom).
+  function spectatorPerspective(state, ipHash) {
+    if (!state.rated || !usableNetwork(ipHash) || !state.seatNetworks) return null;
+    for (const [playerId, networks] of Object.entries(state.seatNetworks)) {
+      if (!Array.isArray(networks) || !networks.includes(ipHash)) continue;
+      const player = getPlayer(state, playerId);
+      if (player) return player.color;
+      const seat = ['w', 'b'].map((color) => state.reservedSeats && state.reservedSeats[color]).find((item) => item && item.playerId === playerId);
+      if (seat) return seat.color;
+    }
+    return null;
+  }
+
+  // --- Messages from a lobby room to the lobby (both transports send these) ---------
+
+  function lobbyGameKey(state) {
+    return `${state.roomCode}:${state.gameId}`;
+  }
+
+  // "This game started": a rematch goes back on the live list, and a ranked one blocks queueing.
+  function lobbyActiveMessage(state) {
+    return {
+      roomCode: state.roomCode,
+      gameKey: lobbyGameKey(state),
+      rated: Boolean(state.rated),
+      control: state.control,
+      players: playerIdentities(state),
+    };
+  }
+
+  // "This game ended": the result and the moves, once per game.
+  function lobbyReportMessage(state) {
+    return {
+      ...lobbyActiveMessage(state),
+      winner: state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null,
+      result: state.result,
+      record: gameRecord(state),
+      finishedAt: Date.now(),
+    };
+  }
+
+  // The finished game as the lobby stores it: compact plies, see lobby-logic cleanPlies().
+  function gameRecord(state) {
+    const name = (pos) => (pos ? core.squareName(pos) : '');
+    return {
+      startedAt: (state.clock && state.clock.startedAt) || state.reservedAt || state.createdAt || 0,
+      plies: state.log.map((ply) => [
+        name(ply.from),
+        name(ply.to),
+        ply.forfeit ? '--' : ply.san || '',
+        ply.promotion || '',
+        ply.capture ? ply.capture.square || name(ply.capture) : '',
+        ply.forfeit ? 1 : 0,
+      ]),
+    };
+  }
+
+  // The inverse of gameRecord's plies, in the shape views use for moves (the client's replays).
+  function movesFromPlies(plies) {
+    return (plies || []).map(([from, to, san, promotion, capture, forfeit], index) => ({
+      ply: index + 1,
+      color: index % 2 ? 'b' : 'w',
+      forfeit: Boolean(forfeit),
+      capture: capture ? { square: capture, ...core.squareFromName(capture) } : null,
+      san: forfeit ? '--' : san,
+      from: core.squareFromName(from),
+      to: core.squareFromName(to),
+      promotion: promotion || null,
+    }));
+  }
+
+  // The player signed those sessions out: their seats stop accepting the ticket or a resume token.
+  // Returns the ids of the players whose seats were revoked.
+  function revokeSeatSessions(state, sessions) {
+    const list = Array.isArray(sessions) ? sessions.filter((item) => typeof item === 'string' && item) : [];
+    const revoked = [];
+    if (!state.reservedSeats || !list.length) return revoked;
+    for (const color of ['w', 'b']) {
+      const seat = state.reservedSeats[color];
+      if (!seat || seat.revoked || !seat.session || !list.includes(seat.session)) continue;
+      seat.revoked = true;
+      seat.ticket = '';
+      const player = getPlayer(state, seat.playerId);
+      if (player) player.resumeToken = '';
+      revoked.push(seat.playerId);
+    }
+    return revoked;
   }
 
   function reservedSeatsValid(state) {
@@ -434,10 +558,10 @@
     touchState(state);
     if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
     if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
-    // A rated rematch needs both players present, and the finished result fully recorded:
-    // nobody should be handed a loss while away, and no game may go unrated by accident.
-    if (state.rated && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
-    if (state.rated && state.gameOver && !state.reported) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    // A lobby rematch needs both players present, and the finished game fully recorded first:
+    // nobody should be handed a loss while away, and no result may land on the next game.
+    if (isLobbyRoom(state) && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    if (isLobbyRoom(state) && state.gameOver && !state.reported) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
 
     const swapColors = state.gameOver;
     resetGame(state, { swapColors });
@@ -698,17 +822,20 @@
   }
 
   // What one member is allowed to know. viewer: { role: 'player' | 'spectator', color }.
+  // viewer.perspective ('w' | 'b') makes a spectator see exactly what that player sees.
   function createView(state, viewer = {}) {
     const role = viewer.role === 'player' ? 'player' : 'spectator';
-    const color = role === 'player' && (viewer.color === 'w' || viewer.color === 'b') ? viewer.color : null;
-    const reveal = state.gameOver || (role === 'spectator' && state.spectatorView === 'open');
+    const perspective = role === 'spectator' && (viewer.perspective === 'w' || viewer.perspective === 'b') ? viewer.perspective : null;
+    const seatColor = role === 'player' && (viewer.color === 'w' || viewer.color === 'b') ? viewer.color : null;
+    const color = seatColor || perspective;
+    const reveal = state.gameOver || (role === 'spectator' && !perspective && state.spectatorView === 'open');
     const inCheck = !state.gameOver && core.isInCheck(state.board, state.turn);
 
     return {
       roomCode: state.roomCode,
       gameId: state.gameId,
       boardVersion: state.boardVersion,
-      you: { role, color },
+      you: { role, color: seatColor, perspective },
       revealed: reveal,
       turn: state.turn,
       board: reveal ? core.cloneBoard(state.board) : redactBoard(state.board, color),
@@ -730,6 +857,8 @@
       reserved: Boolean(state.reservedSeats),
       control: state.control || null,
       ratings: state.ratingUpdates || null,
+      // The lobby's id for this finished game, once it is recorded: /?game=<id> replays it.
+      recordId: state.recordId || null,
       clock: state.clock ? {
         control: state.control || '',
         baseMs: state.clock.baseMs,
@@ -834,6 +963,15 @@
     assignPlayer,
     assignSpectator,
     applyReservation,
+    isLobbyRoom,
+    noteSeatNetwork,
+    spectatorPerspective,
+    revokeSeatSessions,
+    lobbyGameKey,
+    lobbyActiveMessage,
+    lobbyReportMessage,
+    movesFromPlies,
+    gameRecord,
     reservedSeatsValid,
     findReservedSeat,
     assignReservedPlayer,

@@ -9,7 +9,7 @@
 
   // Message handling for one room, shared by the Node server and the Durable Object.
   //
-  // A conn is the transport's per-socket record: { id, role, playerId, roomCode }.
+  // A conn is the transport's per-socket record: { id, role, playerId, roomCode, ipHash }.
   // hooks = {
   //   connections(): conns attached to this room,
   //   send(conn, message), close(conn, code, reason),
@@ -23,7 +23,11 @@
   }
 
   function viewerOf(state, conn) {
-    if (conn.role !== 'player') return { role: 'spectator', color: null };
+    if (conn.role !== 'player') {
+      // DISABLED: the same-network watcher rule. Every spectator gets the room's spectator view.
+      // return { role: 'spectator', color: null, perspective: rl.spectatorPerspective(state, conn.ipHash) };
+      return { role: 'spectator', color: null };
+    }
     const player = rl.getPlayer(state, conn.playerId);
     return { role: 'player', color: player ? player.color : null };
   }
@@ -35,9 +39,15 @@
     }));
   }
 
+  // Members who see the same thing (every watcher of a lobby game, say) share one view.
   function broadcastViews(state, hooks, skipConnId = null) {
+    const views = new Map();
     for (const conn of hooks.connections()) {
-      if (conn.id !== skipConnId && isMember(state, conn)) sendView(state, hooks, conn);
+      if (conn.id === skipConnId || !isMember(state, conn)) continue;
+      const viewer = viewerOf(state, conn);
+      const key = `${viewer.role}:${viewer.color}:${viewer.perspective || ''}`;
+      if (!views.has(key)) views.set(key, rl.createView(state, viewer));
+      hooks.send(conn, createMessage(TYPES.GAME_STATE, state.roomCode, conn.playerId || '', { game: views.get(key) }));
     }
   }
 
@@ -104,13 +114,10 @@
     return null;
   }
 
-  // Lobby-arranged rooms: no spectators, and a seat needs the ticket the lobby handed out.
+  // Lobby-arranged rooms: anyone may watch, but a seat needs the ticket the lobby handed out.
   function joinReservedRoom(state, hooks, conn, envelope) {
     const payload = envelope.payload || {};
-    if (payload.spectator) {
-      sendError(state, hooks, conn, ERROR_CODES.SPECTATOR_DISABLED, 'Rated games are private: no spectators.');
-      return false;
-    }
+    if (payload.spectator) return joinAsSpectator(state, hooks, conn, payload);
     if (!rl.reservedSeatsValid(state)) {
       sendError(state, hooks, conn, ERROR_CODES.PLAYER_NOT_FOUND, 'This ranked game is no longer available.');
       return false;
@@ -118,6 +125,7 @@
 
     const ticket = typeof payload.ticket === 'string' ? payload.ticket.trim() : '';
     let seat = rl.findReservedSeat(state, ticket);
+    const viaTicket = Boolean(seat);
 
     if (!seat) {
       const requestedId = typeof envelope.playerId === 'string' ? envelope.playerId.trim() : '';
@@ -131,7 +139,13 @@
         sendError(state, hooks, conn, ERROR_CODES.PLAYER_NOT_FOUND, 'That seat is not part of this game.');
         return false;
       }
-    } else {
+    }
+    // Revocation clears the ticket and resume token already; this keeps any path from re-seating it.
+    if (seat.revoked) {
+      sendError(state, hooks, conn, ERROR_CODES.TICKET_INVALID, 'This device was signed out of the account.');
+      return false;
+    }
+    if (viaTicket) {
       // A second tab with the same ticket replaces the first one instead of taking a new seat.
       for (const other of hooks.connections()) {
         if (other.id !== conn.id && other.role === 'player' && other.playerId === seat.playerId) {
@@ -150,6 +164,8 @@
       sendError(state, hooks, conn, assigned.reason, 'Could not take that seat.');
       return false;
     }
+    // DISABLED with the same-network watcher rule (see rl.spectatorPerspective).
+    // rl.noteSeatNetwork(state, assigned.player.id, conn.ipHash);
 
     seatConn(state, hooks, conn, assigned.player);
     hooks.send(conn, createMessage(TYPES.ROOM_JOINED, state.roomCode, conn.playerId, identityPayload(state, assigned.player)));
@@ -269,6 +285,23 @@
     return true;
   }
 
+  // The lobby says these sessions were signed out: their seats are revoked and their game sockets
+  // closed (code 4001). Returns true when room state changed.
+  function revokeSessions(state, hooks, sessions) {
+    const playerIds = rl.revokeSeatSessions(state, sessions);
+    if (!playerIds.length) return false;
+    for (const conn of hooks.connections()) {
+      if (conn.role !== 'player' || !playerIds.includes(conn.playerId)) continue;
+      rl.removePlayer(state, conn.playerId);
+      conn.role = null;
+      conn.playerId = '';
+      hooks.save(conn);
+      hooks.close(conn, 4001, 'Signed out.');
+    }
+    broadcastViews(state, hooks);
+    return true;
+  }
+
   // Returns true when room state changed.
   function handleClose(state, hooks, conn) {
     if (conn.role === 'spectator') {
@@ -292,6 +325,7 @@
     joinRoom,
     handleMessage,
     handleClose,
+    revokeSessions,
     broadcastViews,
   };
 

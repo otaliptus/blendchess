@@ -184,7 +184,13 @@
     reconnectTimer: null,
     reconnectAttempts: 0,
     leaderboard: null,
+    live: null,
+    refreshTimer: null,
   };
+
+  // The signed-in account as /api/me describes it, and where the profile panel returns to.
+  const account = { me: null, busy: false, notice: '' };
+  const profileState = { name: '', returnTo: 'menuLobby', data: null };
 
   const CONTROL_LABELS = { '5+3': 'BLITZ 5+3', '10+0': 'RAPID 10+0' };
   const controlLabel = (id) => CONTROL_LABELS[id] || id || 'RANKED';
@@ -222,7 +228,7 @@
     INVALID_PAYLOAD: 'The server did not understand that.',
     WRONG_COLOR: "You can't do that right now.",
     INVALID_DRAW_CLAIM: 'No draw available.',
-    SPECTATOR_DISABLED: 'Rated games are private: no spectators.',
+    SPECTATOR_DISABLED: 'This game does not take spectators.',
     TICKET_INVALID: 'That seat is not yours.',
     ALREADY_IN_GAME: 'Finish your current game first.',
     QUEUE_FULL: 'The lobby is full right now. Try again in a minute.',
@@ -318,7 +324,7 @@
   // Menu
   // ---------------------------------------------------------------------------
 
-  const MENU_PANELS = ['menuMain', 'menuLobby', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
+  const MENU_PANELS = ['menuMain', 'menuLobby', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
   let setupMode = 'local';
 
   function showScreen(name) {
@@ -328,6 +334,7 @@
 
   function showMenuPanel(panel) {
     if (panel !== 'menuLobby') leaveLobbyPanel();
+    if (panel !== 'menuProfile' && new URLSearchParams(window.location.search).has('p')) setUrl({});
     showScreen('menu');
     $('pressStart').classList.toggle('hidden', panel !== 'title');
     $('logoBoard').classList.toggle('hidden', panel !== 'title' && panel !== 'menuMain');
@@ -436,8 +443,14 @@
     return null;
   }
 
+  // A spectator on the same network as a ranked player sees exactly that player's side.
+  function spectatorPerspective() {
+    const view = app.view;
+    return app.mode === 'online' && view && view.you && view.you.role === 'spectator' ? view.you.perspective || null : null;
+  }
+
   function bottomColor() {
-    return myColor() || 'w';
+    return myColor() || spectatorPerspective() || 'w';
   }
 
   function displayBoard() {
@@ -476,7 +489,7 @@
   function renderBoard() {
     const view = app.view;
     const board = displayBoard();
-    const mine = myColor();
+    const mine = myColor() || spectatorPerspective();
     const flipped = bottomColor() === 'b';
     const revealed = Boolean(app.replay) || Boolean(view && view.revealed);
     const fogAll = view && !revealed && !mine; // fog spectators
@@ -928,6 +941,12 @@
     const key = `${app.mode}:${view.roomCode}:${view.gameId}`;
     archiveGame(view, key);
     $('gameOverRating').textContent = ratingChangeText(view);
+    // The lobby's record id arrives in a later view than the result itself.
+    const share = $('gameOverButtons').querySelector('[data-share]');
+    if (app.gameOverShown === key && share && view.recordId) {
+      share.dataset.share = view.recordId;
+      share.hidden = false;
+    }
     if (app.gameOverShown === key || app.mode === 'archive') return;
     app.gameOverShown = key;
     const viewer = app.mode === 'online' && view.you.role === 'player' ? view.you.color : null;
@@ -973,6 +992,17 @@
       }
       if (app.mode === 'online' && (view.rated || view.reserved) && view.you.role === 'player') {
         buttons.push(el('button', { class: 'px-btn', type: 'button', text: 'NEW OPPONENT', onclick: () => { $('gameOver').classList.add('hidden'); playAgain(); } }));
+      }
+      if (app.mode === 'online') {
+        const latest = app.view && app.view.gameId === view.gameId ? app.view : view;
+        buttons.splice(3, 0, el('button', {
+          class: 'px-btn',
+          type: 'button',
+          text: 'SHARE REPLAY',
+          hidden: !latest.recordId,
+          dataset: { share: latest.recordId || '' },
+          onclick: (event) => copyLink({ game: event.currentTarget.dataset.share }, 'Replay link copied!'),
+        }));
       }
       $('gameOverButtons').replaceChildren(...buttons);
       $('gameOver').classList.remove('hidden');
@@ -1081,12 +1111,19 @@
   // Ranked lobby: identity, queue, matchmaking, leaderboard
   // ---------------------------------------------------------------------------
 
+  // A sign-in token only ever goes to the server that issued it. The ?ws= link parameter can point
+  // the client at any server, so each server gets its own identity slot, and the main server's token
+  // is never sent anywhere else.
+  function identityKey() {
+    return settings.serverUrl === DEFAULT_SERVER_URL ? STORAGE.identity : `${STORAGE.identity}@${settings.serverUrl}`;
+  }
+
   function saveIdentity(data) {
-    save(STORAGE.identity, data);
+    save(identityKey(), data);
   }
 
   function loadIdentity() {
-    const saved = load(STORAGE.identity, null);
+    const saved = load(identityKey(), null);
     return saved && typeof saved.token === 'string' && saved.token ? saved : null;
   }
 
@@ -1113,9 +1150,11 @@
     if (!panel) return;
     const player = lobbyState.player;
     $('lobbyIdentity').textContent = player
-      ? `${player.name} · ${player.rating}${player.provisional ? ' · provisional' : ''} · ${player.wins}W ${player.losses}L ${player.draws}D`
+      ? `${player.name} · ${player.rating}${player.provisional ? ' · provisional' : ''} · ${player.wins}W ${player.losses}L ${player.draws}D${player.secured ? ' · secured' : ' · guest'}`
       : 'RANKED: play your first game to get a rating.';
     $('lobbyIdentity').dataset.tone = player ? 'ready' : '';
+    $('secureHint').classList.toggle('hidden', !player || player.secured);
+    $('myProfileBtn').disabled = !player;
     $('lobbyStatus').textContent = lobbyStatusText();
     const queued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
     $('lobbyFind').classList.toggle('hidden', queued);
@@ -1158,9 +1197,14 @@
       }
       onLobbyMessage(message);
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (ws !== lobbyState.ws) return;
       lobbyState.ws = null;
+      if (event && event.code === 4001) {
+        // This device's session was ended from another device.
+        forgetAccount();
+        toast('This device was signed out.', 'bad');
+      }
       const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
       lobbyState.status = 'off';
       renderLobby();
@@ -1209,11 +1253,23 @@
     showMenuPanel('menuLobby');
     renderLobby();
     openLobbySocket();
+    refreshLobbyLists();
+    // Only the live list changes on its own; the leaderboard refreshes after your games and on demand.
+    // Once a minute keeps an open lobby tab cheap for the single lobby object on the free plan.
+    clearInterval(lobbyState.refreshTimer);
+    lobbyState.refreshTimer = setInterval(() => {
+      if (!document.hidden && !$('menuLobby').classList.contains('hidden')) fetchLive();
+    }, 60_000);
+  }
+
+  function refreshLobbyLists() {
     fetchLeaderboard();
+    fetchLive();
   }
 
   // Leaving the panel gives up the queue: nothing should happen while the player is not looking.
   function leaveLobbyPanel() {
+    clearInterval(lobbyState.refreshTimer);
     if (lobbyState.status === 'queued' || lobbyState.status === 'queued-pending') lobbySend(TYPES.LOBBY_CANCEL, {});
     lobbyState.findWanted = false;
     lobbyState.resumeQueue = null;
@@ -1268,14 +1324,44 @@
   }
 
   async function fetchLeaderboard() {
-    try {
-      const response = await fetch(`${httpServerUrl()}/leaderboard?limit=20`, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`status ${response.status}`);
-      lobbyState.leaderboard = await response.json();
-      renderLeaderboard();
-    } catch {
-      // offline or an old server without a leaderboard: leave what is on screen
+    const result = await api('/api/leaderboard?limit=20');
+    // offline or an old server: leave what is on screen
+    if (!result.ok) return;
+    lobbyState.leaderboard = result.data;
+    renderLeaderboard();
+  }
+
+  async function fetchLive() {
+    const result = await api('/api/live');
+    if (!result.ok) return;
+    lobbyState.live = result.data.games || [];
+    renderLive();
+  }
+
+  function profileLink(name, label = name, extraClass = '') {
+    return el('button', {
+      class: `link-btn ${extraClass}`.trim(),
+      type: 'button',
+      text: label,
+      onclick: () => openProfile(name, 'menuLobby'),
+    });
+  }
+
+  function renderLive() {
+    const list = $('liveList');
+    const games = lobbyState.live;
+    if (!games) return;
+    if (!games.length) {
+      list.replaceChildren(el('li', { class: 'empty-note', text: 'No games in progress. Start one!' }));
+      return;
     }
+    list.replaceChildren(...games.slice(0, 8).map((game) => el('li', { class: 'live-row' },
+      el('span', { class: 'live-players' },
+        profileLink(game.white.name, `${game.white.name} (${game.white.rating})`),
+        el('span', { class: 'live-vs', text: 'vs' }),
+        profileLink(game.black.name, `${game.black.name} (${game.black.rating})`)),
+      el('span', { class: 'live-meta', text: `${controlLabel(game.control)}${game.rated ? '' : ' · practice'}` }),
+      el('button', { class: 'px-btn small', type: 'button', text: 'WATCH', onclick: () => watchRoom(game.roomCode) }))));
   }
 
   function renderLeaderboard() {
@@ -1290,10 +1376,13 @@
     const mine = lobbyState.player && lobbyState.player.id;
     list.replaceChildren(...data.players.map((player, index) => el('li', { class: `leaderboard-row${player.id === mine ? ' me' : ''}` },
       el('span', { class: 'lb-rank', text: `${index + 1}.` }),
-      el('span', { class: 'lb-name', text: `${player.name}${player.provisional ? ' *' : ''}` }),
-      el('span', { class: 'lb-games', text: `${player.games}g` }),
+      profileLink(player.name, `${player.name}${player.provisional ? ' *' : ''}`, 'lb-name'),
+      el('span', { class: 'lb-games', text: `${player.wins}W ${player.losses}L ${player.draws}D` }),
+      player.live
+        ? el('button', { class: 'lb-live', type: 'button', text: 'LIVE', title: `Watch ${player.name} play`, onclick: () => watchRoom(player.live) })
+        : el('span', { class: 'lb-live-empty' }),
       el('span', { class: 'lb-rating', text: String(player.rating) }))));
-    $('leaderboardMeta').textContent = `${data.total} ranked player${data.total === 1 ? '' : 's'} · * provisional`;
+    $('leaderboardMeta').textContent = `${data.total} rated player${data.total === 1 ? '' : 's'} · secured accounts are listed · * provisional`;
   }
 
   function onLobbyMessage(message) {
@@ -1358,7 +1447,7 @@
     }
     if (message.type === TYPES.LOBBY_ERROR) {
       toast(REASON_TEXT[payload.errorCode] || payload.message || 'Lobby error.', 'bad');
-      if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) remove(STORAGE.identity);
+      if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) forgetAccount();
       lobbyState.findWanted = false;
       lobbyState.status = lobbyState.player ? 'ready' : 'off';
       lobbyState.queued = null;
@@ -1382,6 +1471,540 @@
     joinRoom(payload.roomCode, { nickname: settings.nickname, ticket: payload.ticket });
     net.role = 'player';
     setNetStatus('connecting');
+  }
+
+  // ---------------------------------------------------------------------------
+  // HTTP API, links, profiles, accounts, watching
+  // ---------------------------------------------------------------------------
+
+  async function api(path, { method = 'GET', body, auth = false } = {}) {
+    const headers = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (auth) {
+      const identity = loadIdentity();
+      if (identity) headers.Authorization = `Bearer ${identity.token}`;
+    }
+    let response;
+    try {
+      response = await fetch(`${httpServerUrl()}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        // Public reads may come from the browser cache for the few seconds the server allows.
+        cache: auth ? 'no-store' : 'default',
+      });
+    } catch {
+      return { ok: false, status: 0, data: { message: 'Server unreachable.' } };
+    }
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      // empty or non-JSON body
+    }
+    return { ok: response.ok, status: response.status, data };
+  }
+
+  // A link to this page with these parameters (empty ones dropped). A non-default server travels
+  // along as ?ws=, so the link works for whoever opens it.
+  function linkTo(params = {}) {
+    const url = new URL(window.location.href);
+    url.search = '';
+    url.hash = '';
+    const entries = Object.entries(params).filter(([, value]) => value);
+    for (const [key, value] of entries) url.searchParams.set(key, value);
+    if (entries.length && settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
+    return url.toString();
+  }
+
+  function setUrl(params = {}) {
+    window.history.replaceState(null, '', linkTo(params));
+  }
+
+  async function copyText(text, message, promptLabel = 'Copy this link:') {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(message);
+      sfx.play('select');
+    } catch {
+      window.prompt(promptLabel, text);
+    }
+  }
+
+  function copyLink(params, message) {
+    return copyText(linkTo(params), message);
+  }
+
+  function shortDate(at) {
+    if (!at) return '';
+    return new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  // --- Watching and replays -----------------------------------------------------
+
+  function watchRoom(code) {
+    const roomCode = protocol.normalizeRoomCode(code);
+    if (roomCode.length !== protocol.ROOM_CODE_LENGTH) return;
+    sfx.play('click');
+    leaveLobbyPanel();
+    joinRoom(roomCode, { spectator: true, nickname: settings.nickname || 'Spectator' });
+  }
+
+  // A finished lobby game from the server, opened in the archive viewer.
+  async function openServerGame(id) {
+    const result = await api(`/api/games/${encodeURIComponent(id)}`);
+    if (!result.ok || !result.data.game) {
+      toast(result.status === 404 ? 'That game was not found.' : 'Could not load the game.', 'bad');
+      return false;
+    }
+    const game = result.data.game;
+    leaveLobbyPanel();
+    openArchived({
+      recordId: game.id,
+      white: game.white.name,
+      black: game.black.name,
+      winner: game.winner ? colorName(game.winner) : null,
+      result: game.result,
+      hardMode: false,
+      moves: rl.movesFromPlies(game.plies),
+      at: game.endedAt,
+      mode: 'online',
+    });
+    return true;
+  }
+
+  // --- Profiles -----------------------------------------------------------------
+
+  async function openProfile(name, from = 'menuLobby') {
+    const clean = String(name || '').trim();
+    if (!clean) return;
+    sfx.play('click');
+    profileState.name = clean;
+    profileState.returnTo = from;
+    profileState.data = null;
+    showMenuPanel('menuProfile');
+    setUrl({ p: clean });
+    renderProfile();
+    const result = await api(`/api/players/${encodeURIComponent(clean)}`);
+    if (profileState.name !== clean) return;
+    if (!result.ok) {
+      $('profileGames').replaceChildren(el('li', {
+        class: 'empty-note',
+        text: result.status === 404 ? 'No player by that name.' : 'Could not load this profile.',
+      }));
+      return;
+    }
+    profileState.data = result.data;
+    renderProfile();
+  }
+
+  const OUTCOME_TEXT = { win: 'WON', loss: 'LOST', draw: 'DRAW' };
+
+  function renderProfile() {
+    const data = profileState.data;
+    const player = data && data.player;
+    $('profileName').textContent = (player ? player.name : profileState.name).toUpperCase();
+    const mine = player && lobbyState.player && lobbyState.player.id === player.id;
+    $('profileBadges').replaceChildren(...(player ? [
+      el('span', { class: `badge ${player.secured ? 'good' : ''}`, text: player.secured ? 'SECURED' : 'GUEST' }),
+      player.provisional ? el('span', { class: 'badge', text: 'PROVISIONAL' }) : null,
+      mine ? el('span', { class: 'badge accent', text: 'YOU' }) : null,
+    ] : []).filter(Boolean));
+    const stats = player ? [
+      ['RATING', String(player.rating)],
+      ['PEAK', String(player.peak)],
+      ['GAMES', String(player.games)],
+      ['RECORD', `${player.wins}W ${player.losses}L ${player.draws}D`],
+      ['JOINED', shortDate(player.createdAt) || '-'],
+    ] : [];
+    $('profileStats').replaceChildren(...stats.flatMap(([label, value]) => [el('dt', { text: label }), el('dd', { text: value })]));
+
+    const live = data && data.live;
+    $('profileLive').classList.toggle('hidden', !live);
+    if (live) {
+      const opponent = live.color === 'w' ? live.black : live.white;
+      $('profileLive').replaceChildren(
+        el('span', { class: 'live-dot', 'aria-hidden': 'true' }),
+        el('span', { text: `Playing now against ${opponent.name} (${opponent.rating}) · ${controlLabel(live.control)}` }),
+        el('button', { class: 'px-btn small primary', type: 'button', text: 'WATCH', onclick: () => watchRoom(live.roomCode) }),
+      );
+    }
+
+    if (!data) return;
+    if (!data.games.length) {
+      $('profileGames').replaceChildren(el('li', { class: 'empty-note', text: 'No finished games yet.' }));
+      return;
+    }
+    $('profileGames').replaceChildren(...data.games.map((game) => {
+      const delta = game.delta == null ? (game.rated ? '' : 'practice') : game.delta >= 0 ? `+${game.delta}` : String(game.delta);
+      return el('li', {}, el('button', {
+        class: 'game-line',
+        type: 'button',
+        dataset: { outcome: game.outcome },
+        onclick: () => openServerGame(game.id),
+      },
+      el('span', { class: 'game-outcome', text: OUTCOME_TEXT[game.outcome] || '' }),
+      el('span', { class: 'game-opponent', text: `vs ${game.opponent.name} (${game.opponent.rating})` }),
+      el('span', { class: 'game-delta', text: delta }),
+      el('span', { class: 'game-meta', text: `${colorName(game.color)} · ${game.moves} moves · ${controlLabel(game.control)} · ${shortDate(game.endedAt)}` })));
+    }));
+  }
+
+  function leaveProfile() {
+    sfx.play('click');
+    if (profileState.returnTo === 'menuLobby') openLobbyPanel();
+    else showMenuPanel(profileState.returnTo || 'menuMain');
+  }
+
+  // --- Passkeys -----------------------------------------------------------------
+  // Passkeys belong to a domain. They are offered only where they will keep working:
+  // blendchess.com (and www) for real, localhost for development.
+
+  const PASSKEY_HOSTS = ['blendchess.com', 'www.blendchess.com', 'localhost'];
+
+  function passkeysAvailable() {
+    return Boolean(window.isSecureContext && window.PublicKeyCredential && navigator.credentials
+      && typeof navigator.credentials.create === 'function'
+      && PASSKEY_HOSTS.includes(window.location.hostname));
+  }
+
+  function creationOptions(json) {
+    if (typeof PublicKeyCredential.parseCreationOptionsFromJSON === 'function') {
+      return PublicKeyCredential.parseCreationOptionsFromJSON(json);
+    }
+    return {
+      ...json,
+      challenge: protocol.fromBase64Url(json.challenge),
+      user: { ...json.user, id: protocol.fromBase64Url(json.user.id) },
+      excludeCredentials: (json.excludeCredentials || []).map((item) => ({ ...item, id: protocol.fromBase64Url(item.id) })),
+    };
+  }
+
+  function requestOptions(json) {
+    if (typeof PublicKeyCredential.parseRequestOptionsFromJSON === 'function') {
+      return PublicKeyCredential.parseRequestOptionsFromJSON(json);
+    }
+    return {
+      ...json,
+      challenge: protocol.fromBase64Url(json.challenge),
+      allowCredentials: (json.allowCredentials || []).map((item) => ({ ...item, id: protocol.fromBase64Url(item.id) })),
+    };
+  }
+
+  function credentialJson(credential) {
+    if (typeof credential.toJSON === 'function') {
+      try {
+        return credential.toJSON();
+      } catch {
+        // fall through to the manual encoding
+      }
+    }
+    const raw = credential.response;
+    const response = { clientDataJSON: protocol.toBase64Url(raw.clientDataJSON) };
+    if (raw.attestationObject) {
+      response.attestationObject = protocol.toBase64Url(raw.attestationObject);
+      response.transports = typeof raw.getTransports === 'function' ? raw.getTransports() : [];
+    }
+    if (raw.authenticatorData) {
+      response.authenticatorData = protocol.toBase64Url(raw.authenticatorData);
+      response.signature = protocol.toBase64Url(raw.signature);
+      if (raw.userHandle) response.userHandle = protocol.toBase64Url(raw.userHandle);
+    }
+    return {
+      id: credential.id,
+      rawId: protocol.toBase64Url(credential.rawId),
+      type: credential.type,
+      response,
+      clientExtensionResults: typeof credential.getClientExtensionResults === 'function' ? credential.getClientExtensionResults() : {},
+      authenticatorAttachment: credential.authenticatorAttachment || undefined,
+    };
+  }
+
+  // A name for the passkey list, so "Remove" picks the right one.
+  function deviceLabel() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/iPad/.test(ua)) return 'iPad';
+    if (/Android/.test(ua)) return 'Android';
+    if (/Macintosh/.test(ua)) return 'Mac';
+    if (/Windows/.test(ua)) return 'Windows';
+    if (/CrOS/.test(ua)) return 'Chromebook';
+    if (/Linux/.test(ua)) return 'Linux';
+    return 'Passkey';
+  }
+
+  function passkeyError(error, fallback) {
+    // The person closed the prompt: nothing to report.
+    if (error && (error.name === 'NotAllowedError' || error.name === 'AbortError')) return;
+    if (error && error.name === 'InvalidStateError') {
+      toast('This device already has a passkey for this account.', 'bad');
+      return;
+    }
+    toast(fallback, 'bad');
+  }
+
+  // --- Account panel ------------------------------------------------------------
+
+  async function openAccount() {
+    sfx.play('click');
+    account.notice = '';
+    showMenuPanel('menuAccount');
+    renderAccount();
+    await refreshMe();
+  }
+
+  async function refreshMe() {
+    if (!loadIdentity()) {
+      account.me = null;
+      renderAccount();
+      return;
+    }
+    const result = await api('/api/me', { auth: true });
+    if (result.ok) {
+      account.me = result.data;
+      lobbyState.player = result.data.player;
+    } else if (result.status === 401) {
+      forgetAccount('This device was signed out. Sign in again below.');
+    }
+    renderAccount();
+  }
+
+  function setAccountMe(me) {
+    account.me = me;
+    lobbyState.player = me.player;
+    renderAccount();
+  }
+
+  // This browser no longer has an account on this server (signed out, here or from elsewhere).
+  // The next lobby visit starts a new guest.
+  function forgetAccount(notice = '') {
+    remove(identityKey());
+    lobbyState.player = null;
+    account.me = null;
+    account.notice = notice;
+  }
+
+  // POSTs to an account route. On failure it shows the server's message (or `failText`) and
+  // returns null; otherwise the response data.
+  async function accountPost(path, body, failText, { auth = true } = {}) {
+    const result = await api(path, { method: 'POST', body, auth });
+    if (result.ok) return result.data;
+    toast(result.data.message || failText, 'bad');
+    return null;
+  }
+
+  function renderAccount() {
+    const me = account.me;
+    const player = me && me.player;
+    const security = (me && me.security) || { passkeys: [], hasKey: false, sessions: 0 };
+    const available = passkeysAvailable();
+    $('accountSummary').textContent = account.notice || (player
+      ? `${player.name} · ${player.rating} · ${player.secured ? 'secured account' : 'guest: lives only in this browser'}`
+      : 'No account on this device yet. Open PLAY ONLINE to get one, or sign in below.');
+    $('accountSummary').dataset.tone = player && player.secured ? 'ready' : '';
+    $('accountMethods').classList.toggle('hidden', !player);
+    $('accountDevices').classList.toggle('hidden', !player || !player.secured);
+
+    const rows = security.passkeys.map((passkey) => el('li', { class: 'method-row' },
+      el('span', { class: 'method-name', text: `PASSKEY · ${passkey.label}` }),
+      el('span', { class: 'method-meta', text: `added ${shortDate(passkey.createdAt)}${passkey.backedUp ? ' · synced' : ''}` }),
+      el('button', { class: 'px-btn small ghost', type: 'button', text: 'REMOVE', onclick: () => removePasskey(passkey.id) })));
+    if (security.hasKey) {
+      rows.push(el('li', { class: 'method-row' },
+        el('span', { class: 'method-name', text: 'ACCOUNT KEY' }),
+        el('span', { class: 'method-meta', text: `made ${shortDate(security.keyCreatedAt)}` }),
+        el('button', { class: 'px-btn small ghost', type: 'button', text: 'REMOVE', onclick: removeKey })));
+    }
+    if (!rows.length) rows.push(el('li', { class: 'empty-note', text: 'None yet: this account only exists in this browser.' }));
+    $('methodList').replaceChildren(...rows);
+
+    $('addPasskeyBtn').hidden = !available;
+    $('passkeyLoginBtn').hidden = !available;
+    $('makeKeyBtn').textContent = security.hasKey ? 'NEW ACCOUNT KEY' : 'GET ACCOUNT KEY';
+    $('makeKeyBtn').classList.toggle('primary', !available);
+    for (const id of ['addPasskeyBtn', 'makeKeyBtn', 'passkeyLoginBtn', 'keyLoginBtn', 'logoutOthersBtn', 'logoutBtn']) {
+      $(id).disabled = account.busy;
+    }
+    $('sessionsText').textContent = `${security.sessions} device${security.sessions === 1 ? '' : 's'} signed in to this account.`;
+  }
+
+  async function busy(work) {
+    if (account.busy) return;
+    account.busy = true;
+    renderAccount();
+    try {
+      await work();
+    } finally {
+      account.busy = false;
+      renderAccount();
+    }
+  }
+
+  function addPasskey() {
+    return busy(async () => {
+      const start = await accountPost('/api/auth/passkey/register/options', {}, 'Could not start adding a passkey.');
+      if (!start) return;
+      let credential;
+      try {
+        credential = await navigator.credentials.create({ publicKey: creationOptions(start.options) });
+      } catch (error) {
+        passkeyError(error, 'Your device could not create a passkey.');
+        return;
+      }
+      const me = await accountPost('/api/auth/passkey/register/verify', {
+        challengeId: start.challengeId,
+        label: deviceLabel(),
+        response: credentialJson(credential),
+      }, 'The passkey could not be saved.');
+      if (!me) return;
+      setAccountMe(me);
+      sfx.play('select');
+      toast('Passkey added. Your account is secured.');
+    });
+  }
+
+  async function showKeyDialog(key) {
+    for (;;) {
+      const body = el('div', { class: 'key-dialog' },
+        el('p', { text: 'Save this key in your password manager or write it down. Anyone with it can sign in as you, and it will not be shown again.' }),
+        el('p', { class: 'account-key', text: key }));
+      const choice = await dialog({
+        title: 'YOUR ACCOUNT KEY',
+        body,
+        buttons: [
+          { label: 'COPY', value: 'copy' },
+          { label: 'I SAVED IT', kind: 'primary', value: 'done' },
+        ],
+      });
+      if (choice !== 'copy') return;
+      await copyText(key, 'Key copied. Paste it somewhere safe.', 'Copy your account key:');
+    }
+  }
+
+  async function makeKey() {
+    const security = account.me && account.me.security;
+    if (security && security.hasKey && !(await confirmDialog('NEW ACCOUNT KEY?', 'Your current key stops working as soon as the new one is made.', 'MAKE NEW KEY'))) return;
+    let key = '';
+    await busy(async () => {
+      const result = await accountPost('/api/auth/key/create', {}, 'Could not make a key.');
+      if (!result) return;
+      key = result.key;
+      setAccountMe(result);
+    });
+    if (key) await showKeyDialog(key);
+  }
+
+  function lastMethod() {
+    const security = account.me && account.me.security;
+    return security ? security.passkeys.length + (security.hasKey ? 1 : 0) <= 1 : false;
+  }
+
+  const LAST_METHOD_WARNING = ' It is your last sign-in method: the account goes back to living only in this browser, and leaves the leaderboard.';
+
+  async function removePasskey(id) {
+    if (!(await confirmDialog('REMOVE PASSKEY?', `You will not be able to sign in with it any more.${lastMethod() ? LAST_METHOD_WARNING : ''}`, 'REMOVE', 'danger'))) return;
+    await busy(async () => {
+      const me = await accountPost('/api/auth/passkey/remove', { id }, 'Could not remove the passkey.');
+      if (me) setAccountMe(me);
+    });
+  }
+
+  async function removeKey() {
+    if (!(await confirmDialog('REMOVE ACCOUNT KEY?', `The key stops working right away.${lastMethod() ? LAST_METHOD_WARNING : ''}`, 'REMOVE', 'danger'))) return;
+    await busy(async () => {
+      const me = await accountPost('/api/auth/key/remove', {}, 'Could not remove the key.');
+      if (me) setAccountMe(me);
+    });
+  }
+
+  // Signing in replaces this browser's account; an unsecured guest with games would be lost.
+  async function confirmLeaveGuest() {
+    const player = (account.me && account.me.player) || lobbyState.player;
+    if (!player || player.secured || !player.games) return true;
+    return confirmDialog(
+      'LEAVE THIS GUEST?',
+      `This browser's guest ${player.name} (${player.rating}, ${player.games} game${player.games === 1 ? '' : 's'}) is not secured. Signing in to another account leaves it behind for good.`,
+      'SIGN IN',
+      'danger',
+    );
+  }
+
+  async function adoptSession(data) {
+    saveIdentity({ token: data.token, playerId: data.player.id, name: data.player.name });
+    // The lobby renames an account to the nickname it is greeted with: keep them in step.
+    settings.nickname = data.player.name;
+    saveSettings();
+    lobbyState.player = data.player;
+    closeLobbySocket();
+    account.notice = '';
+    await refreshMe();
+    sfx.play('join');
+    toast(`Signed in as ${data.player.name}.`);
+  }
+
+  async function signInWithPasskey() {
+    if (!(await confirmLeaveGuest())) return;
+    await busy(async () => {
+      const start = await accountPost('/api/auth/passkey/login/options', {}, 'Could not start signing in.', { auth: false });
+      if (!start) return;
+      let credential;
+      try {
+        credential = await navigator.credentials.get({ publicKey: requestOptions(start.options) });
+      } catch (error) {
+        passkeyError(error, 'Your device could not use a passkey.');
+        return;
+      }
+      const session = await accountPost('/api/auth/passkey/login/verify', {
+        challengeId: start.challengeId,
+        response: credentialJson(credential),
+      }, 'Sign-in failed.', { auth: false });
+      if (session) await adoptSession(session);
+    });
+  }
+
+  async function signInWithKey() {
+    const key = $('keyLoginInput').value.trim();
+    if (!key) {
+      $('keyLoginInput').focus();
+      return;
+    }
+    if (!(await confirmLeaveGuest())) return;
+    await busy(async () => {
+      const session = await accountPost('/api/auth/key/login', { key }, 'Sign-in failed.', { auth: false });
+      if (!session) return;
+      $('keyLoginInput').value = '';
+      await adoptSession(session);
+    });
+  }
+
+  async function logoutOthers() {
+    if (!(await confirmDialog('SIGN OUT OTHER DEVICES?', 'Every other phone and browser signed in to this account is signed out right away.', 'SIGN OUT'))) return;
+    await busy(async () => {
+      const me = await accountPost('/api/auth/logout-others', {}, 'Could not sign out the other devices.');
+      if (!me) return;
+      setAccountMe(me);
+      toast('Other devices signed out.');
+    });
+  }
+
+  async function logoutHere() {
+    if (!(await confirmDialog('SIGN OUT HERE?', 'You can sign back in with your passkey or account key.', 'SIGN OUT', 'danger'))) return;
+    await busy(async () => {
+      const result = await api('/api/auth/logout', { method: 'POST', body: {}, auth: true });
+      if (!result.ok && result.status !== 401) {
+        toast(result.data.message || 'Could not sign out.', 'bad');
+        return;
+      }
+      forgetAccount('Signed out. Sign in below, or open PLAY ONLINE to start as a new guest.');
+      closeLobbySocket();
+      toast('Signed out.');
+    });
+  }
+
+  // The account panel is only reached from the lobby.
+  function leaveAccount() {
+    sfx.play('click');
+    openLobbyPanel();
   }
 
   // ---------------------------------------------------------------------------
@@ -1427,12 +2050,12 @@
         net.lastMessageAt = Date.now();
         onServerMessage(event.data);
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (ws !== net.ws) return;
         net.ws = null;
         stopHeartbeat();
         if (!opened) reject(new Error('Could not reach the game server.'));
-        onSocketClosed();
+        onSocketClosed(event && event.code);
       };
     });
   }
@@ -1508,20 +2131,11 @@
   }
 
   function setRoomInUrl(code) {
-    const url = new URL(window.location.href);
-    url.search = '';
-    if (code) url.searchParams.set('room', code);
-    if (code && settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
-    window.history.replaceState(null, '', url);
+    setUrl({ room: code });
   }
 
   function inviteUrl() {
-    const url = new URL(window.location.href);
-    url.search = '';
-    url.hash = '';
-    url.searchParams.set('room', net.roomCode);
-    if (settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
-    return url.toString();
+    return linkTo({ room: net.roomCode });
   }
 
   // Always dark-on-light with a quiet zone, whatever the palette: phones need contrast to scan.
@@ -1578,15 +2192,8 @@
     else if (choice === 'share') shareInvite();
   }
 
-  async function copyInvite() {
-    const link = inviteUrl();
-    try {
-      await navigator.clipboard.writeText(link);
-      toast('Invite link copied!');
-      sfx.play('select');
-    } catch {
-      window.prompt('Copy this invite link:', link);
-    }
+  function copyInvite() {
+    return copyText(inviteUrl(), 'Invite link copied!', 'Copy this invite link:');
   }
 
   async function createRoom(options) {
@@ -1623,7 +2230,8 @@
     net.spectatorNickname = nickname;
     net.pendingTicket = ticket || (reconnect ? net.pendingTicket : '');
     try {
-      await openSocket({ room: roomCode });
+      // seat=1 tells a full room that this connection is coming back to a reserved seat.
+      await openSocket(net.pendingTicket ? { room: roomCode, seat: '1' } : { room: roomCode });
     } catch (error) {
       if (!reconnect) toast(error.message, 'bad');
       setNetStatus('offline');
@@ -1646,7 +2254,7 @@
     if (app.mode !== 'online') enterGame('online');
     renderRoomPanel();
     try {
-      await openSocket({ room: session.roomCode });
+      await openSocket({ room: session.roomCode, seat: '1' });
     } catch {
       if (!auto) toast('Server unreachable. Retrying...', 'bad');
       return; // onSocketClosed schedules the retry
@@ -1684,8 +2292,16 @@
     }
   }
 
-  function onSocketClosed() {
+  function onSocketClosed(code) {
     setNetStatus('offline');
+    if (code === 4001) {
+      // The account signed this device out: the seat is gone, so don't try to reconnect.
+      leaveGameScreen();
+      forgetAccount();
+      showMenuPanel('menuMain');
+      toast('This device was signed out of the account.', 'bad');
+      return;
+    }
     if (net.intentionalClose || app.mode !== 'online' || !net.roomCode) return;
     if (net.role === 'player' || net.role === 'spectator') scheduleReconnect();
   }
@@ -1737,7 +2353,7 @@
         sfx.play('join');
         umpireSay(`Room ${net.roomCode} is open. Send the invite link to your opponent.`);
       } else if (payload.role === 'spectator') {
-        umpireSay('You are watching. Spectators see the fog unless the host turned on party mode.');
+        umpireSay('You are watching.');
       } else if (wasResume) {
         umpireSay('Welcome back. Your seat was saved.', 'good');
       }
@@ -1761,6 +2377,14 @@
       app.seenEventId = setView(view, { viewer: view.you.color, seenId: app.seenEventId, quiet });
       if (quiet && !view.gameOver && view.you.role === 'player' && !view.waitingForStart) {
         umpireSay(view.turn === view.you.color ? 'Your move.' : `Waiting for ${playerName(view.turn)}...`);
+      } else if (quiet && !view.gameOver && view.you.role === 'spectator') {
+        if (view.you.perspective) {
+          umpireSay(`You are on the same network as ${playerName(view.you.perspective)}, so you see only their pieces.`, 'warn');
+        } else if (view.revealed) {
+          umpireSay('You see the whole board. The players only see their own pieces.');
+        } else {
+          umpireSay('You are watching in the fog. The host can turn on party mode to show the whole board.');
+        }
       }
       return;
     }
@@ -1808,12 +2432,17 @@
   }
 
   // Leaves a finished lobby game and goes straight back into matchmaking.
-  function playAgain() {
+  // Drops the online game and clears the game screen's state.
+  function leaveGameScreen() {
     leaveOnline();
     app.mode = null;
     app.view = null;
     app.replay = null;
     $('gameOver').classList.add('hidden');
+  }
+
+  function playAgain() {
+    leaveGameScreen();
     lobbyState.findWanted = true;
     openLobbyPanel();
   }
@@ -1984,6 +2613,7 @@
     const positions = buildPositions(entry.moves);
     enterGame('archive');
     app.archiveDate = entry.at;
+    if (entry.recordId) setUrl({ game: entry.recordId });
     app.view = {
       roomCode: 'ARCHIVE',
       gameId: 0,
@@ -2133,6 +2763,15 @@
     return { text: lines.map((line) => line.text).join(' '), tone };
   }
 
+  // What the first banner says before any move, which depends on how much this viewer can see.
+  function openingNote(view) {
+    if (view.you && view.you.role === 'spectator') {
+      if (view.you.perspective) return `You see ${playerName(view.you.perspective)}'s side only.`;
+      if (view.revealed) return 'You see the whole board. The players only see their own pieces.';
+    }
+    return "The other side's pieces are hidden in the fog.";
+  }
+
   function renderTurnBanner() {
     const view = app.view;
     const banner = $('turnBanner');
@@ -2172,7 +2811,7 @@
     banner.dataset.side = side;
     banner.dataset.tone = note.tone || '';
     $('turnWho').textContent = who;
-    $('turnNote').textContent = note.text || (view.moves.length ? '' : "The other side's pieces are hidden in the fog.");
+    $('turnNote').textContent = note.text || (view.moves.length ? '' : openingNote(view));
   }
 
   function renderMoves() {
@@ -2380,8 +3019,25 @@
     });
     $('leaderboardRefresh').addEventListener('click', () => {
       sfx.play('click');
-      fetchLeaderboard();
+      refreshLobbyLists();
     });
+    $('myProfileBtn').addEventListener('click', () => {
+      if (lobbyState.player) openProfile(lobbyState.player.name, 'menuLobby');
+    });
+    $('accountBtn').addEventListener('click', openAccount);
+    $('secureHintBtn').addEventListener('click', openAccount);
+    $('profileBack').addEventListener('click', leaveProfile);
+    $('profileShare').addEventListener('click', () => copyLink({ p: profileState.name }, 'Profile link copied!'));
+    $('accountBack').addEventListener('click', leaveAccount);
+    $('addPasskeyBtn').addEventListener('click', addPasskey);
+    $('makeKeyBtn').addEventListener('click', makeKey);
+    $('passkeyLoginBtn').addEventListener('click', signInWithPasskey);
+    $('keyLoginBtn').addEventListener('click', signInWithKey);
+    $('keyLoginInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') signInWithKey();
+    });
+    $('logoutOthersBtn').addEventListener('click', logoutOthers);
+    $('logoutBtn').addEventListener('click', logoutHere);
     $('lobbyNameInput').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') findGame();
     });
@@ -2568,6 +3224,25 @@
       settings.serverUrl = wsParam;
       applySettings();
     }
+    // Shared links: a replay, a profile, or a game to watch.
+    const gameParam = params.get('game');
+    if (gameParam) {
+      openServerGame(gameParam).then((ok) => {
+        if (!ok) showMenuPanel('title');
+      });
+      return;
+    }
+    const profileParam = params.get('p');
+    if (profileParam) {
+      openProfile(profileParam, 'menuMain');
+      return;
+    }
+    const watchParam = protocol.normalizeRoomCode(params.get('watch'));
+    if (watchParam.length === protocol.ROOM_CODE_LENGTH) {
+      watchRoom(watchParam);
+      return;
+    }
+
     const room = protocol.normalizeRoomCode(params.get('room'));
     const session = load(STORAGE.session, null);
 
