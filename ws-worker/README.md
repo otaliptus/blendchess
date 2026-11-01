@@ -39,9 +39,39 @@ URL format: `https://<worker>.workers.dev` -> `wss://<worker>.workers.dev`. Heal
 3. Optional: give the Worker a route on the domain, e.g. `api.blendchess.com` as a Custom Domain, and point
    `DEFAULT_SERVER_URL` in `app.js` at `wss://api.blendchess.com`. The edge cache for public reads only works
    on a custom domain; on `workers.dev` every read reaches the lobby.
-4. Send `blendchess.pages.dev` visitors to `blendchess.com` (a Bulk Redirect rule). Browser storage is per
-   domain, so guests on the old address keep their account only if they secure it first; passkeys are only
-   offered on `blendchess.com` for the same reason.
+4. If redirecting `blendchess.pages.dev` visitors to `blendchess.com`, first let players save an account key.
+   Browser storage and passkeys belong to their domain. A Pages passkey will not sign in on the custom
+   domain; an account key lets a player sign in there and add a new passkey to the same account.
+
+### Intentional release resets
+
+Ordinary deployments keep data. `DATA_VERSION` in `shared/protocol.js` starts at **1**, which adopts
+existing unversioned storage without deleting it. It is separate from the WebSocket protocol version.
+
+For a deliberate **full reset**, increase `DATA_VERSION` to the next integer in a release commit and
+deploy both the Worker and Pages through the normal workflow. This is destructive: accounts, passkeys'
+server records, account keys, sessions, ratings, histories and active games are erased. Take any desired
+backup first. This does not implement a season-only rating reset.
+
+- Each lobby/room checks its stored version before loading data. An increase deletes its storage and
+  alarm, records the new version, and closes old sockets with code `4002`. Sleeping objects are erased
+  on their next request or alarm, not all at the instant of deployment. Old messages are ignored.
+- The lobby is reset when first accessed; private rooms are reset when visited or when their idle alarm
+  runs. This is an application reset, not a guarantee that every dormant Cloudflare object has already
+  been physically deleted. Retired objects that never wake would need separate administrative cleanup.
+- The browser checks `/api/config` on startup and before opening a connection. Once it sees an increase,
+  it removes that server's identity and saved room. For the default server it also clears local games
+  and its replay archive. Preferences and other servers' accounts remain. Offline browsers clean up
+  when they next connect; copies of exported PGNs and passkeys in password managers remain outside
+  the app's control. Old keys/passkeys no longer sign in after the server reset.
+- Edge and browser cache keys include the data version, so old cached profiles/replays are not reused.
+- **Never decrease the version**, including during a code rollback: carry the latest `DATA_VERSION`
+  into the rollback commit. An older version refuses to open newer stored data, preventing another wipe.
+  Re-deploying the same version preserves accounts and games created after the reset.
+
+No reset is performed by adding this feature or enabling Pages passkeys. To run a future reset, the
+release must explicitly change the version number. Node uses memory-only storage and already starts
+empty on process restart; it exposes the same configuration endpoint for the browser.
 
 ## Notes
 

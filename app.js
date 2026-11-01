@@ -3,10 +3,11 @@
   const protocol = window.BlendChessProtocol;
   const rl = window.BlendChessRoomLogic;
   const guards = window.BlendChessStateGuards;
+  const dataVersion = window.BlendChessDataVersion;
   const sprites = window.BlendChessSprites;
   const sfx = window.BlendChessSfx;
   const fx = window.BlendChessFx;
-  if (!core || !protocol || !rl || !guards || !sprites || !sfx || !fx) {
+  if (!core || !protocol || !rl || !guards || !dataVersion || !sprites || !sfx || !fx) {
     throw new Error('Load chess-core.js, shared/*.js and client/*.js before app.js.');
   }
 
@@ -1131,6 +1132,43 @@
     return settings.serverUrl.replace(/^ws/, 'http').replace(/\/+$/, '');
   }
 
+  const versionRequests = new Map();
+  function syncDataVersion() {
+    const serverUrl = settings.serverUrl;
+    if (versionRequests.has(serverUrl)) return versionRequests.get(serverUrl);
+    const task = (async () => {
+      try {
+        const response = await fetch(`${httpServerUrl()}/api/config`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+        if (!response.ok) return false;
+        const { dataVersion: version } = await response.json();
+        if (settings.serverUrl !== serverUrl) return false;
+        const reset = dataVersion.apply(window.localStorage, {
+          version, serverUrl, defaultServerUrl: DEFAULT_SERVER_URL, identityKey: identityKey(), keys: STORAGE,
+        });
+        if (reset) {
+          forgetAccount();
+          if (serverUrl === DEFAULT_SERVER_URL) local.state = null;
+        }
+        return reset;
+      } catch {
+        // Offline play and older servers remain usable. Retry on the next connection or visit.
+        return false;
+      }
+    })();
+    versionRequests.set(serverUrl, task);
+    task.then(() => versionRequests.delete(serverUrl));
+    return task;
+  }
+
+  function onDataReset() {
+    leaveLobbyPanel();
+    leaveGameScreen();
+    forgetAccount();
+    showMenuPanel('menuMain');
+    toast('Game data was reset. Start again as a new guest.', 'warn');
+    void syncDataVersion();
+  }
+
   function lobbyStatusText() {
     if (lobbyState.status === 'connecting') return 'Connecting to the lobby...';
     if (lobbyState.status === 'off') return lobbyState.player ? 'Lobby offline. Press FIND GAME to reconnect.' : 'Lobby offline. Press FIND GAME to retry.';
@@ -1166,8 +1204,10 @@
     });
   }
 
-  function openLobbySocket() {
+  async function openLobbySocket() {
     if (lobbyState.ws && (lobbyState.ws.readyState === WebSocket.OPEN || lobbyState.ws.readyState === WebSocket.CONNECTING)) return;
+    await syncDataVersion();
+    if ($('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
     clearTimeout(lobbyState.reconnectTimer);
     let ws;
     try {
@@ -1200,6 +1240,10 @@
     ws.onclose = (event) => {
       if (ws !== lobbyState.ws) return;
       lobbyState.ws = null;
+      if (event && event.code === protocol.DATA_RESET_CLOSE_CODE) {
+        onDataReset();
+        return;
+      }
       if (event && event.code === 4001) {
         // This device's session was ended from another device.
         forgetAccount();
@@ -1486,7 +1530,14 @@
     }
     let response;
     try {
-      response = await fetch(`${httpServerUrl()}${path}`, {
+      const url = new URL(`${httpServerUrl()}${path}`);
+      // A reset must also bypass old browser-cached profiles and immutable game records.
+      if (!auth && method === 'GET') {
+        let version = 1;
+        try { version = dataVersion.current(window.localStorage, settings.serverUrl); } catch { /* storage unavailable */ }
+        url.searchParams.set('dataVersion', String(version));
+      }
+      response = await fetch(url, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -1657,10 +1708,10 @@
   }
 
   // --- Passkeys -----------------------------------------------------------------
-  // Passkeys belong to a domain. They are offered only where they will keep working:
-  // blendchess.com (and www) for real, localhost for development.
+  // Each production hostname gets its own passkeys. Account keys can carry an account between
+  // pages.dev and the custom domain, where the player can add another passkey.
 
-  const PASSKEY_HOSTS = ['blendchess.com', 'www.blendchess.com', 'localhost'];
+  const PASSKEY_HOSTS = ['blendchess.com', 'www.blendchess.com', 'blendchess.pages.dev', 'localhost'];
 
   function passkeysAvailable() {
     return Boolean(window.isSecureContext && window.PublicKeyCredential && navigator.credentials
@@ -2025,8 +2076,12 @@
     return url.toString();
   }
 
-  function openSocket(params) {
+  async function openSocket(params) {
     closeSocket();
+    if (await syncDataVersion()) {
+      onDataReset();
+      throw new Error('Game data was reset. Start a new game.');
+    }
     net.intentionalClose = false;
     return new Promise((resolve, reject) => {
       let ws;
@@ -2294,6 +2349,10 @@
 
   function onSocketClosed(code) {
     setNetStatus('offline');
+    if (code === protocol.DATA_RESET_CLOSE_CODE) {
+      onDataReset();
+      return;
+    }
     if (code === 4001) {
       // The account signed this device out: the seat is gone, so don't try to reconnect.
       leaveGameScreen();
@@ -2578,6 +2637,7 @@
       plies: view.moves.length,
       at: Date.now(),
       mode: app.mode,
+      serverUrl: app.mode === 'online' ? settings.serverUrl : null,
       white: playerName('w', view).replace(/ \(White\)$/, ''),
       black: playerName('b', view).replace(/ \(Black\)$/, ''),
       winner: view.winner,
@@ -3208,14 +3268,11 @@
     });
   }
 
-  function boot() {
+  async function boot() {
     applySettings();
     $('umpireFace').src = sprites.umpire('idle');
     initBoard();
     initLogoBoard();
-    wireMenu();
-    wireGame();
-    wireChrome();
     setInterval(updateClocks, 250);
 
     const params = new URLSearchParams(window.location.search);
@@ -3224,6 +3281,10 @@
       settings.serverUrl = wsParam;
       applySettings();
     }
+    await syncDataVersion();
+    wireMenu();
+    wireGame();
+    wireChrome();
     // Shared links: a replay, a profile, or a game to watch.
     const gameParam = params.get('game');
     if (gameParam) {

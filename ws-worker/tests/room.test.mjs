@@ -26,8 +26,9 @@ class MockSocket {
     if (this.closed) throw new Error('closed');
     this.inbox.push(JSON.parse(text));
   }
-  close() {
+  close(code) {
     this.closed = true;
+    this.closeCode = code;
   }
   serializeAttachment(value) {
     this.attachment = structuredClone(value);
@@ -45,7 +46,8 @@ class MockResponse {
   }
 }
 
-async function loadGameHubClass() {
+// Keep the fixtures at v1 so bumping the production version still exercises the v1 -> v2 reset.
+async function loadGameHubClass(dataVersion = 1) {
   const source = await readFile(ROOM_MODULE_PATH, 'utf8');
   const context = vm.createContext({
     console,
@@ -73,7 +75,7 @@ async function loadGameHubClass() {
       }
     },
     Response: MockResponse,
-    BlendChessProtocol: globalThis.BlendChessProtocol,
+    BlendChessProtocol: { ...globalThis.BlendChessProtocol, DATA_VERSION: dataVersion },
     BlendChessRoomLogic: globalThis.BlendChessRoomLogic,
     BlendChessRoomSession: globalThis.BlendChessRoomSession,
   });
@@ -81,6 +83,9 @@ async function loadGameHubClass() {
 
   const module = new vm.SourceTextModule(source, { context, identifier: ROOM_MODULE_PATH });
   await module.link(async (specifier) => {
+    if (specifier === './data-version.js') {
+      return new vm.SourceTextModule(await readFile(new URL('../src/data-version.js', import.meta.url), 'utf8'), { context });
+    }
     if (specifier !== 'cloudflare:workers') throw new Error(`Unhandled import: ${specifier}`);
     return new vm.SyntheticModule(['DurableObject'], function init() {
       this.setExport('DurableObject', class DurableObject {
@@ -96,6 +101,31 @@ async function loadGameHubClass() {
 }
 
 const GameHub = await loadGameHubClass();
+
+test('a release reset closes old game sockets and erases the room before accepting messages', async () => {
+  const { ctx, white, black } = await startGame();
+  const NextGameHub = await loadGameHubClass(2);
+  const nextCtx = createCtx(ctx.storageMap);
+  nextCtx.sockets.push(white.ws, black.ws);
+  nextCtx.storage.alarmAt = Date.now() + 1000;
+  const next = new NextGameHub(nextCtx, {});
+  await nextCtx.ready;
+  assert.equal(next.room, null);
+  assert.equal(nextCtx.storage.alarmAt, null);
+  assert.equal(ctx.storageMap.has('room'), false);
+  assert.equal(ctx.storageMap.get('dataVersion'), 2);
+  assert.equal(white.ws.closeCode, protocol.DATA_RESET_CLOSE_CODE);
+  assert.equal(black.ws.closeCode, protocol.DATA_RESET_CLOSE_CODE);
+  await next.webSocketMessage(white.ws, JSON.stringify(protocol.createMessage('create_room', '', '', {})));
+  assert.equal(next.room, null, 'the old socket cannot recreate the erased room');
+  const host = await open(next, 'FRESH1', true);
+  await host.send('create_room', { nickname: 'NewGuest' });
+  assert.equal(next.room.roomCode, 'FRESH1');
+  const restoredCtx = createCtx(ctx.storageMap);
+  const restored = new NextGameHub(restoredCtx, {});
+  await restoredCtx.ready;
+  assert.equal(restored.room.roomCode, 'FRESH1', 'the same version preserves the new game');
+});
 
 function createCtx(storageMap = new Map()) {
   const sockets = [];
@@ -129,6 +159,9 @@ function createCtx(storageMap = new Map()) {
       },
       async setAlarm(time) {
         this.alarmAt = time;
+      },
+      async deleteAlarm() {
+        this.alarmAt = null;
       },
     },
   };
@@ -199,10 +232,28 @@ test('create needs the create flag, and a taken code answers 409', async () => {
 });
 
 test('joining an empty room code reports UNKNOWN_ROOM', async () => {
-  const { hub } = await createHub();
+  const { hub, ctx } = await createHub();
   const client = await open(hub, 'EMPTY1');
   await client.send('join_room', {});
   assert.equal(client.last('error').payload.errorCode, 'UNKNOWN_ROOM');
+  assert.equal(ctx.storageMap.size, 0, 'unknown room codes must not allocate stored reset markers');
+});
+
+test('a new room after a reset records its version with the room and survives eviction', async () => {
+  const NextGameHub = await loadGameHubClass(2);
+  const ctx = createCtx();
+  const hub = new NextGameHub(ctx, {});
+  await ctx.ready;
+  const missing = await open(hub, 'FRESH1');
+  await missing.send('join_room', {});
+  assert.equal(ctx.storageMap.size, 0);
+  const host = await open(hub, 'FRESH1', true);
+  await host.send('create_room', { nickname: 'AfterReset' });
+  assert.equal(ctx.storageMap.get('room').dataVersion, 2);
+  const restoredCtx = createCtx(ctx.storageMap);
+  const restored = new NextGameHub(restoredCtx, {});
+  await restoredCtx.ready;
+  assert.equal(restored.room.players[restored.room.playerOrder[0]].nickname, 'AfterReset');
 });
 
 test('moves are redacted per viewer and the room is persisted per room', async () => {

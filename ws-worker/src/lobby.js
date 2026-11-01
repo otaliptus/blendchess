@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as webauthn from '@simplewebauthn/server';
+import { prepareStorage, socketIsCurrent } from './data-version.js';
 
 const protocol = globalThis.BlendChessProtocol;
 const logic = globalThis.BlendChessLobbyLogic;
@@ -272,6 +273,7 @@ export class LobbyHub extends DurableObject {
     // never race the same rating update.
     this.internalChain = Promise.resolve();
     ctx.blockConcurrencyWhile(async () => {
+      await prepareStorage(ctx);
       await this.reconcileQueue();
       await this.scheduleAlarm();
     });
@@ -282,7 +284,7 @@ export class LobbyHub extends DurableObject {
   }
 
   liveConns() {
-    return this.ctx.getWebSockets().map((ws) => this.conn(ws)).filter((conn) => !this.closing.has(conn.id));
+    return this.ctx.getWebSockets().filter(socketIsCurrent).map((ws) => this.conn(ws)).filter((conn) => !this.closing.has(conn.id));
   }
 
   hooks() {
@@ -417,7 +419,7 @@ export class LobbyHub extends DurableObject {
     }
 
     const ipHash = request.headers.get('X-IP-Hash') || 'unknown';
-    const sockets = this.ctx.getWebSockets();
+    const sockets = this.ctx.getWebSockets().filter(socketIsCurrent);
     if (sockets.length >= MAX_SOCKETS) return new Response('Lobby is full.', { status: 429 });
     const sameIp = sockets.filter((ws) => {
       const attachment = ws.deserializeAttachment();
@@ -428,7 +430,7 @@ export class LobbyHub extends DurableObject {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ id: crypto.randomUUID(), playerId: '', ipHash, role: 'lobby' });
+    server.serializeAttachment({ id: crypto.randomUUID(), playerId: '', ipHash, role: 'lobby', dataVersion: protocol.DATA_VERSION });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -556,6 +558,7 @@ export class LobbyHub extends DurableObject {
   }
 
   async processMessage(ws, data) {
+    if (!socketIsCurrent(ws)) return;
     const conn = this.conn(ws);
     const hooks = this.hooks();
     const sendError = (code, message) => hooks.send(conn, createError('', conn.playerId || '', code, message));
@@ -585,6 +588,7 @@ export class LobbyHub extends DurableObject {
   }
 
   async handleDisconnect(ws) {
+    if (!socketIsCurrent(ws)) return;
     const conn = this.conn(ws);
     this.closing.add(conn.id);
     this.rates.delete(conn.id);
