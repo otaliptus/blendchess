@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { customAlphabet } from 'nanoid';
 import { WebSocketServer } from 'ws';
-import { protocol, rl, session } from './shared.js';
+import { protocol, rl, session, lobbyLogic, lobbySession } from './shared.js';
 
 const { TYPES, ERROR_CODES, createError, parseEnvelope } = protocol;
 
@@ -11,6 +11,8 @@ const MAX_ROOMS = 10_000;
 const MAX_MESSAGE_BYTES = 16 * 1024;
 const RATE_LIMIT_WINDOW_MS = 1_000;
 const RATE_LIMIT_MAX_MESSAGES = 40;
+const LOBBY_RATE_LIMIT_MAX_MESSAGES = 30;
+const TICK_MS = 500;
 
 const makeRoomCode = customAlphabet(protocol.ROOM_CODE_ALPHABET, protocol.ROOM_CODE_LENGTH);
 const makeConnectionId = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 12);
@@ -18,6 +20,15 @@ const makeResumeToken = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 2
 
 // roomCode -> { state, members: Set<conn> }
 const rooms = new Map();
+// Ranked matchmaking lives in this process; the Worker keeps the same store in its Durable Object.
+const lobbyStore = lobbyLogic.createMemoryStore();
+const lobbyConnections = new Set();
+
+// Loopback addresses are not a shared network: two tabs on the dev machine are different people.
+function networkOf(req) {
+  const address = req.socket.remoteAddress || 'unknown';
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) ? 'unknown' : address;
+}
 
 function send(conn, message) {
   if (conn.ws.readyState === 1) conn.ws.send(JSON.stringify(message));
@@ -41,10 +52,30 @@ function hooksFor(room) {
   };
 }
 
+function lobbyHooks() {
+  return {
+    connections: () => [...lobbyConnections].filter((conn) => conn.ws.readyState === 1),
+    send,
+    close: (conn, code, reason) => {
+      try {
+        conn.ws.close(code, reason);
+      } catch {
+        // already closing
+      }
+    },
+    save: () => {},
+    createRatedRoom,
+    newPlayerLimit: process.env.NEW_PLAYER_LIMIT,
+  };
+}
+
 function pruneRooms() {
   const now = Date.now();
   for (const [code, room] of rooms) {
-    if (room.members.size === 0 && now - room.state.lastActivity > ROOM_TTL_MS) rooms.delete(code);
+    if (room.members.size === 0 && now - room.state.lastActivity > ROOM_TTL_MS) {
+      rooms.delete(code);
+      releaseRated(room).catch((error) => console.error('release failed', error));
+    }
   }
 }
 
@@ -60,6 +91,125 @@ function createRoom() {
   return room;
 }
 
+function playerIdentitiesOf(state) {
+  return rl.playerIdentities(state);
+}
+
+// Called by the lobby when two players are paired: reserve both seats in a fresh room.
+function createRatedRoom(match) {
+  const spec = lobbyLogic.controlOf(match.control);
+  if (!spec) return null;
+  const room = createRoom();
+  if (!room) return null;
+  const tickets = { w: lobbyLogic.makeToken(), b: lobbyLogic.makeToken() };
+  const seats = match.seats.map((seat) => ({ ...seat, ticket: tickets[seat.color] || '' }));
+  if (!seats.every((seat) => seat.ticket)) {
+    rooms.delete(room.state.roomCode);
+    return null;
+  }
+  rl.applyReservation(room.state, {
+    rated: match.rated,
+    control: spec.id,
+    clock: { baseMs: spec.baseMs, incMs: spec.incMs },
+    seats,
+  });
+  return { roomCode: room.state.roomCode, tickets };
+}
+
+// Keeps the lobby's "you are in a game" marker on the current game, including rematches.
+async function registerActive(room) {
+  const state = room.state;
+  if (!state.rated || state.gameOver) return;
+  const gameKey = `${state.roomCode}:${state.gameId}`;
+  if (state.activeGameKey === gameKey) return;
+  state.activeGameKey = gameKey;
+  const result = await lobbySession.registerActive(lobbyStore, { roomCode: state.roomCode, gameKey, players: playerIdentitiesOf(state).map((player) => player.playerId) });
+  if (!result.ok) state.activeGameKey = '';
+}
+
+// After a rated game ends, the room sends the result to the lobby exactly once, then re-broadcasts
+// the views with the rating changes attached.
+async function reportResult(room) {
+  const state = room.state;
+  if (!state.rated || !state.gameOver || state.reported) return false;
+  const players = playerIdentitiesOf(state).map((player) => player.playerId);
+  if (state.noContest) {
+    // Nobody gets rated for an opponent who never arrived; just free both players.
+    if (!state.released) {
+      state.released = true;
+      await lobbySession.release(lobbyStore, { roomCode: state.roomCode, players });
+    }
+    return false;
+  }
+  state.reported = true;
+  const gameKey = `${state.roomCode}:${state.gameId}`;
+  const winner = state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null;
+  const result = await lobbySession.report(lobbyStore, lobbyHooks(), {
+    roomCode: state.roomCode,
+    gameKey,
+    players: playerIdentitiesOf(state),
+    winner,
+    result: state.result,
+    plies: state.log.length,
+    finishedAt: Date.now(),
+  });
+  if (!result.ok) {
+    state.reported = false;
+    return false;
+  }
+  state.ratingUpdates = result.updates;
+  session.broadcastViews(state, hooksFor(room));
+  return true;
+}
+
+async function afterRoomChange(room) {
+  await registerActive(room);
+  await reportResult(room);
+}
+
+async function releaseRated(room) {
+  const state = room.state;
+  if (!state.rated) return;
+  await reportResult(room);
+  const players = playerIdentitiesOf(state).map((player) => player.playerId);
+  if (players.length) await lobbySession.release(lobbyStore, { roomCode: state.roomCode, players });
+}
+
+// Clocks and no-shows: rated games must end even when nobody is sending messages.
+async function tickRatedGames() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    const state = room.state;
+    if (!state.rated || state.gameOver) continue;
+
+    if (state.clock && state.clock.startedAt) {
+      if (rl.clockRemainingMs(state, now) <= 0) {
+        rl.chargeClock(state, now);
+        rl.finishByTimeout(state);
+        session.broadcastViews(state, hooksFor(room));
+        await afterRoomChange(room);
+        continue;
+      }
+    }
+
+    const waitingForSeat = !rl.isReady(state) && state.log.length === 0;
+    if (waitingForSeat && now - state.reservedAt >= rl.JOIN_DEADLINE_MS) {
+      if (rl.connectedPlayerCount(state) >= 1) {
+        rl.finishByAbandon(state);
+        session.broadcastViews(state, hooksFor(room));
+        await afterRoomChange(room);
+      } else {
+        // Nobody ever arrived: free both players and drop the room.
+        await releaseRated(room);
+        rooms.delete(state.roomCode);
+        continue;
+      }
+    }
+
+    if (state.gameOver && !state.reported) await reportResult(room);
+  }
+}
+
 function leaveRoom(conn) {
   const room = conn.roomCode ? rooms.get(conn.roomCode) : null;
   conn.roomCode = null;
@@ -68,15 +218,15 @@ function leaveRoom(conn) {
   session.handleClose(room.state, hooksFor(room), conn);
 }
 
-function isRateLimited(conn) {
+function isRateLimited(conn, limit = RATE_LIMIT_MAX_MESSAGES) {
   const now = Date.now();
   conn.recentMessages = conn.recentMessages.filter((timestamp) => now - timestamp <= RATE_LIMIT_WINDOW_MS);
-  if (conn.recentMessages.length >= RATE_LIMIT_MAX_MESSAGES) return true;
+  if (conn.recentMessages.length >= limit) return true;
   conn.recentMessages.push(now);
   return false;
 }
 
-function handleRaw(conn, rawData) {
+async function handleRaw(conn, rawData) {
   const sendError = (code, message, roomCode = conn.roomCode || '') => send(conn, createError(roomCode, conn.playerId || '', code, message));
 
   if (rawData.length > MAX_MESSAGE_BYTES) {
@@ -122,6 +272,7 @@ function handleRaw(conn, rawData) {
     room.members.add(conn);
     if (session.joinRoom(room.state, hooksFor(room), conn, envelope)) {
       conn.roomCode = room.state.roomCode;
+      await afterRoomChange(room);
     } else if (!wasMember) {
       room.members.delete(conn);
     }
@@ -133,12 +284,43 @@ function handleRaw(conn, rawData) {
     return;
   }
   session.handleMessage(room.state, hooksFor(room), conn, envelope);
+  await afterRoomChange(room);
+}
+
+async function handleLobbyMessage(conn, rawData) {
+  const sendError = (code, message) => send(conn, createError('', '', code, message));
+  if (rawData.length > MAX_MESSAGE_BYTES) {
+    sendError(ERROR_CODES.INVALID_PAYLOAD, 'Message exceeds size limit.');
+    return;
+  }
+  if (isRateLimited(conn, LOBBY_RATE_LIMIT_MAX_MESSAGES)) {
+    sendError(ERROR_CODES.RATE_LIMIT, 'Too many requests. Slow down.');
+    return;
+  }
+  const parsed = parseEnvelope(rawData);
+  if (!parsed.ok) {
+    sendError(parsed.code, parsed.message);
+    return;
+  }
+  await lobbySession.handleMessage(lobbyStore, lobbyHooks(), conn, parsed.envelope);
 }
 
 const server = http.createServer((req, res) => {
-  if (req.url === '/health') {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
+    return;
+  }
+  if (url.pathname === '/leaderboard') {
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
+    const data = lobbyStore.leaderboard(limit);
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'no-store',
+    });
+    res.end(JSON.stringify({ players: data.entries, total: data.total }));
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -147,29 +329,48 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url || '/', 'http://localhost');
   const conn = {
     id: makeConnectionId(),
     ws,
     roomCode: null,
     role: null,
     playerId: '',
+    ipHash: networkOf(req),
     recentMessages: [],
   };
 
+  if (url.searchParams.get('lobby') === '1') {
+    lobbyConnections.add(conn);
+    // Messages from one socket are handled strictly in order: a rename must land before a queue.
+    conn.chain = Promise.resolve();
+    ws.on('message', (rawData) => {
+      conn.chain = conn.chain.then(() => handleLobbyMessage(conn, rawData)).catch((error) => {
+        console.error('lobby message failed', error);
+        send(conn, createError('', '', ERROR_CODES.INVALID_PAYLOAD, 'Server error.'));
+      });
+    });
+    ws.on('close', () => {
+      lobbyConnections.delete(conn);
+      lobbySession.handleClose(lobbyStore, lobbyHooks(), conn);
+    });
+    return;
+  }
+
+  conn.chain = Promise.resolve();
   ws.on('message', (rawData) => {
-    try {
-      handleRaw(conn, rawData);
-    } catch (error) {
+    conn.chain = conn.chain.then(() => handleRaw(conn, rawData)).catch((error) => {
       console.error('message handling failed', error);
       send(conn, createError(conn.roomCode || '', conn.playerId || '', ERROR_CODES.INVALID_PAYLOAD, 'Server error.'));
-    }
+    });
   });
 
   ws.on('close', () => leaveRoom(conn));
 });
 
 setInterval(pruneRooms, 60_000).unref();
+setInterval(() => tickRatedGames().catch((error) => console.error('rated tick failed', error)), TICK_MS).unref();
 
 server.listen(PORT, () => {
   console.log(`Blendchess server listening on ws://localhost:${PORT}`);

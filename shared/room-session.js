@@ -95,8 +95,71 @@
     return true;
   }
 
+  function seatForPlayer(state, playerId) {
+    if (!state.reservedSeats) return null;
+    for (const color of ['w', 'b']) {
+      const seat = state.reservedSeats[color];
+      if (seat && seat.playerId === playerId) return seat;
+    }
+    return null;
+  }
+
+  // Lobby-arranged rooms: no spectators, and a seat needs the ticket the lobby handed out.
+  function joinReservedRoom(state, hooks, conn, envelope) {
+    const payload = envelope.payload || {};
+    if (payload.spectator) {
+      sendError(state, hooks, conn, ERROR_CODES.SPECTATOR_DISABLED, 'Rated games are private: no spectators.');
+      return false;
+    }
+    if (!rl.reservedSeatsValid(state)) {
+      sendError(state, hooks, conn, ERROR_CODES.PLAYER_NOT_FOUND, 'This ranked game is no longer available.');
+      return false;
+    }
+
+    const ticket = typeof payload.ticket === 'string' ? payload.ticket.trim() : '';
+    let seat = rl.findReservedSeat(state, ticket);
+
+    if (!seat) {
+      const requestedId = typeof envelope.playerId === 'string' ? envelope.playerId.trim() : '';
+      const resumeToken = typeof payload.resumeToken === 'string' ? payload.resumeToken.trim() : '';
+      if (!rl.isResumeTokenValid(state, requestedId, resumeToken)) {
+        sendError(state, hooks, conn, ERROR_CODES.TICKET_INVALID, 'This seat was not reserved for you.');
+        return false;
+      }
+      seat = seatForPlayer(state, requestedId);
+      if (!seat) {
+        sendError(state, hooks, conn, ERROR_CODES.PLAYER_NOT_FOUND, 'That seat is not part of this game.');
+        return false;
+      }
+    } else {
+      // A second tab with the same ticket replaces the first one instead of taking a new seat.
+      for (const other of hooks.connections()) {
+        if (other.id !== conn.id && other.role === 'player' && other.playerId === seat.playerId) {
+          other.role = null;
+          other.playerId = '';
+          hooks.save(other);
+          hooks.close(other, 4000, 'Session resumed from another connection.');
+        }
+      }
+    }
+
+    if (conn.role === 'spectator') rl.removeSpectator(state, conn.id);
+
+    const assigned = rl.assignReservedPlayer(state, seat, hooks.makeResumeToken);
+    if (!assigned.ok) {
+      sendError(state, hooks, conn, assigned.reason, 'Could not take that seat.');
+      return false;
+    }
+
+    seatConn(state, hooks, conn, assigned.player);
+    hooks.send(conn, createMessage(TYPES.ROOM_JOINED, state.roomCode, conn.playerId, identityPayload(state, assigned.player)));
+    broadcastViews(state, hooks);
+    return true;
+  }
+
   function joinRoom(state, hooks, conn, envelope) {
     const payload = envelope.payload || {};
+    if (rl.reservedSeatsValid(state)) return joinReservedRoom(state, hooks, conn, envelope);
     if (payload.spectator) return joinAsSpectator(state, hooks, conn, payload);
 
     let seatId = conn.id;

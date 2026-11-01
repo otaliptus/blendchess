@@ -19,21 +19,42 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 - `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
 - `Online`: create a room, send the invite link, play. Reconnects resume your seat automatically.
+- `Play Online`: ranked matchmaking. Pick Blitz 5+3 or Rapid 10+0, get paired by rating, play with a server-enforced clock, and climb the Elo leaderboard. No spectators: ranked games are private.
 - `Watch`: spectators see the fog too, unless the host turns on **party mode** (live full board for the audience).
 - `Archive`: finished games are saved on your device for replay and PGN export.
+
+## Ranked play
+
+- **Identity without an account.** The lobby mints an anonymous player id and secret token on your first visit; it lives in your browser. Your nickname is unique and can be changed in the lobby.
+- **Elo.** Start at 1200. K=40 for your first 10 games, then 24. A win against a stronger player is worth more, and the rating is only ever changed by the server when a game it arranged ends.
+- **Clocks.** Blitz 5+3 and Rapid 10+0. The clock runs on the server: time is charged on every move and the flag falls even if both tabs are closed. Disconnecting does not stop your clock.
+- **Leaving.** Leaving a ranked game keeps the seat reserved, but the clock keeps running. If it runs out, the game is lost on time.
+- **Matches.** The matchmaker pairs players with nearby ratings, widening the window the longer you wait, and avoids immediate rematches.
+
+### Ranked fair play
+
+The server is the authority for everything that decides a rating:
+
+- Ranked rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat. Spectators are refused.
+- Results are reported by the room itself, once per game, and the lobby only accepts results for games it arranged. Duplicate reports change nothing.
+- Two accounts on the same network get an unrated practice game instead.
+- Rating changes are clamped, new identities are rate limited per network, and the queue, room creation, socket count, message size and message rate are all capped.
+- Options (hard mode, party mode) are fixed in lobby-arranged games.
+
+What it cannot stop: someone running an engine locally, or two accounts on different networks colluding. The same-network rule, the rating clamp and rematch avoidance make boosting expensive, not impossible.
 
 ## Rules in plain English
 
 - Legal moves, check, checkmate, stalemate, castling, promotion, and en passant follow standard chess logic (I won against a friend using en-passant by mistake once!)
 - Draw logic includes threefold/fivefold repetition, 50/75-move rule, and insufficient material.
-- Online mode is authoritative: the backend validates moves, and each player only ever receives their own view of the game.
+- Online mode is authoritative: the backend validates moves and clocks, and each player only ever receives their own view of the game. Ranked ratings are computed and stored on the server.
 - Hard mode is optional: illegal moves forfeit the turn (recorded as `--` in the PGN), except when the mover is in check.
 - Rules options lock once the first move is played. A draw offer stands until the opponent moves. Rematches swap colours.
 
 ## How to play
 
 1. Open the game in your browser and press start.
-2. Pick `Local Duel` or `Create Room` (share the invite link), or `Join Room` with a code.
+2. Pick `Play Online` for a rated game and the leaderboard, `Local Duel` for pass-and-play, or `Create Room` / `Join Room` (with the invite link or code) to play a friend.
 3. Click or drag your pieces. Dots mark squares that *might* be legal; dashed corners are pawn captures worth a try. Keyboard works too: arrows, Enter, Esc.
 4. Offer a draw or resign when needed. After the game: replay, PGN, rematch.
 
@@ -56,8 +77,7 @@ I regularly used 5.3-Codex-Xhigh for core game logic, Opus 4.6 for frontend work
 ## What's next
 
 - Kriegspiel pawn-try announcements ("any captures?") as an optional rule.
-- Clocks.
-- Leaderboards, rankings, fun stuff.
+- Tournament and club rooms, and a per-player game history.
 
 ## How to run on your own
 
@@ -96,7 +116,7 @@ npx wrangler pages project create blendchess
 npx wrangler pages deploy . --project-name=blendchess
 ```
 
-Use `wss://<worker-subdomain>.workers.dev` as the server URL in the app (OPTIONS > ADVANCED). Each room runs in its own Durable Object.
+Use `wss://<worker-subdomain>.workers.dev` as the server URL in the app (OPTIONS > ADVANCED). Each room runs in its own Durable Object, and one `LobbyHub` Durable Object holds the ranked queue and ratings. The worker also serves `GET /leaderboard?limit=20`.
 
 To set a default server URL, define before loading `app.js`:
 
@@ -108,7 +128,7 @@ To set a default server URL, define before loading `app.js`:
 
 ## Notes
 
-- The server redacts every message per viewer, so the dev console shows only your own pieces and moves. Spectating your own game from a second tab shows the fog too (unless party mode is on).
+- The server redacts every message per viewer, so the dev console shows only your own pieces and moves. Spectating your own game from a second tab shows the fog too (unless party mode is on). Ranked games refuse spectators entirely.
 - Stale online snapshots are rejected by version checks.
 - PGN export is enabled only after the game ends.
 - Spectator roster is shown as count, not spectator name list.

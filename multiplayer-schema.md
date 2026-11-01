@@ -22,10 +22,70 @@ The Cloudflare Worker gives every room its own Durable Object, so it routes on t
 
 | Purpose | URL |
 | --- | --- |
+| Ranked lobby (queue, identity) | `wss://<worker>/?lobby=1`, then send `lobby_hello` |
 | Create a room | `wss://<worker>/?create=1`, then send `create_room` |
 | Join, watch, resume | `wss://<worker>/?room=ABCD12`, then send `join_room` |
 
-The Node server accepts the same URLs and ignores the query string.
+The Node server accepts the same URLs and ignores the query string. `GET /leaderboard?limit=20` is
+served by both backends and returns `{ "players": [{ "id", "name", "rating", "games", "wins",
+"losses", "draws", "provisional" }], "total": 42 }` with `Access-Control-Allow-Origin: *`.
+
+## Ranked lobby
+
+Lobby messages have no `roomCode`. The lobby is a single shared connection that carries identity,
+queueing and the rating updates, while the game itself lives in a separate room socket.
+
+### `lobby_hello`
+
+```json
+{ "type": "lobby_hello", "payload": { "token": "optional-saved-token", "nickname": "Wendy" }, "version": "2.0.0" }
+```
+
+No token (or an unknown one) creates a new identity. The reply carries the token exactly once:
+
+```json
+{ "type": "lobby_ready", "payload": {
+  "player": { "id": "abc123def456", "name": "Wendy", "rating": 1200, "games": 0, "wins": 0, "losses": 0, "draws": 0, "provisional": true },
+  "token": "…43 characters…",
+  "queued": null
+} }
+```
+
+On a later hello the token is not echoed back. Names are unique (case-insensitive); a taken name gets a
+numeric suffix. A hello with a new nickname renames the player.
+
+### `lobby_queue` / `lobby_cancel`
+
+```json
+{ "type": "lobby_queue", "payload": { "control": "5+3" }, "version": "2.0.0" }
+```
+
+Controls: `5+3` (Blitz) and `10+0` (Rapid). Queueing twice is idempotent; queueing while a ranked game
+is unfinished answers `lobby_error` with `ALREADY_IN_GAME`. Matched players receive:
+
+```json
+{ "type": "match_found", "payload": {
+  "roomCode": "ABCD12",
+  "ticket": "…43 characters…",
+  "color": "w",
+  "control": "5+3",
+  "clock": { "baseMs": 300000, "incMs": 3000 },
+  "rated": true,
+  "opponent": { "name": "Boris", "rating": 1240, "provisional": false }
+} }
+```
+
+The client then opens `?room=ABCD12` and sends `join_room` with `"payload": { "ticket": "…" }`.
+`rated` is false when both players share a network; the game is then a practice game.
+
+`lobby_rating` is pushed when a rated game ends while the player is still connected to the lobby:
+
+```json
+{ "type": "lobby_rating", "payload": { "player": { … }, "update": { "before": 1200, "after": 1220, "delta": 20 } } }
+```
+
+`lobby_error` carries `errorCode` and `message` (`RATE_LIMIT`, `QUEUE_FULL`, `ALREADY_IN_GAME`,
+`NOT_AUTHENTICATED`, `INVALID_PAYLOAD`).
 
 ## The core rule: per-viewer views
 
@@ -70,6 +130,10 @@ broadcast as a separate `game_state` per member, built by `createView(state, vie
 
 Illegal moves are rejected and announced to everyone as an `illegal` event; only the mover sees the squares.
 In hard mode an illegal move forfeits the turn (recorded as a null move `--`) unless the mover is in check.
+
+In a lobby-arranged room the join payload is `{ "ticket": "…" }`; without the ticket the answer is
+`TICKET_INVALID`, and spectators are refused with `SPECTATOR_DISABLED`. Resuming a seated player still
+works with `resume: true` and the `resumeToken`.
 
 ### `set_options`
 
@@ -126,6 +190,14 @@ Spectators get `{ "role": "spectator", "spectatorId": "..." }`. A `game_state` a
       "result": null,
       "hardMode": false,
       "spectatorView": "fog",
+      "rated": false,
+      "reserved": false,
+      "ratings": null,
+      "clock": {
+        "control": "5+3", "baseMs": 300000, "incMs": 3000,
+        "w": 300000, "b": 297000, "turn": "b", "startedAt": 1760000000000,
+        "running": true, "remaining": 297000, "sentAt": 1760000012345
+      },
       "waitingForStart": false,
       "inProgress": true,
       "players": [{ "color": "w", "nickname": "Wendy", "connected": true }],
@@ -136,7 +208,13 @@ Spectators get `{ "role": "spectator", "spectatorId": "..." }`. A `game_state` a
 ```
 
 - `boardVersion` only ever increases, even across new games, so clients drop anything older than what they hold.
-- `result`: `checkmate`, `resign`, `stalemate`, `mutualDraw`, `threefold`, `fivefold`, `fiftyMove`, `seventyFiveMove`, `insufficientMaterial`.
+- `result`: `checkmate`, `resign`, `stalemate`, `mutualDraw`, `threefold`, `fivefold`, `fiftyMove`, `seventyFiveMove`, `insufficientMaterial`, `timeout`, `abandon`.
+- `clock`: present only in lobby-arranged games. `w`/`b` are the stored clocks at send time and
+  `remaining` is the side-to-move's remaining time (subtract local elapsed time since receipt). The
+  server owns it; moving without enough time loses on the spot.
+- `rated`: the game counts for Elo. `reserved`: the seats were fixed by the lobby and need tickets.
+  `ratings` appears in the final views (`{ w: {before, after, delta}, b: {…} }`) once the result has
+  been reported.
 - Event kinds: `move`, `capture`, `check`, `illegal`, `forfeit`, `draw_offer`, `draw_declined`, `resign`, `game_over`, `presence`, `options`, `new_game`. Event `id`s increase, so a client can tell which ones are new.
 - `check.directions`: any of `file`, `rank`, `diagonal`, `knight`.
 
@@ -149,11 +227,14 @@ It is also used for refused `set_options`, `new_game`, `claim_draw` and `resign`
 
 `payload.errorCode` is one of `INVALID_PAYLOAD`, `UNKNOWN_ROOM`, `ROOM_FULL`, `NOT_YOUR_TURN`, `WRONG_COLOR`,
 `ILLEGAL_MOVE`, `GAME_OVER`, `GAME_IN_PROGRESS`, `ROOM_NOT_READY`, `RATE_LIMIT`, `PLAYER_NOT_FOUND`,
-`INVALID_DRAW_CLAIM`, `VERSION_MISMATCH`, plus a human-readable `message`.
+`INVALID_DRAW_CLAIM`, `VERSION_MISMATCH`, `TICKET_INVALID`, `SPECTATOR_DISABLED`, `RATED_LOCKED`, plus a
+human-readable `message`. Lobby errors use `QUEUE_FULL`, `ALREADY_IN_GAME`, `NOT_AUTHENTICATED`.
 
 ## Limits (both backends)
 
 - 16 KiB per message, 40 messages per second per socket.
 - Nicknames: 16 characters, markup stripped.
-- Node: up to 10,000 rooms in memory. Worker: up to 64 sockets per room.
+- Node: up to 10,000 rooms in memory. Worker: up to 64 sockets per room, 4 per network.
+- Lobby: 500 queued players, 6 per network; 6 lobby sockets per network; 10 new identities per network
+  per hour; room creation capped per network and globally.
 - Idle rooms with nobody connected are deleted after an hour (Worker: Durable Object alarm).
