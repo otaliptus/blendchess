@@ -89,35 +89,20 @@ test('watchers of a lobby game see the whole board live', () => {
   assert.equal(h.lastError(watcher).payload.errorCode, ERROR_CODES.WRONG_COLOR);
 });
 
-test("a watcher on a ranked player's network sees only that player's side", () => {
+test("a watcher on a ranked player's own network sees the whole board too: players are trusted", () => {
   const h = createRatedHarness();
-  const { white, black } = seatBoth(h);
+  const { white } = seatBoth(h);
   session.handleMessage(h.state, h.hooks, white, h.envelope(TYPES.MOVE_INTENT, { from: sq('e2'), to: sq('e4') }));
 
   const sameAsBlack = h.connect('conn-peek', 'net-black');
   session.joinRoom(h.state, h.hooks, sameAsBlack, h.envelope(TYPES.JOIN_ROOM, { spectator: true }));
   const view = h.lastView(sameAsBlack);
   assert.equal(view.you.role, 'spectator');
-  assert.equal(view.you.color, null);
-  assert.equal(view.you.perspective, 'b');
-  assert.equal(view.revealed, false);
-  const pieces = view.board.flat().filter(Boolean);
-  assert.equal(pieces.length, 16);
-  assert.ok(pieces.every((piece) => piece.color === 'b'), 'only black pieces');
-  assert.equal(view.moves[0].san, null, "white's move stays hidden");
-
-  // A network a player used later (reconnecting from mobile data) counts as well.
-  const back = h.connect('conn-w2', 'net-mobile');
-  const identity = white.inbox.find((message) => message.type === TYPES.ROOM_JOINED).payload;
-  session.joinRoom(h.state, h.hooks, back, h.envelope(TYPES.JOIN_ROOM, { resume: true, resumeToken: identity.resumeToken }, identity.playerId));
-  const sameAsWhite = h.connect('conn-peek2', 'net-mobile');
-  session.joinRoom(h.state, h.hooks, sameAsWhite, h.envelope(TYPES.JOIN_ROOM, { spectator: true }));
-  assert.equal(h.lastView(sameAsWhite).you.perspective, 'w');
-
-  // Once the game is over the fog lifts for everyone.
-  session.handleMessage(h.state, h.hooks, black, h.envelope(TYPES.RESIGN));
-  assert.equal(h.lastView(sameAsBlack).revealed, true);
-  assert.equal(h.lastView(sameAsBlack).board.flat().filter(Boolean).length, 32);
+  assert.equal(view.you.perspective, null);
+  assert.equal(view.revealed, true);
+  assert.equal(view.board.flat().filter(Boolean).length, 32);
+  assert.equal(view.moves[0].san, 'e4');
+  assert.deepEqual(h.state.seatNetworks, {}, 'no player networks are collected');
 });
 
 test('practice games have nothing at stake: every watcher sees the full board', () => {

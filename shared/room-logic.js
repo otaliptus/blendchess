@@ -285,12 +285,14 @@
     }
     state.reservedSeats = reserved;
     state.reservedAt = now;
-    // Anyone may watch a lobby game, and watchers see the whole board (see spectatorPerspective).
+    // Anyone may watch a lobby game, and every watcher sees the whole board: players are trusted.
     state.spectatorView = 'open';
-    state.seatNetworks = {};
-    for (const seat of seats) {
-      if (seat && seat.playerId) noteSeatNetwork(state, String(seat.playerId), seat.ipHash);
-    }
+    // DISABLED: the same-network watcher rule (see spectatorPerspective). Uncomment to collect the
+    // networks it needs; also uncomment the two call sites in room-session.js.
+    // state.seatNetworks = {};
+    // for (const seat of seats) {
+    //   if (seat && seat.playerId) noteSeatNetwork(state, String(seat.playerId), seat.ipHash);
+    // }
     return state;
   }
 
@@ -303,6 +305,7 @@
   }
 
   // Remembers every network a lobby player has played from during this room's life.
+  // Only used by the disabled spectatorPerspective rule.
   function noteSeatNetwork(state, playerId, ipHash) {
     if (!usableNetwork(ipHash) || !playerId) return;
     if (!state.seatNetworks) state.seatNetworks = {};
@@ -311,10 +314,10 @@
     state.seatNetworks[playerId] = [...list, String(ipHash).slice(0, 64)].slice(-8);
   }
 
-  // Watchers of a ranked game see the full board, except someone on the same network as one of
-  // the players: they see exactly what that player sees. That closes the easy cheat (a second
-  // tab on the same device or Wi-Fi) and is the natural view for a friend looking over your
-  // shoulder at a party. Returns 'w', 'b' or null.
+  // DISABLED (not called): players are trusted, so every watcher sees the full board. Kept for a
+  // possible return: in a ranked game it limits a watcher on a network either player has used to
+  // that player's view. Returns 'w', 'b' or null. Enabling it takes the commented-out lines in
+  // applyReservation above and in room-session.js (viewerOf, joinReservedRoom).
   function spectatorPerspective(state, ipHash) {
     if (!state.rated || !usableNetwork(ipHash) || !state.seatNetworks) return null;
     for (const [playerId, networks] of Object.entries(state.seatNetworks)) {

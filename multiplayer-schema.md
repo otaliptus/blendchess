@@ -167,9 +167,7 @@ In hard mode an illegal move forfeits the turn (recorded as a null move `--`) un
 
 In a lobby-arranged room the join payload is `{ "ticket": "…" }`; without the ticket the answer is
 `TICKET_INVALID`. Resuming a seated player still works with `resume: true` and the `resumeToken`.
-Anyone may watch a lobby-arranged room with `{ "spectator": true }`: watchers see the whole board,
-except that in a ranked game a watcher on the same network as a player sees that player's view
-(`you.perspective` is then `"w"` or `"b"`).
+Anyone may watch a lobby-arranged room with `{ "spectator": true }`, and watchers see the whole board.
 
 ### `set_options`
 
@@ -251,8 +249,8 @@ Spectators get `{ "role": "spectator", "spectatorId": "..." }`. A `game_state` a
 - `rated`: the game counts for Elo. `reserved`: the seats were fixed by the lobby and need tickets.
   `ratings` appears in the final views (`{ w: {before, after, delta}, b: {…} }`) once the result has
   been reported, and `recordId` once the lobby has stored the game (`GET /api/games/:id`).
-- `you`: `{ role, color, perspective }`. `color` is the seat (players only); `perspective` is the side a
-  same-network spectator is limited to, otherwise `null`.
+- `you`: `{ role, color, perspective }`. `color` is the seat (players only). `perspective` is always
+  `null` from current servers (kept for a switched-off rule that limited same-network watchers).
 - Event kinds: `move`, `capture`, `check`, `illegal`, `forfeit`, `draw_offer`, `draw_declined`, `resign`, `game_over`, `presence`, `options`, `new_game`. Event `id`s increase, so a client can tell which ones are new.
 - `check.directions`: any of `file`, `rank`, `diagonal`, `knight`.
 

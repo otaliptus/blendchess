@@ -24,7 +24,9 @@
 
   function viewerOf(state, conn) {
     if (conn.role !== 'player') {
-      return { role: 'spectator', color: null, perspective: rl.spectatorPerspective(state, conn.ipHash) };
+      // DISABLED: the same-network watcher rule. Every spectator gets the room's spectator view.
+      // return { role: 'spectator', color: null, perspective: rl.spectatorPerspective(state, conn.ipHash) };
+      return { role: 'spectator', color: null };
     }
     const player = rl.getPlayer(state, conn.playerId);
     return { role: 'player', color: player ? player.color : null };
@@ -149,7 +151,8 @@
       sendError(state, hooks, conn, assigned.reason, 'Could not take that seat.');
       return false;
     }
-    rl.noteSeatNetwork(state, assigned.player.id, conn.ipHash);
+    // DISABLED with the same-network watcher rule (see rl.spectatorPerspective).
+    // rl.noteSeatNetwork(state, assigned.player.id, conn.ipHash);
 
     seatConn(state, hooks, conn, assigned.player);
     hooks.send(conn, createMessage(TYPES.ROOM_JOINED, state.roomCode, conn.playerId, identityPayload(state, assigned.player)));

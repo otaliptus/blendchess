@@ -27,21 +27,20 @@ The browser only loads the first four: the lobby and accounts live on the server
 
 Earlier versions broadcast the whole game and masked it in the browser. Now the room keeps the full
 state and `createView(state, viewer)` builds what each member may know (see the table in
-`multiplayer-schema.md`). Because the masking happens on the server, opening dev tools or a second tab
-as a spectator shows nothing a player shouldn't see. The fog only lifts when the game is over, or for
-spectators when the host enabled party mode.
+`multiplayer-schema.md`). Because the masking happens on the server, opening dev tools shows nothing a
+player shouldn't see. The fog only lifts when the game is over, for spectators of a private room when
+the host enabled party mode, and for anyone watching a lobby game.
 
 What is public, Kriegspiel style: that a move happened, captures and their squares, that an illegal try
 happened, forfeits, draw offers, resignations. Check goes only to the side in check, along with the
 lines it comes from.
 
-Lobby games are open to watchers, who see the whole board (`spectatorView: 'open'` is fixed at
-reservation). The one exception is `spectatorPerspective(state, ipHash)`: in a ranked game, a watcher
-whose network matches one either player has used (`seatNetworks`, kept server-side by player id) gets
-that player's view instead. A second tab, or another device on the same Wi-Fi, therefore reveals
-nothing; a device on another network (mobile data, a VPN) does, and nothing on the server can tell.
+Lobby games are open to watchers, and every watcher sees the whole board (`spectatorView: 'open'` is
+fixed at reservation): players are trusted. `spectatorPerspective(state, ipHash)` in `room-logic.js` is
+a switched-off option that would limit a watcher on a player's network to that player's view; its
+call sites are commented out, so no player networks are collected.
 
-"One network" everywhere (this rule, same-network practice games, every per-network limit) is
+"One network" everywhere (same-network practice games, every per-network limit) is
 `networkKey(address)`: an IPv4 address, or an IPv6 /64, since devices on one IPv6 network each have
 their own (often rotating) address but share the prefix. Loopback is `unknown` and never matches.
 

@@ -44,13 +44,13 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 The server is the authority for everything that decides a rating:
 
 - Ranked rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat.
-- Watchers see the whole board, except a watcher on a network one of the players has used: they see exactly that player's side. A second tab, or another device on your Wi-Fi, shows you nothing new. (A network is one IPv4 address, or one IPv6 /64, so every device on an IPv6 home network counts.)
+- Anyone can watch a lobby game and sees the whole board live. Players are trusted not to watch their own games.
 - Results are reported by the room itself, once per game, and the lobby only accepts results for games it arranged. Duplicate reports change nothing.
 - Two accounts on the same network get an unrated practice game instead.
 - Rating changes are clamped, new identities are rate limited per network, and the queue, room creation, socket count, message size and message rate are all capped.
 - Options (hard mode, party mode) are fixed in lobby-arranged games.
 
-What it cannot stop: someone running an engine locally, two accounts on different networks colluding, or the live board being watched from another network (a friend elsewhere, or your own phone on mobile data or a VPN) and relayed to a player. Ranked is for fun first. The same-network rules, the rating clamp and rematch avoidance make cheating and boosting take effort, not make them impossible.
+What it cannot stop: someone running an engine locally, two accounts on different networks colluding, or a player watching their own game, since live boards are public. Ranked is for fun and players are trusted; the same-network rule, the rating clamp and rematch avoidance only make boosting take effort.
 
 ## Rules in plain English
 
@@ -137,7 +137,7 @@ To set a default server URL, define before loading `app.js`:
 
 ## Notes
 
-- The server redacts every message per viewer, so the dev console shows only your own pieces and moves. Spectating your own game from a second tab shows the fog too (unless party mode is on). Ranked games refuse spectators entirely.
+- The server redacts every message per viewer, so the dev console shows only your own pieces and moves. Spectators of a private room see the fog too (unless party mode is on); lobby games are public and watchers see the whole board.
 - Stale online snapshots are rejected by version checks.
 - PGN export is enabled only after the game ends.
 - Spectator roster is shown as count, not spectator name list.
