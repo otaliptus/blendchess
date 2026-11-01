@@ -69,7 +69,18 @@
 
         <section id="menuLobby" class="menu px-panel wide hidden" aria-labelledby="lobbyTitle">
           <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
-          <p id="lobbyIdentity" class="lobby-identity">RANKED: play your first game to get a rating.</p>
+          <div class="account-row">
+            <p id="lobbyIdentity" class="lobby-identity">RANKED: play your first game to get a rating.</p>
+            <div class="account-buttons">
+              <button id="myProfileBtn" class="px-btn small" type="button">PROFILE</button>
+              <button id="accountBtn" class="px-btn small" type="button">ACCOUNT</button>
+            </div>
+          </div>
+          <p id="secureHint" class="secure-hint hidden">
+            Guest account: your rating lives only in this browser.
+            <button id="secureHintBtn" class="link-btn" type="button">Secure it</button>
+            to keep it, sign in on other devices and appear on the leaderboard.
+          </p>
           <label class="field">
             <span class="field-label">YOUR NAME</span>
             <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
@@ -92,13 +103,82 @@
           </div>
           <div class="leaderboard-block">
             <div class="leaderboard-head">
-              <h3 class="lobby-subtitle">LEADERBOARD</h3>
+              <h3 class="lobby-subtitle">LIVE NOW</h3>
               <button id="leaderboardRefresh" class="px-btn small" type="button">REFRESH</button>
+            </div>
+            <ul id="liveList" class="live-list">
+              <li class="empty-note">No games in progress.</li>
+            </ul>
+          </div>
+          <div class="leaderboard-block">
+            <div class="leaderboard-head">
+              <h3 class="lobby-subtitle">LEADERBOARD</h3>
             </div>
             <ol id="leaderboardList" class="leaderboard-list">
               <li class="empty-note">No ranked games yet. Be the first!</li>
             </ol>
             <p id="leaderboardMeta" class="leaderboard-meta"></p>
+          </div>
+        </section>
+
+        <section id="menuProfile" class="menu px-panel wide hidden" aria-labelledby="profileName">
+          <h2 id="profileName" class="menu-title">PLAYER</h2>
+          <p id="profileBadges" class="profile-badges"></p>
+          <dl id="profileStats" class="profile-stats"></dl>
+          <div id="profileLive" class="profile-live hidden"></div>
+          <h3 class="lobby-subtitle">RECENT GAMES</h3>
+          <ol id="profileGames" class="profile-games">
+            <li class="empty-note">Loading...</li>
+          </ol>
+          <div class="menu-row">
+            <button id="profileBack" class="px-btn ghost" type="button">BACK</button>
+            <button id="profileShare" class="px-btn" type="button">COPY LINK</button>
+          </div>
+        </section>
+
+        <section id="menuAccount" class="menu px-panel wide hidden" aria-labelledby="accountTitle">
+          <h2 id="accountTitle" class="menu-title">ACCOUNT</h2>
+          <p id="accountSummary" class="lobby-identity"></p>
+
+          <div id="accountMethods" class="account-block">
+            <h3 class="lobby-subtitle">SIGN-IN METHODS</h3>
+            <ul id="methodList" class="method-list"></ul>
+            <div class="menu-row wrap">
+              <button id="addPasskeyBtn" class="px-btn primary" type="button">ADD PASSKEY</button>
+              <button id="makeKeyBtn" class="px-btn" type="button">GET ACCOUNT KEY</button>
+            </div>
+            <p class="field-help">
+              A <b>passkey</b> unlocks with your device's face, fingerprint or PIN, and syncs through your
+              phone or password manager. An <b>account key</b> is a code you keep somewhere safe; it works
+              on any device. Either one secures your account; having both is a backup.
+            </p>
+          </div>
+
+          <div class="account-block">
+            <h3 class="lobby-subtitle">SIGN IN ON THIS DEVICE</h3>
+            <div class="menu-row wrap">
+              <button id="passkeyLoginBtn" class="px-btn" type="button">SIGN IN WITH PASSKEY</button>
+            </div>
+            <label class="field">
+              <span class="field-label">ACCOUNT KEY</span>
+              <input id="keyLoginInput" class="key-input" maxlength="48" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="BLND-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" />
+            </label>
+            <div class="menu-row wrap">
+              <button id="keyLoginBtn" class="px-btn" type="button">SIGN IN WITH KEY</button>
+            </div>
+          </div>
+
+          <div id="accountDevices" class="account-block">
+            <h3 class="lobby-subtitle">DEVICES</h3>
+            <p id="sessionsText" class="field-help"></p>
+            <div class="menu-row wrap">
+              <button id="logoutOthersBtn" class="px-btn" type="button">SIGN OUT OTHER DEVICES</button>
+              <button id="logoutBtn" class="px-btn danger" type="button">SIGN OUT HERE</button>
+            </div>
+          </div>
+
+          <div class="menu-row">
+            <button id="accountBack" class="px-btn ghost" type="button">BACK</button>
           </div>
         </section>
 

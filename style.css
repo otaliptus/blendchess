@@ -228,6 +228,31 @@ button {
   cursor: not-allowed;
 }
 
+.px-btn[hidden] {
+  display: none;
+}
+
+/* A plain-text button: names that open a profile, inline "secure it" prompts. */
+.link-btn {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: none;
+  color: var(--accent-2);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.link-btn:hover,
+.link-btn:focus-visible {
+  color: var(--warn);
+  outline: none;
+}
+
 :focus-visible {
   outline: 4px dashed var(--accent-2);
   outline-offset: 6px;
@@ -1176,15 +1201,20 @@ button {
 }
 
 .player-sub {
+  display: flex;
+  align-items: center;
+  gap: 0 8px;
+  flex-wrap: wrap;
   color: var(--muted);
   font-size: 19px;
 }
 
 .presence {
   display: inline-block;
+  flex-shrink: 0;
   width: 10px;
   height: 10px;
-  margin-right: 6px;
+  margin-right: -2px;
   background: var(--good);
   box-shadow: 0 0 0 2px var(--ink);
 }
@@ -1601,7 +1631,7 @@ button {
 
 .leaderboard-row {
   display: grid;
-  grid-template-columns: 3.2ch 1fr auto 7ch;
+  grid-template-columns: 3.2ch 1fr auto 5ch 7ch;
   align-items: baseline;
   gap: 10px;
   padding: 6px 10px;
@@ -1625,6 +1655,29 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.leaderboard-row.me .lb-name {
+  color: var(--accent-2);
+}
+
+.lb-live {
+  border: 0;
+  padding: 3px 5px;
+  background: var(--bad);
+  color: var(--ink);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  cursor: pointer;
+  animation: blink 1.2s steps(2) infinite;
+}
+
+.lb-live:hover,
+.lb-live:focus-visible {
+  background: var(--warn);
+  animation: none;
+  outline: none;
 }
 
 .lb-games {
@@ -1643,6 +1696,283 @@ button {
   margin: 6px 0 0;
   color: var(--muted);
   font-size: 18px;
+}
+
+/* --------------------------------------------------------------------------
+   Accounts, live games, profiles
+   -------------------------------------------------------------------------- */
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.account-row .lobby-identity {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.account-buttons {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.secure-hint {
+  margin: 4px 0 6px;
+  padding: 6px 10px;
+  border-left: 4px solid var(--warn);
+  color: var(--text);
+  font-size: 19px;
+}
+
+.live-list,
+.profile-games,
+.method-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--well);
+  box-shadow: 0 0 0 4px var(--ink);
+}
+
+.live-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 4px 10px;
+  border-bottom: 1px dashed rgba(127, 127, 127, 0.25);
+}
+
+.live-row:last-child {
+  border-bottom: 0;
+}
+
+.live-players {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.live-vs,
+.live-meta {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.live-row .px-btn {
+  margin-left: auto;
+}
+
+.profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+  min-height: 1em;
+}
+
+.badge {
+  padding: 4px 6px;
+  background: var(--panel-2);
+  box-shadow: 0 0 0 2px var(--ink);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.badge.good {
+  color: var(--good);
+}
+
+.badge.accent {
+  color: var(--accent-2);
+}
+
+.profile-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  margin: 0 0 14px;
+  background: var(--well);
+  box-shadow: 0 0 0 4px var(--ink);
+}
+
+.profile-stats dt {
+  grid-row: 1;
+  padding: 8px 8px 0;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.profile-stats dd {
+  grid-row: 2;
+  margin: 0;
+  padding: 2px 8px 8px;
+  color: var(--warn);
+  font-size: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 14px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  box-shadow: 0 0 0 4px var(--bad);
+}
+
+.profile-live .px-btn {
+  margin-left: auto;
+}
+
+.live-dot {
+  width: 10px;
+  height: 10px;
+  background: var(--bad);
+  animation: blink 1.2s steps(2) infinite;
+}
+
+.profile-games {
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.game-line {
+  display: grid;
+  grid-template-columns: 6ch 1fr auto;
+  gap: 2px 12px;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px dashed rgba(127, 127, 127, 0.25);
+  background: transparent;
+  padding: 8px 10px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.game-line:hover,
+.game-line:focus-visible {
+  background: var(--panel-2);
+  outline: none;
+}
+
+.game-outcome {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  align-self: center;
+}
+
+.game-line[data-outcome='win'] .game-outcome {
+  color: var(--good);
+}
+
+.game-line[data-outcome='loss'] .game-outcome {
+  color: var(--bad);
+}
+
+.game-line[data-outcome='draw'] .game-outcome {
+  color: var(--warn);
+}
+
+.game-opponent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-delta {
+  color: var(--muted);
+  text-align: right;
+}
+
+.game-meta {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.account-block {
+  margin-top: 16px;
+  border-top: 4px solid var(--ink);
+  padding-top: 12px;
+}
+
+.account-block .lobby-subtitle {
+  margin-bottom: 8px;
+}
+
+.method-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 4px 10px;
+  border-bottom: 1px dashed rgba(127, 127, 127, 0.25);
+}
+
+.method-row:last-child {
+  border-bottom: 0;
+}
+
+.method-name {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  color: var(--good);
+}
+
+.method-meta {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.method-row .px-btn {
+  margin-left: auto;
+}
+
+.field-help {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.field-help b {
+  color: var(--text);
+  font-weight: normal;
+}
+
+.key-input {
+  font-family: 'VT323', ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.account-key {
+  margin: 12px 0 0;
+  padding: 12px;
+  background: var(--well);
+  box-shadow: 0 0 0 4px var(--ink);
+  color: var(--warn);
+  font-size: 26px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  overflow-wrap: anywhere;
+  user-select: all;
 }
 
 .clock {
@@ -1988,11 +2318,37 @@ button {
   }
 
   .leaderboard-row {
-    grid-template-columns: 3ch 1fr 6ch;
+    grid-template-columns: 3ch 1fr auto 6ch;
   }
 
   .lb-games {
     display: none;
+  }
+
+  .account-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-buttons {
+    justify-content: flex-end;
+  }
+
+  .profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-stats dt,
+  .profile-stats dd {
+    grid-row: auto;
+  }
+
+  .profile-stats dd {
+    padding-bottom: 10px;
+  }
+
+  .game-line {
+    grid-template-columns: 5ch 1fr auto;
   }
 
   .toast {
