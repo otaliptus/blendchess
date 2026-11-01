@@ -325,7 +325,7 @@
   // Menu
   // ---------------------------------------------------------------------------
 
-  const MENU_PANELS = ['menuLobby', 'menuCommunity', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
+  const MENU_PANELS = ['menuMain', 'menuLobby', 'menuCommunity', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
   let setupMode = 'local';
 
   function showScreen(name) {
@@ -338,16 +338,17 @@
     if (panel !== 'menuLobby') leaveLobbyPanel();
     if (panel !== 'menuProfile' && new URLSearchParams(window.location.search).has('p')) setUrl({});
     showScreen('menu');
-    document.querySelector('.logo-wrap').classList.toggle('hidden', panel !== 'menuLobby');
+    document.querySelector('.logo-wrap').classList.toggle('hidden', panel !== 'menuMain');
+    $('logoBoard').classList.toggle('hidden', panel !== 'menuMain');
     for (const id of MENU_PANELS) $(id).classList.toggle('hidden', id !== panel);
-    if (panel === 'menuLobby') refreshContinue();
+    if (panel === 'menuMain') refreshContinue();
     if (panel === 'menuArchive') renderArchiveList();
     // Callers finish rendering queue/account state before focus moves into the panel.
     queueMicrotask(() => {
       if (app.mode || $(panel).classList.contains('hidden')) return;
-      const first = panel === 'menuLobby'
-        ? ($('continueItem').hidden ? ($('lobbyFind').classList.contains('hidden') ? $('lobbyCancel') : $('lobbyFind')) : $('continueItem'))
-        : $(panel).querySelector('h2');
+      let first = $(panel).querySelector('h2');
+      if (panel === 'menuMain') first = $(panel).querySelector('.menu-item:not([hidden])');
+      if (panel === 'menuLobby') first = $('lobbyFind').classList.contains('hidden') ? $('lobbyCancel') : $('lobbyFind');
       if (first) {
         first.tabIndex = first.tagName === 'H2' ? -1 : 0;
         first.focus({ preventScroll: true });
@@ -367,7 +368,7 @@
     } else if (localSave && localSave.state && !localSave.state.gameOver) {
       item.hidden = false;
       item.dataset.kind = 'local';
-      $('continueHint').textContent = `pass & play · move ${Math.floor(localSave.state.log.length / 2) + 1}`;
+      $('continueHint').textContent = `local duel, move ${Math.floor(localSave.state.log.length / 2) + 1}`;
     } else {
       item.hidden = true;
     }
@@ -375,12 +376,12 @@
 
   function openSetup(mode) {
     setupMode = mode;
-    $('setupTitle').textContent = mode === 'local' ? 'PASS & PLAY' : 'PLAY A FRIEND';
+    $('setupTitle').textContent = mode === 'local' ? 'LOCAL DUEL' : 'CREATE ROOM';
     $('setupHelp').textContent = mode === 'local' ? 'Take turns on this device. Pass it over after each move.' : 'Create a game, then send your friend the link.';
     $('nicknameField').classList.toggle('hidden', mode === 'local');
     $('openSpectatorsField').classList.toggle('hidden', mode === 'local');
     $('nicknameInput').value = settings.nickname;
-    $('setupGo').textContent = mode === 'local' ? 'START GAME' : 'CREATE INVITE';
+    $('setupGo').textContent = mode === 'local' ? 'START' : 'CREATE';
     $('joinFriendBtn').classList.toggle('hidden', mode === 'local');
     $('gameOptions').open = $('hardModeInput').checked || (mode === 'create' && $('openSpectatorsInput').checked);
     showMenuPanel('menuSetup');
@@ -394,14 +395,14 @@
 
   function onMenuAction(action) {
     sfx.play('click');
-    if (action === 'back') openLobbyPanel();
+    if (action === 'back') showMenuPanel('menuMain');
     else if (action === 'online') openLobbyPanel();
     else if (action === 'community') openCommunityPanel();
     else if (action === 'local') openSetup('local');
     else if (action === 'create') openSetup('create');
     else if (action === 'join') {
       $('joinNicknameInput').value = settings.nickname;
-      $('joinTitle').textContent = 'JOIN A FRIEND';
+      $('joinTitle').textContent = 'JOIN ROOM';
       showMenuPanel('menuJoin');
     } else if (action === 'archive') showMenuPanel('menuArchive');
     else if (action === 'help') showMenuPanel('menuHelp');
@@ -1193,7 +1194,7 @@
     leaveLobbyPanel();
     leaveGameScreen();
     forgetAccount();
-    openLobbyPanel();
+    showMenuPanel('menuMain');
     toast('Game data was reset. Start again as a new guest.', 'warn');
     void syncDataVersion();
   }
@@ -1755,7 +1756,7 @@
     if (profileState.returnTo === 'menuLobby') openLobbyPanel();
     else if (profileState.returnTo === 'menuCommunity') openCommunityPanel();
     else if (profileState.returnTo === 'menuAccount') openAccount();
-    else openLobbyPanel();
+    else showMenuPanel('menuMain');
   }
 
   // --- Passkeys -----------------------------------------------------------------
@@ -2127,10 +2128,10 @@
     });
   }
 
-  // The account panel is only reached from the lobby.
+  // Return to the main selection menu after managing an account.
   function leaveAccount() {
     sfx.play('click');
-    openLobbyPanel();
+    showMenuPanel('menuMain');
   }
 
   // ---------------------------------------------------------------------------
@@ -2432,7 +2433,7 @@
       // The account signed this device out: the seat is gone, so don't try to reconnect.
       leaveGameScreen();
       forgetAccount();
-      openLobbyPanel();
+      showMenuPanel('menuMain');
       toast('This device was signed out of the account.', 'bad');
       return;
     }
@@ -2533,7 +2534,7 @@
         leaveOnline();
         if (wasInGame) {
           app.mode = null;
-          openLobbyPanel();
+          showMenuPanel('menuMain');
         }
       }
     }
@@ -2612,7 +2613,7 @@
     app.replay = null;
     $('gameOver').classList.add('hidden');
     setRoomInUrl('');
-    openLobbyPanel();
+    showMenuPanel('menuMain');
   }
 
   function exportPgn() {
@@ -3262,7 +3263,7 @@
     document.addEventListener('keydown', unlockAudio);
     $('brandBtn').addEventListener('click', () => {
       if (app.mode) backToMenu();
-      else openLobbyPanel();
+      else showMenuPanel('menuMain');
     });
     $('soundBtn').addEventListener('click', () => {
       settings.sound = !settings.sound;
@@ -3278,6 +3279,7 @@
     });
     $('settingsClose').addEventListener('click', () => {
       const url = $('serverUrlInput').value.trim();
+      const inLobby = !$('menuLobby').classList.contains('hidden');
       let changedServer = false;
       if (!app.mode && url && url !== settings.serverUrl) {
         if (isWsUrl(url)) {
@@ -3287,7 +3289,8 @@
       }
       saveSettings();
       $('settings').classList.add('hidden');
-      if (changedServer) openLobbyPanel();
+      if (changedServer && inLobby) openLobbyPanel();
+      else if (changedServer) showMenuPanel('menuMain');
       else $('settingsBtn').focus();
       sfx.play('click');
     });
@@ -3364,13 +3367,13 @@
     const gameParam = params.get('game');
     if (gameParam) {
       openServerGame(gameParam).then((ok) => {
-        if (!ok) openLobbyPanel();
+        if (!ok) showMenuPanel('menuMain');
       });
       return;
     }
     const profileParam = params.get('p');
     if (profileParam) {
-      openProfile(profileParam, 'menuLobby');
+      openProfile(profileParam, 'menuMain');
       return;
     }
     const watchParam = protocol.normalizeRoomCode(params.get('watch'));
@@ -3395,7 +3398,7 @@
       setTimeout(() => $('joinGo').focus(), 0);
       return;
     }
-    openLobbyPanel();
+    showMenuPanel('menuMain');
   }
 
   boot();
