@@ -434,3 +434,36 @@ test('signing other devices out revokes the seats they were matched with', async
   await h.call('POST', '/api/auth/logout', { token: second });
   assert.deepEqual(h.revoked, []);
 });
+
+test('a device that takes over the queue owns the seat it leads to', async () => {
+  const h = makeLobby();
+  const ann = await h.guest('Ann', 'net-a');
+  await lobbySession.queue(h.store, h.hooks, ann.conn, { control: '10+0' });
+
+  // Ann secures the account and signs in on a second device, which takes over her queue place.
+  const { key } = (await h.call('POST', '/api/auth/key/create', { token: ann.token })).body;
+  const deviceB = (await h.call('POST', '/api/auth/key/login', { body: { key } })).body.token;
+  const connB = { id: 'conn-ann-b', playerId: '', ipHash: 'net-a', inbox: [] };
+  h.conns.push(connB);
+  await lobbySession.hello(h.store, h.hooks, connB, { token: deviceB });
+  const hashB = await lobbyLogic.sha256Hex(deviceB);
+  assert.equal(h.store.getQueue()[0].session, hashB);
+
+  // Re-queueing from yet another socket of device B keeps the binding on B as well.
+  const connB2 = { id: 'conn-ann-b2', playerId: '', ipHash: 'net-a', inbox: [] };
+  h.conns.push(connB2);
+  connB2.playerId = ann.player.id;
+  connB2.sessionHash = hashB;
+  await lobbySession.queue(h.store, h.hooks, connB2, { control: '10+0' });
+  assert.equal(h.store.getQueue()[0].connId, 'conn-ann-b2');
+  assert.equal(h.store.getQueue()[0].session, hashB);
+
+  const bob = await h.guest('Bob', 'net-b');
+  await lobbySession.queue(h.store, h.hooks, bob.conn, { control: '10+0' });
+  assert.ok(connB2.inbox.some((message) => message.type === TYPES.MATCH_FOUND), 'device B got the match');
+  assert.equal(h.store.getPlayer(ann.player.id).seatRooms[0].session, hashB);
+
+  // Device B signs the others out and keeps its own game.
+  await h.call('POST', '/api/auth/logout-others', { token: deviceB });
+  assert.deepEqual(h.revoked, []);
+});

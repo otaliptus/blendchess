@@ -199,11 +199,13 @@
     record.lastSeen = now;
     await store.savePlayer(record);
 
-    // A fresh socket for a player already waiting takes over the queue slot.
+    // A fresh socket for a player already waiting takes over the queue slot, and the seat it leads
+    // to belongs to this socket's session, not the one that queued first.
     const entries = await store.getQueue();
     const mine = entries.find((entry) => entry.playerId === record.id);
     if (mine) {
       mine.connId = conn.id;
+      mine.session = sessionHash || '';
       await store.saveQueue(entries);
     }
 
@@ -238,6 +240,7 @@
     if (mine) {
       if (mine.control === control) {
         mine.connId = conn.id;
+        mine.session = conn.sessionHash || '';
         await store.saveQueue(entries);
         await sendQueued(store, hooks, conn, control);
         return false;

@@ -455,3 +455,57 @@ test('guests stored on the leaderboard before accounts are not listed, and leave
   await hub.store.bumpLeaderboard([record]);
   assert.deepEqual(storageMap.get('top').map((entry) => entry.name), ['Secured']);
 });
+
+test('a seat revocation the room does not acknowledge is kept and retried until it is', async () => {
+  const storageMap = new Map();
+  const ctx = createCtx(storageMap);
+  const hub = new LobbyHub(ctx, createEnv());
+  await ctx.ready;
+  const a = await open(hub, 'ip-a');
+  const b = await open(hub, 'ip-b');
+  await a.send('lobby_hello', { nickname: 'Ann' });
+  await b.send('lobby_hello', { nickname: 'Bob' });
+  await a.send('lobby_queue', { control: '10+0' });
+  await b.send('lobby_queue', { control: '10+0' });
+  const roomCode = a.last('match_found').payload.roomCode;
+  const annToken = a.last('lobby_ready').payload.token;
+
+  // The room is unreachable when Ann signs her other devices out.
+  const revokeCalls = [];
+  let healthy = false;
+  hub.env.GAME_HUB = {
+    idFromName: (name) => name,
+    get: (name) => ({
+      async fetch(url, init) {
+        revokeCalls.push({ room: name, url: String(url), body: JSON.parse(init.body) });
+        return healthy ? new MockResponse('{"ok":true,"revoked":true}', { status: 200 }) : new MockResponse('{"error":"busy"}', { status: 503 });
+      },
+    }),
+  };
+  const api = (path, token) => hub.fetch(new MockRequest(`https://lobby.internal${path}`, {
+    method: 'POST',
+    headers: { Origin: 'https://blendchess.com', Authorization: `Bearer ${token}`, 'X-IP-Hash': 'ip-a' },
+    body: '{}',
+  }));
+  const { key } = await (await api('/api/auth/key/create', annToken)).json();
+  const login = await hub.fetch(new MockRequest('https://lobby.internal/api/auth/key/login', {
+    method: 'POST',
+    headers: { Origin: 'https://blendchess.com', 'X-IP-Hash': 'ip-c' },
+    body: JSON.stringify({ key }),
+  }));
+  const secondToken = (await login.json()).token;
+  assert.equal((await api('/api/auth/logout-others', secondToken)).status, 200);
+  assert.equal(revokeCalls.length, 1);
+  assert.equal(revokeCalls[0].room, roomCode);
+  assert.equal(storageMap.get('revocations').length, 1, 'the failed revocation is stored');
+  assert.ok(ctx.storage.alarmAt - Date.now() <= 15_000, 'and a retry is scheduled');
+
+  // Still failing: kept. Then the room answers: cleared.
+  await hub.alarm();
+  assert.equal(storageMap.get('revocations').length, 1);
+  healthy = true;
+  await hub.alarm();
+  assert.deepEqual(storageMap.get('revocations'), []);
+  assert.deepEqual(revokeCalls.at(-1).body.sessions, revokeCalls[0].body.sessions);
+  assert.equal(revokeCalls.at(-1).url, 'https://room.internal/revoke');
+});

@@ -20,6 +20,10 @@ const CREATE_GLOBAL = 400;
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MAX_API_BODY_BYTES = 16 * 1024;
+const REVOKE_RETRY_MS = 15 * 1000;
+// A lobby room lives at most a day; after that there is no seat left to revoke.
+const REVOKE_GIVE_UP_MS = 24 * 60 * 60 * 1000;
+const REVOKE_MAX_PENDING = 500;
 
 function makeRoomCode() {
   const bytes = new Uint8Array(ROOM_CODE_LENGTH);
@@ -359,7 +363,9 @@ export class LobbyHub extends DurableObject {
   // old report markers. It is always in the future.
   async scheduleAlarm() {
     const entries = await this.store.getQueue();
-    const next = entries.length ? Date.now() + MATCH_TICK_MS : Date.now() + PRUNE_INTERVAL_MS;
+    let next = entries.length ? Date.now() + MATCH_TICK_MS : Date.now() + PRUNE_INTERVAL_MS;
+    const pending = (await this.store.read('revocations')) || [];
+    if (pending.length) next = Math.min(next, Date.now() + REVOKE_RETRY_MS);
     await this.ctx.storage.setAlarm(next);
   }
 
@@ -456,17 +462,60 @@ export class LobbyHub extends DurableObject {
   }
 
   // Signed-out sessions lose their seats: each room cancels them and closes their game sockets.
+  // The sessions are already gone by now, so a room that cannot be reached must not be forgotten:
+  // every revocation is stored first and only cleared once its room acknowledges it. The alarm
+  // retries the rest every 15 seconds for up to a day (a lobby room never lives longer).
   async revokeSeats(rooms) {
-    await Promise.all(rooms.map(async ({ roomCode, sessions }) => {
+    const now = Date.now();
+    await this.updateRevocations((pending) => {
+      for (const { roomCode, sessions } of rooms) {
+        const existing = pending.find((item) => item.roomCode === roomCode);
+        if (existing) existing.sessions = [...new Set([...existing.sessions, ...sessions])];
+        else pending.push({ roomCode, sessions: [...sessions], since: now });
+      }
+      return pending;
+    });
+    await this.sendRevocations(rooms.map((item) => item.roomCode));
+    await this.scheduleAlarm();
+  }
+
+  async updateRevocations(change) {
+    return lobbySession.withLock('revocations', async () => {
+      const now = Date.now();
+      const pending = ((await this.store.read('revocations')) || [])
+        .map((item) => ({ ...item, sessions: [...item.sessions] }))
+        .filter((item) => now - item.since < REVOKE_GIVE_UP_MS);
+      const next = change(pending).slice(-REVOKE_MAX_PENDING);
+      await this.store.write('revocations', next);
+      return next;
+    });
+  }
+
+  // Sends the pending revocations (all of them, or just these rooms) and clears the acknowledged ones.
+  async sendRevocations(only = null) {
+    const pending = (await this.store.read('revocations')) || [];
+    if (!pending.length) return;
+    const targets = only ? pending.filter((item) => only.includes(item.roomCode)) : pending;
+    const done = [];
+    await Promise.all(targets.map(async ({ roomCode, sessions }) => {
       try {
-        await this.env.GAME_HUB.get(this.env.GAME_HUB.idFromName(roomCode)).fetch('https://room.internal/revoke', {
+        const response = await this.env.GAME_HUB.get(this.env.GAME_HUB.idFromName(roomCode)).fetch('https://room.internal/revoke', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessions }),
         });
+        const body = response.ok ? await response.json().catch(() => null) : null;
+        if (body && body.ok) done.push({ roomCode, sessions });
+        else console.error('seat revocation not acknowledged', roomCode, response.status);
       } catch (error) {
         console.error('seat revocation failed', roomCode, error);
       }
+    }));
+    // Always rewrite: this also drops entries older than a day, so the retry alarm can stop.
+    await this.updateRevocations((list) => list.filter((item) => {
+      const acked = done.find((entry) => entry.roomCode === item.roomCode);
+      // Sessions added while this attempt was in flight stay pending.
+      return !acked || item.sessions.some((sessionHash) => !acked.sessions.includes(sessionHash));
     }));
   }
 
@@ -575,6 +624,7 @@ export class LobbyHub extends DurableObject {
   async alarm() {
     try {
       await lobbySession.tryMatch(this.store, this.hooks());
+      await this.sendRevocations();
       await this.pruneReportsIfDue();
     } catch (error) {
       console.error('lobby alarm failed', error);

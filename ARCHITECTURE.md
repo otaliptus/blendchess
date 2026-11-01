@@ -70,10 +70,13 @@ ratings, finished-game records and the live list. It never holds a game.
   the token's SHA-256 is stored (`session:<hash>`), and the player record lists its session hashes
   (at most 20), so one device can be signed out, or all the others. Tokens from before accounts
   existed (`token:<hash>`) are still accepted and adopted on first use.
-- **Seats belong to sessions.** A queue entry carries the session it came from, and the reservation
-  hands each seat that session (server-side only). The player record remembers its last five lobby
-  rooms with their sessions. Signing a session out sends those rooms an internal `POST /revoke`: the
-  seat's ticket and resume token stop working and its game sockets close with code `4001`.
+- **Seats belong to sessions.** A queue entry carries the session it came from (a device that takes
+  over the queue place takes over the binding too), and the reservation hands each seat that session
+  (server-side only). The player record remembers its last five lobby rooms with their sessions.
+  Signing a session out sends those rooms an internal `POST /revoke`: the seat's ticket and resume
+  token stop working and its game sockets close with code `4001`. The Worker stores each revocation
+  before sending it and clears it only when the room acknowledges; the lobby alarm retries the rest
+  every 15 seconds for up to a day.
 - **Securing an account.** A player can add passkeys (WebAuthn, discoverable credentials, verified with
   `@simplewebauthn/server`; `cred:<id>` holds the public key, counter and RP ID) and one account key
   (120 bits of Crockford base32, stored as `key:<sha256>`; high entropy means no slow hash is needed).
