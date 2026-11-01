@@ -76,7 +76,9 @@ ratings, finished-game records and the live list. It never holds a game.
   Signing a session out sends those rooms an internal `POST /revoke`: the seat's ticket and resume
   token stop working and its game sockets close with code `4001`. The Worker stores each revocation
   before sending it and clears it only when the room acknowledges; the lobby alarm retries the rest
-  every 15 seconds for up to a day.
+  every 15 seconds for up to a day. Each retry has a fixed stored time, and scheduling never pushes
+  back an alarm that is already due sooner, so steady lobby traffic cannot postpone retries (or the
+  matchmaking tick).
 - **Securing an account.** A player can add passkeys (WebAuthn, discoverable credentials, verified with
   `@simplewebauthn/server`; `cred:<id>` holds the public key, counter and RP ID) and one account key
   (120 bits of Crockford base32, stored as `key:<sha256>`; high entropy means no slow hash is needed).

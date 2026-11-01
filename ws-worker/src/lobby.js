@@ -361,11 +361,22 @@ export class LobbyHub extends DurableObject {
 
   // The alarm either retries matching while someone waits, or comes back once a day to prune
   // old report markers. It is always in the future.
-  async scheduleAlarm() {
+  // The alarm wakes for the earliest of: a match tick while someone waits, the next revocation
+  // retry (a fixed time stored with it), or the daily prune. setAlarm replaces any earlier alarm, and
+  // this runs after every lobby message, so an alarm already due sooner is left alone: otherwise
+  // steady traffic would keep pushing retries and match ticks into the future. Only the alarm handler
+  // itself (whose alarm has just fired) always sets the next one.
+  async scheduleAlarm({ fromAlarm = false } = {}) {
+    const now = Date.now();
     const entries = await this.store.getQueue();
-    let next = entries.length ? Date.now() + MATCH_TICK_MS : Date.now() + PRUNE_INTERVAL_MS;
-    const pending = (await this.store.read('revocations')) || [];
-    if (pending.length) next = Math.min(next, Date.now() + REVOKE_RETRY_MS);
+    let next = entries.length ? now + MATCH_TICK_MS : now + PRUNE_INTERVAL_MS;
+    for (const item of (await this.store.read('revocations')) || []) {
+      next = Math.min(next, Math.max(now + 1000, Number(item.nextAttemptAt) || now));
+    }
+    if (!fromAlarm) {
+      const current = await this.ctx.storage.getAlarm();
+      if (current !== null && current <= next) return;
+    }
     await this.ctx.storage.setAlarm(next);
   }
 
@@ -470,8 +481,12 @@ export class LobbyHub extends DurableObject {
     await this.updateRevocations((pending) => {
       for (const { roomCode, sessions } of rooms) {
         const existing = pending.find((item) => item.roomCode === roomCode);
-        if (existing) existing.sessions = [...new Set([...existing.sessions, ...sessions])];
-        else pending.push({ roomCode, sessions: [...sessions], since: now });
+        if (existing) {
+          existing.sessions = [...new Set([...existing.sessions, ...sessions])];
+          existing.nextAttemptAt = now;
+        } else {
+          pending.push({ roomCode, sessions: [...sessions], since: now, nextAttemptAt: now });
+        }
       }
       return pending;
     });
@@ -491,11 +506,13 @@ export class LobbyHub extends DurableObject {
     });
   }
 
-  // Sends the pending revocations (all of them, or just these rooms) and clears the acknowledged ones.
+  // Sends pending revocations (these rooms, or every one whose retry is due), clears the acknowledged
+  // ones and gives each failure a fixed time for its next attempt.
   async sendRevocations(only = null) {
     const pending = (await this.store.read('revocations')) || [];
     if (!pending.length) return;
-    const targets = only ? pending.filter((item) => only.includes(item.roomCode)) : pending;
+    const now = Date.now();
+    const targets = pending.filter((item) => (only ? only.includes(item.roomCode) : (Number(item.nextAttemptAt) || 0) <= now));
     const done = [];
     await Promise.all(targets.map(async ({ roomCode, sessions }) => {
       try {
@@ -512,11 +529,17 @@ export class LobbyHub extends DurableObject {
       }
     }));
     // Always rewrite: this also drops entries older than a day, so the retry alarm can stop.
-    await this.updateRevocations((list) => list.filter((item) => {
-      const acked = done.find((entry) => entry.roomCode === item.roomCode);
-      // Sessions added while this attempt was in flight stay pending.
-      return !acked || item.sessions.some((sessionHash) => !acked.sessions.includes(sessionHash));
-    }));
+    const tried = new Set(targets.map((item) => item.roomCode));
+    const retryAt = Date.now() + REVOKE_RETRY_MS;
+    await this.updateRevocations((list) => list
+      .filter((item) => {
+        const acked = done.find((entry) => entry.roomCode === item.roomCode);
+        // Sessions added while this attempt was in flight stay pending.
+        return !acked || item.sessions.some((sessionHash) => !acked.sessions.includes(sessionHash));
+      })
+      .map((item) => (tried.has(item.roomCode) && !done.some((entry) => entry.roomCode === item.roomCode)
+        ? { ...item, nextAttemptAt: retryAt }
+        : item)));
   }
 
   runInternal(work) {
@@ -629,7 +652,7 @@ export class LobbyHub extends DurableObject {
     } catch (error) {
       console.error('lobby alarm failed', error);
     }
-    await this.scheduleAlarm();
+    await this.scheduleAlarm({ fromAlarm: true });
   }
 
   // Once a day: drop report markers older than a week.

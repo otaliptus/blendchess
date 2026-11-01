@@ -184,6 +184,9 @@ function createCtx(storageMap = new Map()) {
       async setAlarm(time) {
         this.alarmAt = time;
       },
+      async getAlarm() {
+        return this.alarmAt ?? null;
+      },
       async deleteAlarm() {
         this.alarmAt = null;
       },
@@ -500,12 +503,90 @@ test('a seat revocation the room does not acknowledge is kept and retried until 
   assert.equal(storageMap.get('revocations').length, 1, 'the failed revocation is stored');
   assert.ok(ctx.storage.alarmAt - Date.now() <= 15_000, 'and a retry is scheduled');
 
-  // Still failing: kept. Then the room answers: cleared.
-  await hub.alarm();
-  assert.equal(storageMap.get('revocations').length, 1);
-  healthy = true;
-  await hub.alarm();
-  assert.deepEqual(storageMap.get('revocations'), []);
+  // Still failing when the retry comes due: kept. Then the room answers: cleared.
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    clock += 16_000;
+    await hub.alarm();
+    assert.equal(storageMap.get('revocations').length, 1);
+    assert.ok(storageMap.get('revocations')[0].nextAttemptAt > clock, 'the next attempt has a fixed time');
+    healthy = true;
+    clock += 16_000;
+    await hub.alarm();
+    assert.deepEqual(storageMap.get('revocations'), []);
+  } finally {
+    Date.now = realNow;
+  }
   assert.deepEqual(revokeCalls.at(-1).body.sessions, revokeCalls[0].body.sessions);
   assert.equal(revokeCalls.at(-1).url, 'https://room.internal/revoke');
+});
+
+test('steady lobby traffic cannot postpone a revocation retry or a match tick', async () => {
+  const realNow = Date.now;
+  let clock = realNow();
+  Date.now = () => clock;
+  try {
+    const ctx = createCtx(new Map());
+    const hub = new LobbyHub(ctx, createEnv());
+    await ctx.ready;
+    // Stand-in for the runtime: an alarm that comes due is cleared and its handler runs.
+    const advance = async (ms) => {
+      clock += ms;
+      if (ctx.storage.alarmAt !== null && ctx.storage.alarmAt <= clock) {
+        ctx.storage.alarmAt = null;
+        await hub.alarm();
+      }
+    };
+    const pinger = await open(hub, 'ip-p');
+    await pinger.send('lobby_hello', { nickname: 'Pinger' });
+    const token = pinger.last('lobby_ready').payload.token;
+    // Ordinary traffic: a valid message the lobby fully processes (and that changes nothing).
+    const chatter = async () => {
+      const before = pinger.ws.inbox.length;
+      await pinger.send('lobby_hello', { token, nickname: 'Pinger' });
+      assert.equal(pinger.ws.inbox[before].type, 'lobby_ready', 'the message was accepted');
+    };
+
+    // A match tick: someone waits alone; a message every 2 s must not push the 5 s tick back.
+    await pinger.send('lobby_queue', { control: '10+0' });
+    const tick = ctx.storage.alarmAt;
+    assert.ok(tick <= clock + 5_000);
+    await advance(2_000);
+    await chatter();
+    assert.equal(ctx.storage.alarmAt, tick, 'the match tick stayed put');
+    await pinger.send('lobby_cancel', {});
+    await advance(4_000);
+
+    // A revocation the room refuses, then a room that recovers at once.
+    const calls = [];
+    let healthy = false;
+    hub.env.GAME_HUB = {
+      idFromName: (name) => name,
+      get: () => ({
+        async fetch() {
+          calls.push(clock);
+          return healthy ? new MockResponse('{"ok":true}', { status: 200 }) : new MockResponse('{}', { status: 503 });
+        },
+      }),
+    };
+    await hub.revokeSeats([{ roomCode: 'ROOM01', sessions: ['session-1'] }]);
+    assert.equal(calls.length, 1);
+    const retryAt = hub.ctx.storage.alarmAt;
+    assert.ok(retryAt <= clock + 15_000);
+    healthy = true;
+
+    // Two minutes of a valid message every 10 seconds.
+    for (let i = 0; i < 12; i += 1) {
+      await advance(10_000);
+      await chatter();
+      if (i === 0) assert.equal(ctx.storage.alarmAt, retryAt, 'traffic did not move the retry');
+    }
+    assert.ok(calls.length >= 2, 'the retry ran');
+    assert.ok(calls[1] <= retryAt + 10_000, 'on time, not after the traffic stopped');
+    assert.equal((await hub.store.read('revocations')).length, 0);
+  } finally {
+    Date.now = realNow;
+  }
 });
