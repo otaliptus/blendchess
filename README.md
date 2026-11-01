@@ -19,13 +19,21 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 - `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
 - `Online`: create a room, send the invite link, play. Reconnects resume your seat automatically.
-- `Play Online`: ranked matchmaking. Pick Blitz 5+3 or Rapid 10+0, get paired by rating, play with a server-enforced clock, and climb the Elo leaderboard. No spectators: ranked games are private.
-- `Watch`: spectators see the fog too, unless the host turns on **party mode** (live full board for the audience).
+- `Play Online`: ranked matchmaking. Pick Blitz 5+3 or Rapid 10+0, get paired by rating, play with a server-enforced clock, and climb the Elo leaderboard.
+- `Watch`: every game the lobby arranges is listed under **Live now** and anyone can watch it with the whole board visible. In private rooms spectators see the fog, unless the host turns on **party mode**.
+- `Profiles`: every player has a public page with their rating, record and recent games. Each game opens as a full replay with a shareable link (`?game=...`); profiles are at `?p=name`.
 - `Archive`: finished games are saved on your device for replay and PGN export.
+
+## Accounts
+
+- **Start as a guest.** The lobby makes you an account on your first visit, with nothing to fill in. It lives in this browser only. Your nickname is unique and can be changed in the lobby.
+- **Secure it to keep it.** In `ACCOUNT`, add a **passkey** (your phone or computer's face, fingerprint or PIN; it syncs through your password manager) or get an **account key** (`BLND-XXXX-...`, a code you save somewhere safe; it works on any device). Either one lets you sign in on another device and keeps your rating if you clear the browser. Having both is a backup.
+- **Devices.** Each browser you sign in on gets its own session. `SIGN OUT OTHER DEVICES` ends all of them but the one you're on.
+- **Leaderboard.** Guests are rated like everyone else, but only secured accounts are listed.
+- Passkeys are offered on `blendchess.com` (and on `localhost` for development); a passkey belongs to the domain it was made on. Account keys work everywhere.
 
 ## Ranked play
 
-- **Identity without an account.** The lobby mints an anonymous player id and secret token on your first visit; it lives in your browser. Your nickname is unique and can be changed in the lobby.
 - **Elo.** Start at 1200. K=40 for your first 10 games, then 24. A win against a stronger player is worth more, and the rating is only ever changed by the server when a game it arranged ends.
 - **Clocks.** Blitz 5+3 and Rapid 10+0. The clock runs on the server: time is charged on every move and the flag falls even if both tabs are closed. Disconnecting does not stop your clock.
 - **Leaving.** Leaving a ranked game keeps the seat reserved, but the clock keeps running. If it runs out, the game is lost on time.
@@ -35,13 +43,14 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 The server is the authority for everything that decides a rating:
 
-- Ranked rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat. Spectators are refused.
+- Ranked rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat.
+- Watchers see the whole board, except a watcher on the same network as one of the players: they see exactly that player's side. A second tab on your own phone or Wi-Fi shows you nothing new.
 - Results are reported by the room itself, once per game, and the lobby only accepts results for games it arranged. Duplicate reports change nothing.
 - Two accounts on the same network get an unrated practice game instead.
 - Rating changes are clamped, new identities are rate limited per network, and the queue, room creation, socket count, message size and message rate are all capped.
 - Options (hard mode, party mode) are fixed in lobby-arranged games.
 
-What it cannot stop: someone running an engine locally, or two accounts on different networks colluding. The same-network rule, the rating clamp and rematch avoidance make boosting expensive, not impossible.
+What it cannot stop: someone running an engine locally, two accounts on different networks colluding, or a friend somewhere else watching the live board and telling you where the enemy pieces are. Ranked is for fun first. The same-network rules, the rating clamp and rematch avoidance make cheating and boosting take effort, not make them impossible.
 
 ## Rules in plain English
 
@@ -77,7 +86,7 @@ I regularly used 5.3-Codex-Xhigh for core game logic, Opus 4.6 for frontend work
 ## What's next
 
 - Kriegspiel pawn-try announcements ("any captures?") as an optional rule.
-- Tournament and club rooms, and a per-player game history.
+- Tournament and club rooms.
 
 ## How to run on your own
 

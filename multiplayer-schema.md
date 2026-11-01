@@ -26,9 +26,43 @@ The Cloudflare Worker gives every room its own Durable Object, so it routes on t
 | Create a room | `wss://<worker>/?create=1`, then send `create_room` |
 | Join, watch, resume | `wss://<worker>/?room=ABCD12`, then send `join_room` |
 
-The Node server accepts the same URLs and ignores the query string. `GET /leaderboard?limit=20` is
-served by both backends and returns `{ "players": [{ "id", "name", "rating", "games", "wins",
-"losses", "draws", "provisional" }], "total": 42 }` with `Access-Control-Allow-Origin: *`.
+The Node server accepts the same URLs and ignores the query string. Both backends also serve the HTTP
+API below.
+
+## HTTP API
+
+JSON in, JSON out. Errors are `{ "error": "CODE", "message": "…" }` with a 4xx status.
+
+Public reads (any origin, `Access-Control-Allow-Origin: *`, edge-cached for a few seconds on a custom domain):
+
+| Route | Answer |
+| --- | --- |
+| `GET /api/leaderboard?limit=20` | `{ players: [summary + { live: roomCode \| null }], total }`. Only secured accounts are listed; `total` counts every rated player. `GET /leaderboard` is an alias. |
+| `GET /api/live` | `{ games: [{ roomCode, control, rated, startedAt, white: { name, rating }, black: { … } }] }`, newest first, at most 50. |
+| `GET /api/players/:name` | `{ player: summary, live: liveGame + { color } \| null, games: [{ id, color, outcome, result, rated, control, opponent: { name, rating }, delta, moves, endedAt }] }` (20 most recent). 404 if unknown. |
+| `GET /api/games/:id` | `{ game: { id, rated, control, white: { name, before, after }, black: { … }, winner: "w" \| "b" \| null, result, startedAt, endedAt, plies } }`. Each ply is `[from, to, san, promotion, capture, forfeit]`. |
+
+A player summary is `{ id, name, rating, peak, games, wins, losses, draws, provisional, secured, createdAt }`.
+
+Account routes need the site's own `Origin` (configured `SITE_ORIGINS`, plus any `localhost`), and all but
+the sign-in routes need `Authorization: Bearer <session token>`. `me` is `{ player: summary, security:
+{ passkeys: [{ id, label, backedUp, createdAt, lastUsed }], hasKey, keyCreatedAt, sessions } }`.
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `GET /api/me` | | `me` |
+| `POST /api/auth/passkey/register/options` | `{}` | `{ challengeId, options }` (WebAuthn creation options, JSON form) |
+| `POST /api/auth/passkey/register/verify` | `{ challengeId, label, response }` | `me` |
+| `POST /api/auth/passkey/remove` | `{ id }` | `me` |
+| `POST /api/auth/passkey/login/options` | `{}` | `{ challengeId, options }` (no token needed) |
+| `POST /api/auth/passkey/login/verify` | `{ challengeId, response }` | `{ token, player }` (no token needed) |
+| `POST /api/auth/key/create` | `{}` | `{ key, ...me }`. The key is shown once; a new key retires the old one. |
+| `POST /api/auth/key/remove` | `{}` | `me` |
+| `POST /api/auth/key/login` | `{ key }` | `{ token, player }` (no token needed; case, dashes and the `BLND` prefix are optional) |
+| `POST /api/auth/logout` | `{}` | `{ ok: true }`; lobby sockets opened with that session close with code `4001` |
+| `POST /api/auth/logout-others` | `{}` | `me`; every other session of the account ends |
+
+Sign-in rate limits: 30 account requests per minute per network, 10 failed sign-ins per minute per network.
 
 ## Ranked lobby
 
@@ -132,8 +166,10 @@ Illegal moves are rejected and announced to everyone as an `illegal` event; only
 In hard mode an illegal move forfeits the turn (recorded as a null move `--`) unless the mover is in check.
 
 In a lobby-arranged room the join payload is `{ "ticket": "…" }`; without the ticket the answer is
-`TICKET_INVALID`, and spectators are refused with `SPECTATOR_DISABLED`. Resuming a seated player still
-works with `resume: true` and the `resumeToken`.
+`TICKET_INVALID`. Resuming a seated player still works with `resume: true` and the `resumeToken`.
+Anyone may watch a lobby-arranged room with `{ "spectator": true }`: watchers see the whole board,
+except that in a ranked game a watcher on the same network as a player sees that player's view
+(`you.perspective` is then `"w"` or `"b"`).
 
 ### `set_options`
 
@@ -214,7 +250,9 @@ Spectators get `{ "role": "spectator", "spectatorId": "..." }`. A `game_state` a
   server owns it; moving without enough time loses on the spot.
 - `rated`: the game counts for Elo. `reserved`: the seats were fixed by the lobby and need tickets.
   `ratings` appears in the final views (`{ w: {before, after, delta}, b: {…} }`) once the result has
-  been reported.
+  been reported, and `recordId` once the lobby has stored the game (`GET /api/games/:id`).
+- `you`: `{ role, color, perspective }`. `color` is the seat (players only); `perspective` is the side a
+  same-network spectator is limited to, otherwise `null`.
 - Event kinds: `move`, `capture`, `check`, `illegal`, `forfeit`, `draw_offer`, `draw_declined`, `resign`, `game_over`, `presence`, `options`, `new_game`. Event `id`s increase, so a client can tell which ones are new.
 - `check.directions`: any of `file`, `rank`, `diagonal`, `knight`.
 
@@ -227,7 +265,8 @@ It is also used for refused `set_options`, `new_game`, `claim_draw` and `resign`
 
 `payload.errorCode` is one of `INVALID_PAYLOAD`, `UNKNOWN_ROOM`, `ROOM_FULL`, `NOT_YOUR_TURN`, `WRONG_COLOR`,
 `ILLEGAL_MOVE`, `GAME_OVER`, `GAME_IN_PROGRESS`, `ROOM_NOT_READY`, `RATE_LIMIT`, `PLAYER_NOT_FOUND`,
-`INVALID_DRAW_CLAIM`, `VERSION_MISMATCH`, `TICKET_INVALID`, `SPECTATOR_DISABLED`, `RATED_LOCKED`, plus a
+`INVALID_DRAW_CLAIM`, `VERSION_MISMATCH`, `TICKET_INVALID`, `SPECTATOR_DISABLED` (no longer sent by
+current servers), `RATED_LOCKED`, plus a
 human-readable `message`. Lobby errors use `QUEUE_FULL`, `ALREADY_IN_GAME`, `NOT_AUTHENTICATED`.
 
 ## Limits (both backends)
