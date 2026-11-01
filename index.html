@@ -35,53 +35,47 @@
 
         <nav id="menuMain" class="menu px-panel hidden" aria-label="Main menu">
           <button class="menu-item" type="button" data-action="continue" id="continueItem" hidden>
-            <span class="menu-label">CONTINUE</span><span class="menu-hint" id="continueHint"></span>
+            <span class="menu-label">CONTINUE</span>
           </button>
           <button class="menu-item" type="button" data-action="online" id="onlineItem">
-            <span class="menu-label">PLAY ONLINE</span><span class="menu-hint">ranked matchmaking, elo &amp; a clock</span>
+            <span class="menu-label">PLAY ONLINE</span>
           </button>
           <button class="menu-item" type="button" data-action="local">
-            <span class="menu-label">LOCAL DUEL</span><span class="menu-hint">pass &amp; play on this device</span>
+            <span class="menu-label">LOCAL DUEL</span>
           </button>
           <button class="menu-item" type="button" data-action="create">
-            <span class="menu-label">CREATE ROOM</span><span class="menu-hint">invite a friend online</span>
+            <span class="menu-label">CREATE ROOM</span>
           </button>
           <button class="menu-item" type="button" data-action="join">
-            <span class="menu-label">JOIN ROOM</span><span class="menu-hint">play or watch with a code</span>
+            <span class="menu-label">JOIN ROOM</span>
           </button>
           <button class="menu-item" type="button" data-action="archive">
-            <span class="menu-label">ARCHIVE</span><span class="menu-hint">replay finished games</span>
+            <span class="menu-label">ARCHIVE</span>
           </button>
           <button class="menu-item" type="button" data-action="help">
-            <span class="menu-label">HOW TO PLAY</span><span class="menu-hint">rules of the fog</span>
+            <span class="menu-label">HOW TO PLAY</span>
           </button>
         </nav>
 
         <section id="menuLobby" class="menu lobby-menu hidden" aria-labelledby="lobbyTitle">
           <div class="play-card px-panel">
             <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
+            <label class="field">
+              <span class="field-label">NAME</span>
+              <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
+            </label>
             <div class="control-picker" role="group" aria-label="Time control">
-              <button type="button" class="control-chip" data-control="10+0">
+              <button type="button" class="control-chip" data-control="10+0" aria-label="Rapid: 10 minutes, no increment">
                 <span class="control-name">RAPID</span><span class="control-time">10 min</span>
-                <small>a little time to think</small>
               </button>
-              <button type="button" class="control-chip" data-control="5+3">
+              <button type="button" class="control-chip" data-control="5+3" aria-label="Blitz: 5 minutes plus 3 seconds per move">
                 <span class="control-name">BLITZ</span><span class="control-time">5 + 3</span>
-                <small>5 min + 3 sec per move</small>
               </button>
             </div>
             <button id="lobbyFind" class="px-btn primary play-button" type="button">FIND GAME</button>
             <button id="lobbyCancel" class="px-btn play-button hidden" type="button">CANCEL SEARCH</button>
-            <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite">Ranked games. No signup needed.</p>
-            <details class="player-options">
-              <summary><span id="lobbyIdentity">Play as a guest</span><span class="edit-label">Edit name</span></summary>
-              <label class="field">
-                <span class="field-label">YOUR NAME</span>
-                <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
-              </label>
-            </details>
+            <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite"></p>
           </div>
-          <p id="secureHint" class="secure-hint hidden"><button id="secureHintBtn" class="link-btn" type="button">Save your progress</button> to play on any device.</p>
           <div class="menu-row">
             <button class="px-btn ghost" type="button" data-action="back">BACK</button>
             <button class="px-btn" type="button" data-action="community">WATCH &amp; RANKINGS</button>
@@ -137,12 +131,9 @@
           <button id="myProfileBtn" class="px-btn" type="button">MY PROFILE &amp; GAMES</button>
 
           <div id="accountMethods" class="account-block">
-            <p id="accountHelp" class="section-intro">Keep your rating and games on any device.</p>
             <button id="addPasskeyBtn" class="px-btn primary" type="button">SAVE WITH PASSKEY</button>
-            <p id="passkeyHelp" class="field-help">Use your fingerprint, face or device PIN.</p>
             <details id="accountKeyOptions" class="disclosure">
-              <summary>Use an account key instead</summary>
-              <p class="field-help">A sign-in code you keep in your password manager.</p>
+              <summary>Account key</summary>
               <button id="makeKeyBtn" class="px-btn" type="button">GET ACCOUNT KEY</button>
             </details>
             <details id="savedMethods" class="disclosure">
@@ -152,11 +143,11 @@
           </div>
 
           <details id="accountSignIn" class="disclosure">
-            <summary id="signInSummary">Already have an account? Sign in</summary>
+            <summary id="signInSummary">Sign in</summary>
             <div class="sign-in-options">
               <button id="passkeyLoginBtn" class="px-btn" type="button">SIGN IN WITH PASSKEY</button>
               <details id="keySignIn" class="disclosure">
-                <summary>Sign in with an account key</summary>
+                <summary>Account key</summary>
                 <label class="field">
                   <span class="field-label">ACCOUNT KEY</span>
                   <input id="keyLoginInput" class="key-input" maxlength="48" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Paste your account key" />
@@ -181,7 +172,6 @@
             <h2 id="setupTitle" class="menu-title" tabindex="-1">PLAY A FRIEND</h2>
             <button class="link-btn" type="button" data-action="back">Back</button>
           </div>
-          <p id="setupHelp" class="section-intro">Create a game, then send your friend the link.</p>
           <label class="field" id="nicknameField">
             <span class="field-label">YOUR NAME</span>
             <input id="nicknameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
@@ -202,7 +192,6 @@
           <div class="menu-row">
             <button class="px-btn primary" type="button" id="setupGo">START</button>
           </div>
-          <button id="joinFriendBtn" class="link-btn join-friend" type="button" data-action="join">Have a code? Join a game</button>
         </section>
 
         <section id="menuJoin" class="menu px-panel hidden" aria-labelledby="joinTitle">
