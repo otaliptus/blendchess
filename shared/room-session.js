@@ -39,9 +39,15 @@
     }));
   }
 
+  // Members who see the same thing (every watcher of a lobby game, say) share one view.
   function broadcastViews(state, hooks, skipConnId = null) {
+    const views = new Map();
     for (const conn of hooks.connections()) {
-      if (conn.id !== skipConnId && isMember(state, conn)) sendView(state, hooks, conn);
+      if (conn.id === skipConnId || !isMember(state, conn)) continue;
+      const viewer = viewerOf(state, conn);
+      const key = `${viewer.role}:${viewer.color}:${viewer.perspective || ''}`;
+      if (!views.has(key)) views.set(key, rl.createView(state, viewer));
+      hooks.send(conn, createMessage(TYPES.GAME_STATE, state.roomCode, conn.playerId || '', { game: views.get(key) }));
     }
   }
 

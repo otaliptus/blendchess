@@ -19,7 +19,6 @@ const CREATE_PER_IP = 12;
 const CREATE_GLOBAL = 400;
 const REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const MAX_API_BODY_BYTES = 16 * 1024;
 const REVOKE_RETRY_MS = 15 * 1000;
 // A lobby room lives at most a day; after that there is no seat left to revoke.
 const REVOKE_GIVE_UP_MS = 24 * 60 * 60 * 1000;
@@ -88,20 +87,17 @@ class StorageLobbyStore {
     await this.write(`player:${record.id}`, record);
   }
 
-  async getSession(hash) {
-    const value = await this.read(`session:${hash}`);
-    if (value) return value;
-    // Identities minted before accounts existed: token:<hash> -> playerId.
-    const legacy = await this.read(`token:${hash}`);
-    return typeof legacy === 'string' ? { playerId: legacy, method: 'guest', createdAt: 0, lastUsed: 0 } : null;
+  // A session is token:<sha256 of the token> -> player id: the same key identities used before
+  // accounts existed, so those keep working as sessions.
+  async sessionOwner(hash) {
+    return this.read(`token:${hash}`);
   }
 
-  async saveSession(hash, data) {
-    await this.write(`session:${hash}`, data);
+  async saveSession(hash, playerId) {
+    await this.write(`token:${hash}`, playerId);
   }
 
   async removeSession(hash) {
-    await this.remove(`session:${hash}`);
     await this.remove(`token:${hash}`);
   }
 
@@ -145,25 +141,22 @@ class StorageLobbyStore {
     await this.storage.delete(`chal:${id}`);
   }
 
-  // Challenge ids start with their expiry, so everything before "now" is expired. Each new challenge
-  // sweeps up to 128 old ones, which keeps up with however many are being created.
+  // Challenge ids start with their expiry (logic.makeChallengeId), so everything before "now" has
+  // expired. Each new challenge sweeps up to 128 old ones, which keeps up with however many are made.
   async sweepChallenges() {
-    const end = `chal:${Date.now().toString(36).padStart(9, '0')}`;
+    const end = `chal:${logic.expiryStamp(Date.now())}`;
     const expired = await this.storage.list({ prefix: 'chal:', end, limit: 128 });
     if (expired.size) await this.storage.delete([...expired.keys()]);
   }
 
+  // Game records are large and write-once: they go straight to storage instead of the read cache,
+  // where they would push out the small hot keys (sessions, players, queue, live, top).
   async getGame(id) {
-    return this.read(`game:${id}`);
-  }
-
-  async getGames(ids) {
-    const games = await Promise.all(ids.map((id) => this.read(`game:${id}`)));
-    return games.filter(Boolean);
+    return (await this.storage.get(`game:${id}`)) ?? null;
   }
 
   async saveGame(game) {
-    await this.write(`game:${game.id}`, game);
+    await this.storage.put(`game:${game.id}`, game);
   }
 
   async getLive() {
@@ -229,8 +222,10 @@ class StorageLobbyStore {
   async bumpLeaderboard(records = []) {
     // Entries from before accounts (or from accounts that later removed their sign-in methods)
     // carry no `secured`: they are dropped here and filtered out on read.
-    const top = ((await this.read('top')) || []).filter((entry) => entry && entry.secured);
+    const stored = (await this.read('top')) || [];
+    const top = stored.filter((entry) => entry && entry.secured);
     const stats = (await this.read('stats')) || { ranked: 0 };
+    let ranked = stats.ranked;
     for (const record of records) {
       const index = top.findIndex((entry) => entry.id === record.id);
       if (index >= 0) top.splice(index, 1);
@@ -238,12 +233,14 @@ class StorageLobbyStore {
       if (logic.onLeaderboard(record)) top.push(logic.summary(record));
       if (record.games > 0 && !(await this.read(`played:${record.id}`))) {
         await this.write(`played:${record.id}`, 1);
-        stats.ranked += 1;
+        ranked += 1;
       }
     }
     top.sort((a, b) => b.rating - a.rating || b.games - a.games);
-    await this.write('top', top.slice(0, logic.LEADERBOARD_SIZE));
-    await this.write('stats', stats);
+    const next = top.slice(0, logic.LEADERBOARD_SIZE);
+    // Many calls change nothing (a guest renaming, a key made before any game): skip those writes.
+    if (JSON.stringify(next) !== JSON.stringify(stored)) await this.write('top', next);
+    if (ranked !== stats.ranked) await this.write('stats', { ...stats, ranked });
   }
 
   async leaderboard(limit) {
@@ -384,7 +381,7 @@ export class LobbyHub extends DurableObject {
     const url = new URL(request.url);
 
     // The public HTTP API (/api/*), forwarded by index.js with the caller's network hash.
-    if (url.pathname.startsWith('/api/') || url.pathname === '/leaderboard') return this.api(request, url);
+    if (accountApi.isApiPath(url.pathname)) return this.api(request);
 
     // Internal calls from room Durable Objects and the Worker router. External clients cannot
     // reach these paths: index.js never forwards them.
@@ -435,86 +432,59 @@ export class LobbyHub extends DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async api(request, url) {
-    const req = {
+  async api(request) {
+    // Built once: the hooks read the live sockets when called.
+    this.apiContext = this.apiContext || {
+      origins: this.origins,
+      webauthn,
+      hooks: this.hooks(),
+      revokeSeats: (rooms) => this.revokeSeats(rooms),
+    };
+    const origin = request.headers.get('Origin') || '';
+    const result = await accountApi.handleHttp(this.store, this.apiContext, {
       method: request.method,
-      path: url.pathname === '/leaderboard' ? '/api/leaderboard' : url.pathname,
-      query: { limit: url.searchParams.get('limit') },
-      origin: request.headers.get('Origin') || '',
+      url: request.url,
+      origin,
       authorization: request.headers.get('Authorization') || '',
       ipHash: request.headers.get('X-IP-Hash') || 'unknown',
-      body: null,
-    };
-    let result = null;
-    if (request.method === 'POST') {
-      const text = await request.text();
-      if (text.length > MAX_API_BODY_BYTES) {
-        result = { status: 413, body: { error: 'TOO_LARGE' }, public: false, cacheSeconds: 0 };
-      } else if (text) {
-        try {
-          req.body = JSON.parse(text);
-        } catch {
-          result = { status: 400, body: { error: 'INVALID', message: 'Body must be JSON.' }, public: false, cacheSeconds: 0 };
-        }
-      }
-    }
-    if (!result) {
-      result = await accountApi.handle(this.store, {
-        origins: this.origins,
-        webauthn,
-        hooks: this.hooks(),
-        revokeSeats: (rooms) => this.revokeSeats(rooms),
-      }, req);
-    }
+      bodyText: request.method === 'POST' ? await request.text() : '',
+    });
     return new Response(JSON.stringify(result.body), {
       status: result.status,
-      headers: accountApi.responseHeaders(req, result, this.origins),
+      headers: accountApi.responseHeaders(origin, result, this.origins),
     });
   }
 
   // Signed-out sessions lose their seats: each room cancels them and closes their game sockets.
   // The sessions are already gone by now, so a room that cannot be reached must not be forgotten:
-  // every revocation is stored first and only cleared once its room acknowledges it. The alarm
-  // retries the rest every 15 seconds for up to a day (a lobby room never lives longer).
+  // every revocation is stored first (one entry per room per sign-out) and removed only once its
+  // room acknowledges it. Failures get a fixed time for the next attempt; the alarm retries them
+  // every 15 seconds for up to a day (a lobby room never lives longer).
   async revokeSeats(rooms) {
     const now = Date.now();
-    await this.updateRevocations((pending) => {
-      for (const { roomCode, sessions } of rooms) {
-        const existing = pending.find((item) => item.roomCode === roomCode);
-        if (existing) {
-          existing.sessions = [...new Set([...existing.sessions, ...sessions])];
-          existing.nextAttemptAt = now;
-        } else {
-          pending.push({ roomCode, sessions: [...sessions], since: now, nextAttemptAt: now });
-        }
-      }
-      return pending;
-    });
-    await this.sendRevocations(rooms.map((item) => item.roomCode));
+    const entries = rooms.map(({ roomCode, sessions }) => ({ id: logic.makeToken(12), roomCode, sessions, since: now, nextAttemptAt: now }));
+    await this.updateRevocations((pending) => [...pending, ...entries]);
+    await this.sendRevocations(entries);
     await this.scheduleAlarm();
   }
 
   async updateRevocations(change) {
     return lobbySession.withLock('revocations', async () => {
-      const now = Date.now();
-      const pending = ((await this.store.read('revocations')) || [])
-        .map((item) => ({ ...item, sessions: [...item.sessions] }))
-        .filter((item) => now - item.since < REVOKE_GIVE_UP_MS);
-      const next = change(pending).slice(-REVOKE_MAX_PENDING);
+      const pending = (await this.store.read('revocations')) || [];
+      const next = change(pending.slice()).slice(-REVOKE_MAX_PENDING);
       await this.store.write('revocations', next);
-      return next;
     });
   }
 
-  // Sends pending revocations (these rooms, or every one whose retry is due), clears the acknowledged
-  // ones and gives each failure a fixed time for its next attempt.
-  async sendRevocations(only = null) {
-    const pending = (await this.store.read('revocations')) || [];
-    if (!pending.length) return;
+  // Sends these entries (default: every pending one whose retry is due), then removes the
+  // acknowledged ones, reschedules the failures, and drops anything older than a day.
+  async sendRevocations(targets = null) {
     const now = Date.now();
-    const targets = pending.filter((item) => (only ? only.includes(item.roomCode) : (Number(item.nextAttemptAt) || 0) <= now));
-    const done = [];
-    await Promise.all(targets.map(async ({ roomCode, sessions }) => {
+    const pending = (await this.store.read('revocations')) || [];
+    const due = targets || pending.filter((item) => item.nextAttemptAt <= now);
+    const expired = pending.some((item) => now - item.since >= REVOKE_GIVE_UP_MS);
+    if (!due.length && !expired) return;
+    const results = await Promise.all(due.map(async ({ id, roomCode, sessions }) => {
       try {
         const response = await this.env.GAME_HUB.get(this.env.GAME_HUB.idFromName(roomCode)).fetch('https://room.internal/revoke', {
           method: 'POST',
@@ -522,24 +492,19 @@ export class LobbyHub extends DurableObject {
           body: JSON.stringify({ sessions }),
         });
         const body = response.ok ? await response.json().catch(() => null) : null;
-        if (body && body.ok) done.push({ roomCode, sessions });
-        else console.error('seat revocation not acknowledged', roomCode, response.status);
+        if (body && body.ok) return { id, done: true };
+        console.error('seat revocation not acknowledged', roomCode, response.status);
       } catch (error) {
         console.error('seat revocation failed', roomCode, error);
       }
+      return { id, done: false };
     }));
-    // Always rewrite: this also drops entries older than a day, so the retry alarm can stop.
-    const tried = new Set(targets.map((item) => item.roomCode));
+    const done = new Set(results.filter((item) => item.done).map((item) => item.id));
+    const failed = new Set(results.filter((item) => !item.done).map((item) => item.id));
     const retryAt = Date.now() + REVOKE_RETRY_MS;
     await this.updateRevocations((list) => list
-      .filter((item) => {
-        const acked = done.find((entry) => entry.roomCode === item.roomCode);
-        // Sessions added while this attempt was in flight stay pending.
-        return !acked || item.sessions.some((sessionHash) => !acked.sessions.includes(sessionHash));
-      })
-      .map((item) => (tried.has(item.roomCode) && !done.some((entry) => entry.roomCode === item.roomCode)
-        ? { ...item, nextAttemptAt: retryAt }
-        : item)));
+      .filter((item) => !done.has(item.id) && now - item.since < REVOKE_GIVE_UP_MS)
+      .map((item) => (failed.has(item.id) ? { ...item, nextAttemptAt: retryAt } : item)));
   }
 
   runInternal(work) {

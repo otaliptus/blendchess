@@ -188,8 +188,8 @@
     refreshTimer: null,
   };
 
-  // The signed-in account as /api/me describes it, and where the account/profile panels return to.
-  const account = { me: null, busy: false, returnTo: 'menuLobby', notice: '' };
+  // The signed-in account as /api/me describes it, and where the profile panel returns to.
+  const account = { me: null, busy: false, notice: '' };
   const profileState = { name: '', returnTo: 'menuLobby', data: null };
 
   const CONTROL_LABELS = { '5+3': 'BLITZ 5+3', '10+0': 'RAPID 10+0' };
@@ -937,24 +937,15 @@
     return `Rating ${mine.before} → ${mine.after} (${sign}).`;
   }
 
-  function shareReplayButton(view) {
-    return el('button', {
-      class: 'px-btn',
-      type: 'button',
-      text: 'SHARE REPLAY',
-      dataset: { share: view.recordId },
-      onclick: () => copyLink({ game: view.recordId }, 'Replay link copied!'),
-    });
-  }
-
   function onGameOver(view) {
     const key = `${app.mode}:${view.roomCode}:${view.gameId}`;
     archiveGame(view, key);
     $('gameOverRating').textContent = ratingChangeText(view);
     // The lobby's record id arrives in a later view than the result itself.
-    if (app.gameOverShown === key && view.recordId && !$('gameOverButtons').querySelector('[data-share]')) {
-      const row = $('gameOverButtons');
-      row.insertBefore(shareReplayButton(view), row.children[3] || null);
+    const share = $('gameOverButtons').querySelector('[data-share]');
+    if (app.gameOverShown === key && share && view.recordId) {
+      share.dataset.share = view.recordId;
+      share.hidden = false;
     }
     if (app.gameOverShown === key || app.mode === 'archive') return;
     app.gameOverShown = key;
@@ -1002,8 +993,17 @@
       if (app.mode === 'online' && (view.rated || view.reserved) && view.you.role === 'player') {
         buttons.push(el('button', { class: 'px-btn', type: 'button', text: 'NEW OPPONENT', onclick: () => { $('gameOver').classList.add('hidden'); playAgain(); } }));
       }
-      const latest = app.view && app.view.gameId === view.gameId ? app.view : view;
-      if (app.mode === 'online' && latest.recordId) buttons.splice(3, 0, shareReplayButton(latest));
+      if (app.mode === 'online') {
+        const latest = app.view && app.view.gameId === view.gameId ? app.view : view;
+        buttons.splice(3, 0, el('button', {
+          class: 'px-btn',
+          type: 'button',
+          text: 'SHARE REPLAY',
+          hidden: !latest.recordId,
+          dataset: { share: latest.recordId || '' },
+          onclick: (event) => copyLink({ game: event.currentTarget.dataset.share }, 'Replay link copied!'),
+        }));
+      }
       $('gameOverButtons').replaceChildren(...buttons);
       $('gameOver').classList.remove('hidden');
       buttons[buttons.length - 1].focus();
@@ -1202,8 +1202,7 @@
       lobbyState.ws = null;
       if (event && event.code === 4001) {
         // This device's session was ended from another device.
-        remove(identityKey());
-        lobbyState.player = null;
+        forgetAccount();
         toast('This device was signed out.', 'bad');
       }
       const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
@@ -1339,11 +1338,11 @@
     renderLive();
   }
 
-  function profileLink(name, rating) {
+  function profileLink(name, label = name, extraClass = '') {
     return el('button', {
-      class: 'link-btn',
+      class: `link-btn ${extraClass}`.trim(),
       type: 'button',
-      text: rating == null ? name : `${name} (${rating})`,
+      text: label,
       onclick: () => openProfile(name, 'menuLobby'),
     });
   }
@@ -1358,9 +1357,9 @@
     }
     list.replaceChildren(...games.slice(0, 8).map((game) => el('li', { class: 'live-row' },
       el('span', { class: 'live-players' },
-        profileLink(game.white.name, game.white.rating),
+        profileLink(game.white.name, `${game.white.name} (${game.white.rating})`),
         el('span', { class: 'live-vs', text: 'vs' }),
-        profileLink(game.black.name, game.black.rating)),
+        profileLink(game.black.name, `${game.black.name} (${game.black.rating})`)),
       el('span', { class: 'live-meta', text: `${controlLabel(game.control)}${game.rated ? '' : ' · practice'}` }),
       el('button', { class: 'px-btn small', type: 'button', text: 'WATCH', onclick: () => watchRoom(game.roomCode) }))));
   }
@@ -1377,12 +1376,7 @@
     const mine = lobbyState.player && lobbyState.player.id;
     list.replaceChildren(...data.players.map((player, index) => el('li', { class: `leaderboard-row${player.id === mine ? ' me' : ''}` },
       el('span', { class: 'lb-rank', text: `${index + 1}.` }),
-      el('button', {
-        class: 'lb-name link-btn',
-        type: 'button',
-        text: `${player.name}${player.provisional ? ' *' : ''}`,
-        onclick: () => openProfile(player.name, 'menuLobby'),
-      }),
+      profileLink(player.name, `${player.name}${player.provisional ? ' *' : ''}`, 'lb-name'),
       el('span', { class: 'lb-games', text: `${player.wins}W ${player.losses}L ${player.draws}D` }),
       player.live
         ? el('button', { class: 'lb-live', type: 'button', text: 'LIVE', title: `Watch ${player.name} play`, onclick: () => watchRoom(player.live) })
@@ -1453,7 +1447,7 @@
     }
     if (message.type === TYPES.LOBBY_ERROR) {
       toast(REASON_TEXT[payload.errorCode] || payload.message || 'Lobby error.', 'bad');
-      if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) remove(identityKey());
+      if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) forgetAccount();
       lobbyState.findWanted = false;
       lobbyState.status = lobbyState.player ? 'ready' : 'off';
       lobbyState.queued = null;
@@ -1496,7 +1490,8 @@
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        cache: 'no-store',
+        // Public reads may come from the browser cache for the few seconds the server allows.
+        cache: auth ? 'no-store' : 'default',
       });
     } catch {
       return { ok: false, status: 0, data: { message: 'Server unreachable.' } };
@@ -1510,34 +1505,34 @@
     return { ok: response.ok, status: response.status, data };
   }
 
-  function setUrl(params = {}) {
+  // A link to this page with these parameters (empty ones dropped). A non-default server travels
+  // along as ?ws=, so the link works for whoever opens it.
+  function linkTo(params = {}) {
     const url = new URL(window.location.href);
     url.search = '';
     url.hash = '';
     const entries = Object.entries(params).filter(([, value]) => value);
     for (const [key, value] of entries) url.searchParams.set(key, value);
     if (entries.length && settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
-    window.history.replaceState(null, '', url);
-  }
-
-  function linkTo(params) {
-    const url = new URL(window.location.href);
-    url.search = '';
-    url.hash = '';
-    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-    if (settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
     return url.toString();
   }
 
-  async function copyLink(params, message) {
-    const link = linkTo(params);
+  function setUrl(params = {}) {
+    window.history.replaceState(null, '', linkTo(params));
+  }
+
+  async function copyText(text, message, promptLabel = 'Copy this link:') {
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(text);
       toast(message);
       sfx.play('select');
     } catch {
-      window.prompt('Copy this link:', link);
+      window.prompt(promptLabel, text);
     }
+  }
+
+  function copyLink(params, message) {
+    return copyText(linkTo(params), message);
   }
 
   function shortDate(at) {
@@ -1555,10 +1550,6 @@
     joinRoom(roomCode, { spectator: true, nickname: settings.nickname || 'Spectator' });
   }
 
-  function squareOf(name) {
-    return /^[a-h][1-8]$/.test(name || '') ? { r: 8 - Number(name[1]), c: 'abcdefgh'.indexOf(name[0]) } : null;
-  }
-
   // A finished lobby game from the server, opened in the archive viewer.
   async function openServerGame(id) {
     const result = await api(`/api/games/${encodeURIComponent(id)}`);
@@ -1567,26 +1558,15 @@
       return false;
     }
     const game = result.data.game;
-    const moves = game.plies.map(([from, to, san, promotion, capture, forfeit], index) => ({
-      ply: index + 1,
-      color: index % 2 ? 'b' : 'w',
-      forfeit: Boolean(forfeit),
-      capture: capture ? { square: capture, ...squareOf(capture) } : null,
-      san: forfeit ? '--' : san,
-      from: squareOf(from),
-      to: squareOf(to),
-      promotion: promotion || null,
-    }));
-    const winner = game.winner === 'w' ? 'White' : game.winner === 'b' ? 'Black' : null;
     leaveLobbyPanel();
     openArchived({
       recordId: game.id,
       white: game.white.name,
       black: game.black.name,
-      winner,
+      winner: game.winner ? colorName(game.winner) : null,
       result: game.result,
       hardMode: false,
-      moves,
+      moves: rl.movesFromPlies(game.plies),
       at: game.endedAt,
       mode: 'online',
     });
@@ -1666,13 +1646,12 @@
       el('span', { class: 'game-outcome', text: OUTCOME_TEXT[game.outcome] || '' }),
       el('span', { class: 'game-opponent', text: `vs ${game.opponent.name} (${game.opponent.rating})` }),
       el('span', { class: 'game-delta', text: delta }),
-      el('span', { class: 'game-meta', text: `${game.color === 'w' ? 'White' : 'Black'} · ${game.moves} moves · ${controlLabel(game.control)} · ${shortDate(game.endedAt)}` })));
+      el('span', { class: 'game-meta', text: `${colorName(game.color)} · ${game.moves} moves · ${controlLabel(game.control)} · ${shortDate(game.endedAt)}` })));
     }));
   }
 
   function leaveProfile() {
     sfx.play('click');
-    setUrl({});
     if (profileState.returnTo === 'menuLobby') openLobbyPanel();
     else showMenuPanel(profileState.returnTo || 'menuMain');
   }
@@ -1689,30 +1668,15 @@
       && PASSKEY_HOSTS.includes(window.location.hostname));
   }
 
-  function bufferFromBase64Url(text) {
-    const base64 = String(text).replace(/-/g, '+').replace(/_/g, '/');
-    const binary = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    return bytes.buffer;
-  }
-
-  function base64UrlFromBuffer(buffer) {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  }
-
   function creationOptions(json) {
     if (typeof PublicKeyCredential.parseCreationOptionsFromJSON === 'function') {
       return PublicKeyCredential.parseCreationOptionsFromJSON(json);
     }
     return {
       ...json,
-      challenge: bufferFromBase64Url(json.challenge),
-      user: { ...json.user, id: bufferFromBase64Url(json.user.id) },
-      excludeCredentials: (json.excludeCredentials || []).map((item) => ({ ...item, id: bufferFromBase64Url(item.id) })),
+      challenge: protocol.fromBase64Url(json.challenge),
+      user: { ...json.user, id: protocol.fromBase64Url(json.user.id) },
+      excludeCredentials: (json.excludeCredentials || []).map((item) => ({ ...item, id: protocol.fromBase64Url(item.id) })),
     };
   }
 
@@ -1722,8 +1686,8 @@
     }
     return {
       ...json,
-      challenge: bufferFromBase64Url(json.challenge),
-      allowCredentials: (json.allowCredentials || []).map((item) => ({ ...item, id: bufferFromBase64Url(item.id) })),
+      challenge: protocol.fromBase64Url(json.challenge),
+      allowCredentials: (json.allowCredentials || []).map((item) => ({ ...item, id: protocol.fromBase64Url(item.id) })),
     };
   }
 
@@ -1736,19 +1700,19 @@
       }
     }
     const raw = credential.response;
-    const response = { clientDataJSON: base64UrlFromBuffer(raw.clientDataJSON) };
+    const response = { clientDataJSON: protocol.toBase64Url(raw.clientDataJSON) };
     if (raw.attestationObject) {
-      response.attestationObject = base64UrlFromBuffer(raw.attestationObject);
+      response.attestationObject = protocol.toBase64Url(raw.attestationObject);
       response.transports = typeof raw.getTransports === 'function' ? raw.getTransports() : [];
     }
     if (raw.authenticatorData) {
-      response.authenticatorData = base64UrlFromBuffer(raw.authenticatorData);
-      response.signature = base64UrlFromBuffer(raw.signature);
-      if (raw.userHandle) response.userHandle = base64UrlFromBuffer(raw.userHandle);
+      response.authenticatorData = protocol.toBase64Url(raw.authenticatorData);
+      response.signature = protocol.toBase64Url(raw.signature);
+      if (raw.userHandle) response.userHandle = protocol.toBase64Url(raw.userHandle);
     }
     return {
       id: credential.id,
-      rawId: base64UrlFromBuffer(credential.rawId),
+      rawId: protocol.toBase64Url(credential.rawId),
       type: credential.type,
       response,
       clientExtensionResults: typeof credential.getClientExtensionResults === 'function' ? credential.getClientExtensionResults() : {},
@@ -1781,9 +1745,8 @@
 
   // --- Account panel ------------------------------------------------------------
 
-  async function openAccount(from = 'menuLobby') {
+  async function openAccount() {
     sfx.play('click');
-    account.returnTo = from;
     account.notice = '';
     showMenuPanel('menuAccount');
     renderAccount();
@@ -1801,11 +1764,7 @@
       account.me = result.data;
       lobbyState.player = result.data.player;
     } else if (result.status === 401) {
-      // Signed out from another device: this browser starts over as a new guest.
-      remove(identityKey());
-      account.me = null;
-      lobbyState.player = null;
-      account.notice = 'This device was signed out. Sign in again below.';
+      forgetAccount('This device was signed out. Sign in again below.');
     }
     renderAccount();
   }
@@ -1814,6 +1773,24 @@
     account.me = me;
     lobbyState.player = me.player;
     renderAccount();
+  }
+
+  // This browser no longer has an account on this server (signed out, here or from elsewhere).
+  // The next lobby visit starts a new guest.
+  function forgetAccount(notice = '') {
+    remove(identityKey());
+    lobbyState.player = null;
+    account.me = null;
+    account.notice = notice;
+  }
+
+  // POSTs to an account route. On failure it shows the server's message (or `failText`) and
+  // returns null; otherwise the response data.
+  async function accountPost(path, body, failText, { auth = true } = {}) {
+    const result = await api(path, { method: 'POST', body, auth });
+    if (result.ok) return result.data;
+    toast(result.data.message || failText, 'bad');
+    return null;
   }
 
   function renderAccount() {
@@ -1865,28 +1842,22 @@
 
   function addPasskey() {
     return busy(async () => {
-      const start = await api('/api/auth/passkey/register/options', { method: 'POST', body: {}, auth: true });
-      if (!start.ok) {
-        toast(start.data.message || 'Could not start adding a passkey.', 'bad');
-        return;
-      }
+      const start = await accountPost('/api/auth/passkey/register/options', {}, 'Could not start adding a passkey.');
+      if (!start) return;
       let credential;
       try {
-        credential = await navigator.credentials.create({ publicKey: creationOptions(start.data.options) });
+        credential = await navigator.credentials.create({ publicKey: creationOptions(start.options) });
       } catch (error) {
         passkeyError(error, 'Your device could not create a passkey.');
         return;
       }
-      const finish = await api('/api/auth/passkey/register/verify', {
-        method: 'POST',
-        auth: true,
-        body: { challengeId: start.data.challengeId, label: deviceLabel(), response: credentialJson(credential) },
-      });
-      if (!finish.ok) {
-        toast(finish.data.message || 'The passkey could not be saved.', 'bad');
-        return;
-      }
-      setAccountMe(finish.data);
+      const me = await accountPost('/api/auth/passkey/register/verify', {
+        challengeId: start.challengeId,
+        label: deviceLabel(),
+        response: credentialJson(credential),
+      }, 'The passkey could not be saved.');
+      if (!me) return;
+      setAccountMe(me);
       sfx.play('select');
       toast('Passkey added. Your account is secured.');
     });
@@ -1906,12 +1877,7 @@
         ],
       });
       if (choice !== 'copy') return;
-      try {
-        await navigator.clipboard.writeText(key);
-        toast('Key copied. Paste it somewhere safe.');
-      } catch {
-        window.prompt('Copy your account key:', key);
-      }
+      await copyText(key, 'Key copied. Paste it somewhere safe.', 'Copy your account key:');
     }
   }
 
@@ -1920,13 +1886,10 @@
     if (security && security.hasKey && !(await confirmDialog('NEW ACCOUNT KEY?', 'Your current key stops working as soon as the new one is made.', 'MAKE NEW KEY'))) return;
     let key = '';
     await busy(async () => {
-      const result = await api('/api/auth/key/create', { method: 'POST', body: {}, auth: true });
-      if (!result.ok) {
-        toast(result.data.message || 'Could not make a key.', 'bad');
-        return;
-      }
-      key = result.data.key;
-      setAccountMe({ player: result.data.player, security: result.data.security });
+      const result = await accountPost('/api/auth/key/create', {}, 'Could not make a key.');
+      if (!result) return;
+      key = result.key;
+      setAccountMe(result);
     });
     if (key) await showKeyDialog(key);
   }
@@ -1941,18 +1904,16 @@
   async function removePasskey(id) {
     if (!(await confirmDialog('REMOVE PASSKEY?', `You will not be able to sign in with it any more.${lastMethod() ? LAST_METHOD_WARNING : ''}`, 'REMOVE', 'danger'))) return;
     await busy(async () => {
-      const result = await api('/api/auth/passkey/remove', { method: 'POST', body: { id }, auth: true });
-      if (!result.ok) toast(result.data.message || 'Could not remove the passkey.', 'bad');
-      else setAccountMe(result.data);
+      const me = await accountPost('/api/auth/passkey/remove', { id }, 'Could not remove the passkey.');
+      if (me) setAccountMe(me);
     });
   }
 
   async function removeKey() {
     if (!(await confirmDialog('REMOVE ACCOUNT KEY?', `The key stops working right away.${lastMethod() ? LAST_METHOD_WARNING : ''}`, 'REMOVE', 'danger'))) return;
     await busy(async () => {
-      const result = await api('/api/auth/key/remove', { method: 'POST', body: {}, auth: true });
-      if (!result.ok) toast(result.data.message || 'Could not remove the key.', 'bad');
-      else setAccountMe(result.data);
+      const me = await accountPost('/api/auth/key/remove', {}, 'Could not remove the key.');
+      if (me) setAccountMe(me);
     });
   }
 
@@ -1984,27 +1945,20 @@
   async function signInWithPasskey() {
     if (!(await confirmLeaveGuest())) return;
     await busy(async () => {
-      const start = await api('/api/auth/passkey/login/options', { method: 'POST', body: {} });
-      if (!start.ok) {
-        toast(start.data.message || 'Could not start signing in.', 'bad');
-        return;
-      }
+      const start = await accountPost('/api/auth/passkey/login/options', {}, 'Could not start signing in.', { auth: false });
+      if (!start) return;
       let credential;
       try {
-        credential = await navigator.credentials.get({ publicKey: requestOptions(start.data.options) });
+        credential = await navigator.credentials.get({ publicKey: requestOptions(start.options) });
       } catch (error) {
         passkeyError(error, 'Your device could not use a passkey.');
         return;
       }
-      const finish = await api('/api/auth/passkey/login/verify', {
-        method: 'POST',
-        body: { challengeId: start.data.challengeId, response: credentialJson(credential) },
-      });
-      if (!finish.ok) {
-        toast(finish.data.message || 'Sign-in failed.', 'bad');
-        return;
-      }
-      await adoptSession(finish.data);
+      const session = await accountPost('/api/auth/passkey/login/verify', {
+        challengeId: start.challengeId,
+        response: credentialJson(credential),
+      }, 'Sign-in failed.', { auth: false });
+      if (session) await adoptSession(session);
     });
   }
 
@@ -2016,25 +1970,20 @@
     }
     if (!(await confirmLeaveGuest())) return;
     await busy(async () => {
-      const result = await api('/api/auth/key/login', { method: 'POST', body: { key } });
-      if (!result.ok) {
-        toast(result.data.message || 'Sign-in failed.', 'bad');
-        return;
-      }
+      const session = await accountPost('/api/auth/key/login', { key }, 'Sign-in failed.', { auth: false });
+      if (!session) return;
       $('keyLoginInput').value = '';
-      await adoptSession(result.data);
+      await adoptSession(session);
     });
   }
 
   async function logoutOthers() {
     if (!(await confirmDialog('SIGN OUT OTHER DEVICES?', 'Every other phone and browser signed in to this account is signed out right away.', 'SIGN OUT'))) return;
     await busy(async () => {
-      const result = await api('/api/auth/logout-others', { method: 'POST', body: {}, auth: true });
-      if (!result.ok) toast(result.data.message || 'Could not sign out the other devices.', 'bad');
-      else {
-        setAccountMe(result.data);
-        toast('Other devices signed out.');
-      }
+      const me = await accountPost('/api/auth/logout-others', {}, 'Could not sign out the other devices.');
+      if (!me) return;
+      setAccountMe(me);
+      toast('Other devices signed out.');
     });
   }
 
@@ -2046,19 +1995,16 @@
         toast(result.data.message || 'Could not sign out.', 'bad');
         return;
       }
-      remove(identityKey());
+      forgetAccount('Signed out. Sign in below, or open PLAY ONLINE to start as a new guest.');
       closeLobbySocket();
-      account.me = null;
-      lobbyState.player = null;
-      account.notice = 'Signed out. Sign in below, or open PLAY ONLINE to start as a new guest.';
       toast('Signed out.');
     });
   }
 
+  // The account panel is only reached from the lobby.
   function leaveAccount() {
     sfx.play('click');
-    if (account.returnTo === 'menuLobby') openLobbyPanel();
-    else showMenuPanel(account.returnTo || 'menuMain');
+    openLobbyPanel();
   }
 
   // ---------------------------------------------------------------------------
@@ -2185,20 +2131,11 @@
   }
 
   function setRoomInUrl(code) {
-    const url = new URL(window.location.href);
-    url.search = '';
-    if (code) url.searchParams.set('room', code);
-    if (code && settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
-    window.history.replaceState(null, '', url);
+    setUrl({ room: code });
   }
 
   function inviteUrl() {
-    const url = new URL(window.location.href);
-    url.search = '';
-    url.hash = '';
-    url.searchParams.set('room', net.roomCode);
-    if (settings.serverUrl !== DEFAULT_SERVER_URL) url.searchParams.set('ws', settings.serverUrl);
-    return url.toString();
+    return linkTo({ room: net.roomCode });
   }
 
   // Always dark-on-light with a quiet zone, whatever the palette: phones need contrast to scan.
@@ -2255,15 +2192,8 @@
     else if (choice === 'share') shareInvite();
   }
 
-  async function copyInvite() {
-    const link = inviteUrl();
-    try {
-      await navigator.clipboard.writeText(link);
-      toast('Invite link copied!');
-      sfx.play('select');
-    } catch {
-      window.prompt('Copy this invite link:', link);
-    }
+  function copyInvite() {
+    return copyText(inviteUrl(), 'Invite link copied!', 'Copy this invite link:');
   }
 
   async function createRoom(options) {
@@ -2366,13 +2296,8 @@
     setNetStatus('offline');
     if (code === 4001) {
       // The account signed this device out: the seat is gone, so don't try to reconnect.
-      leaveOnline();
-      remove(identityKey());
-      lobbyState.player = null;
-      app.mode = null;
-      app.view = null;
-      app.replay = null;
-      $('gameOver').classList.add('hidden');
+      leaveGameScreen();
+      forgetAccount();
       showMenuPanel('menuMain');
       toast('This device was signed out of the account.', 'bad');
       return;
@@ -2507,12 +2432,17 @@
   }
 
   // Leaves a finished lobby game and goes straight back into matchmaking.
-  function playAgain() {
+  // Drops the online game and clears the game screen's state.
+  function leaveGameScreen() {
     leaveOnline();
     app.mode = null;
     app.view = null;
     app.replay = null;
     $('gameOver').classList.add('hidden');
+  }
+
+  function playAgain() {
+    leaveGameScreen();
     lobbyState.findWanted = true;
     openLobbyPanel();
   }
@@ -3094,8 +3024,8 @@
     $('myProfileBtn').addEventListener('click', () => {
       if (lobbyState.player) openProfile(lobbyState.player.name, 'menuLobby');
     });
-    $('accountBtn').addEventListener('click', () => openAccount('menuLobby'));
-    $('secureHintBtn').addEventListener('click', () => openAccount('menuLobby'));
+    $('accountBtn').addEventListener('click', openAccount);
+    $('secureHintBtn').addEventListener('click', openAccount);
     $('profileBack').addEventListener('click', leaveProfile);
     $('profileShare').addEventListener('click', () => copyLink({ p: profileState.name }, 'Profile link copied!'));
     $('accountBack').addEventListener('click', leaveAccount);

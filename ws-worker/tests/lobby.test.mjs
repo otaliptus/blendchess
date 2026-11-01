@@ -220,6 +220,19 @@ function upgradeRequest(ipHash = 'ip-a') {
   return { url: 'https://lobby.internal/?lobby=1', headers: { get: (name) => headers.get(name.toLowerCase()) || null } };
 }
 
+// An HTTP request to the lobby's API. GET without a body unless `body` is given; account routes
+// need the site origin, which is the default.
+function apiCall(hub, path, { token = '', body, origin = 'https://blendchess.com', ipHash = 'ip-a' } = {}) {
+  const headers = { 'X-IP-Hash': ipHash };
+  if (origin) headers.Origin = origin;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return hub.fetch(new MockRequest(`https://lobby.internal${path}`, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }));
+}
+
 async function open(hub, ipHash = 'ip-a') {
   const response = await hub.fetch(upgradeRequest(ipHash));
   assert.equal(response.status, 101);
@@ -340,17 +353,13 @@ test('a reported game updates the stored rating and the leaderboard endpoint', a
   assert.equal(duplicateBody.updates.b.delta, 20);
 
   // Both are guests: rated, counted, but not listed until they secure their account.
-  const api = (path, init = {}) => hub.fetch(new MockRequest(`https://lobby.internal${path}`, init));
+  const api = (path, options) => apiCall(hub, path, options);
   let board = await (await api('/api/leaderboard?limit=10')).json();
   assert.equal(board.total, 2);
   assert.equal(board.players.length, 0);
 
   const bobToken = b.last('lobby_ready').payload.token;
-  const secured = await api('/api/auth/key/create', {
-    method: 'POST',
-    headers: { Origin: 'https://blendchess.com', Authorization: `Bearer ${bobToken}`, 'X-IP-Hash': 'ip-b' },
-    body: '{}',
-  });
+  const secured = await api('/api/auth/key/create', { token: bobToken, body: {}, ipHash: 'ip-b' });
   assert.equal(secured.status, 200);
   assert.equal(secured.headers['Access-Control-Allow-Origin'], 'https://blendchess.com');
   const securedBody = await secured.json();
@@ -377,7 +386,7 @@ test('a reported game updates the stored rating and the leaderboard endpoint', a
   assert.deepEqual((await (await api('/api/live')).json()).games, []);
 
   // Account routes refuse other sites.
-  const foreign = await api('/api/me', { headers: { Origin: 'https://evil.example', Authorization: `Bearer ${bobToken}` } });
+  const foreign = await api('/api/me', { token: bobToken, origin: 'https://evil.example' });
   assert.equal(foreign.status, 403);
 
   // A report for a game the lobby never reserved is refused.
@@ -418,24 +427,18 @@ test('the queue survives an eviction but drops sockets that are gone', async () 
 test('a passkey challenge survives the lobby hibernating mid-prompt, and expired ones are swept', async () => {
   const storageMap = new Map();
   const first = new LobbyHub(createCtx(storageMap), createEnv());
-  const api = (hub, path, body) => hub.fetch(new MockRequest(`https://lobby.internal${path}`, {
-    method: 'POST',
-    headers: { Origin: 'https://blendchess.com', 'X-IP-Hash': 'ip-a' },
-    body: JSON.stringify(body),
-  }));
   // An expired challenge left over from earlier.
   storageMap.set('chal:000000001-old', { kind: 'login', challenge: 'x', expiresAt: 1 });
 
-  const options = await (await api(first, '/api/auth/passkey/login/options', {})).json();
+  const options = await (await apiCall(first, '/api/auth/passkey/login/options', { body: {} })).json();
   assert.ok(options.challengeId);
   assert.ok(storageMap.has(`chal:${options.challengeId}`), 'stored, not only in memory');
   assert.ok(!storageMap.has('chal:000000001-old'), 'the expired challenge was swept');
 
   // The object is evicted and recreated over the same storage while the person uses their passkey.
   const second = new LobbyHub(createCtx(storageMap), createEnv());
-  const verify = await api(second, '/api/auth/passkey/login/verify', {
-    challengeId: options.challengeId,
-    response: { id: 'unknown-credential', response: {} },
+  const verify = await apiCall(second, '/api/auth/passkey/login/verify', {
+    body: { challengeId: options.challengeId, response: { id: 'unknown-credential', response: {} } },
   });
   const body = await verify.json();
   assert.equal(body.error, 'PASSKEY_UNKNOWN', 'the challenge was still there; only the credential is unknown');
@@ -450,7 +453,7 @@ test('guests stored on the leaderboard before accounts are not listed, and leave
     ['stats', { ranked: 1 }],
   ]);
   const hub = new LobbyHub(createCtx(storageMap), createEnv());
-  const read = async () => (await hub.fetch(new MockRequest('https://lobby.internal/api/leaderboard?limit=10'))).json();
+  const read = async () => (await apiCall(hub, '/api/leaderboard?limit=10')).json();
   assert.deepEqual((await read()).players, []);
   assert.equal((await read()).total, 1);
 
@@ -485,19 +488,10 @@ test('a seat revocation the room does not acknowledge is kept and retried until 
       },
     }),
   };
-  const api = (path, token) => hub.fetch(new MockRequest(`https://lobby.internal${path}`, {
-    method: 'POST',
-    headers: { Origin: 'https://blendchess.com', Authorization: `Bearer ${token}`, 'X-IP-Hash': 'ip-a' },
-    body: '{}',
-  }));
-  const { key } = await (await api('/api/auth/key/create', annToken)).json();
-  const login = await hub.fetch(new MockRequest('https://lobby.internal/api/auth/key/login', {
-    method: 'POST',
-    headers: { Origin: 'https://blendchess.com', 'X-IP-Hash': 'ip-c' },
-    body: JSON.stringify({ key }),
-  }));
+  const { key } = await (await apiCall(hub, '/api/auth/key/create', { token: annToken, body: {} })).json();
+  const login = await apiCall(hub, '/api/auth/key/login', { body: { key }, ipHash: 'ip-c' });
   const secondToken = (await login.json()).token;
-  assert.equal((await api('/api/auth/logout-others', secondToken)).status, 200);
+  assert.equal((await apiCall(hub, '/api/auth/logout-others', { token: secondToken, body: {} })).status, 200);
   assert.equal(revokeCalls.length, 1);
   assert.equal(revokeCalls[0].room, roomCode);
   assert.equal(storageMap.get('revocations').length, 1, 'the failed revocation is stored');

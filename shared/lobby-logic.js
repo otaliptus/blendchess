@@ -21,7 +21,8 @@
   // Accounts: every device has its own session; a player can hold a few passkeys and one key.
   const SESSIONS_PER_PLAYER = 20;
   const PASSKEYS_PER_PLAYER = 10;
-  const RECENT_GAMES = 50;
+  // Profiles show this many recent games, kept as summaries on the player record.
+  const RECENT_GAMES = 20;
   const LIVE_MAX = 500;
   const CHALLENGE_TTL_MS = 5 * 60 * 1000;
   const MAX_RECORD_PLIES = 1200;
@@ -38,11 +39,11 @@
     return CONTROL_IDS.includes(value) ? CONTROLS[value] : null;
   }
 
-  function cleanName(value, fallback) {
+  function cleanName(value, fallback, max = NAME_MAX) {
     const text = String(value || '')
       .replace(/[\u0000-\u001f\u007f<>]/g, '')
       .trim()
-      .slice(0, NAME_MAX);
+      .slice(0, max);
     return text || fallback;
   }
 
@@ -99,6 +100,16 @@
     return randomString(GAME_ID_LENGTH, ID_ALPHABET);
   }
 
+  // Passkey challenge ids start with their expiry (fixed-width base36), so stored challenges sort
+  // by expiry and everything before expiryStamp(now) has expired.
+  function expiryStamp(at) {
+    return Math.max(0, Math.floor(at)).toString(36).padStart(9, '0');
+  }
+
+  function makeChallengeId(expiresAt) {
+    return `${expiryStamp(expiresAt)}-${makeToken(16)}`;
+  }
+
   // --- Account keys --------------------------------------------------------
   // The passkey alternative: a 120-bit secret the player writes down or keeps in a password
   // manager. Crockford base32 (no I, L, O, U) so it survives being read aloud or retyped.
@@ -123,23 +134,6 @@
 
   function accountKeyHash(normalized) {
     return sha256Hex(`account-key:${normalized}`);
-  }
-
-  // --- base64url (WebAuthn ids and public keys) ----------------------------
-
-  function toBase64Url(bytes) {
-    let binary = '';
-    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    for (let i = 0; i < view.length; i += 1) binary += String.fromCharCode(view[i]);
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  }
-
-  function fromBase64Url(text) {
-    const base64 = String(text || '').replace(/-/g, '+').replace(/_/g, '/');
-    const binary = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    return bytes;
   }
 
   // --- Matchmaking ---------------------------------------------------------
@@ -207,7 +201,8 @@
       lastOpponent: '',
       lastOpponentAt: 0,
       // Session hashes for this player's devices, passkey credential ids, the account key's hash
-      // and the ids of their most recent games (newest first). Never part of a public summary.
+      // and summaries of their most recent games (newest first, see gameLine). Never part of a
+      // public summary.
       sessions: [],
       passkeys: [],
       keyHash: '',
@@ -244,8 +239,6 @@
   // A finished lobby game, stored once by the lobby. Plies are compact tuples:
   // [from, to, san, promotion, captureSquare, forfeit] with squares in algebraic notation.
 
-  const RESULT_CODES = ['checkmate', 'resign', 'stalemate', 'mutualDraw', 'threefold', 'fivefold', 'fiftyMove',
-    'seventyFiveMove', 'insufficientMaterial', 'kingCaptured', 'timeout', 'abandon'];
   const SQUARE_RE = /^[a-h][1-8]$/;
 
   function cleanPlies(plies) {
@@ -266,8 +259,9 @@
     return out;
   }
 
+  // A result code from the room ('checkmate', 'timeout', ...): kept if it looks like one.
   function cleanResult(value) {
-    return RESULT_CODES.includes(value) ? value : null;
+    return typeof value === 'string' && /^[a-zA-Z]{1,24}$/.test(value) ? value : null;
   }
 
   // What anyone may see about a finished game.
@@ -359,10 +353,10 @@
       savePlayer(record) {
         players.set(record.id, record);
       },
-      // hash -> { playerId, method, createdAt, lastUsed }
-      getSession: (hash) => sessions.get(hash) || null,
-      saveSession(hash, data) {
-        sessions.set(hash, { ...data });
+      // A session is one signed-in device: SHA-256 of its token -> player id.
+      sessionOwner: (hash) => sessions.get(hash) || null,
+      saveSession(hash, playerId) {
+        sessions.set(hash, playerId);
       },
       removeSession(hash) {
         sessions.delete(hash);
@@ -401,7 +395,6 @@
         challenges.delete(id);
       },
       getGame: (id) => games.get(id) || null,
-      getGames: (ids) => ids.map((id) => games.get(id)).filter(Boolean),
       saveGame(game) {
         games.set(game.id, game);
       },
@@ -487,17 +480,16 @@
     makeToken,
     makePlayerId,
     makeGameId,
+    expiryStamp,
+    makeChallengeId,
     networkKey,
     sha256Hex,
     makeAccountKey,
     normalizeAccountKey,
     accountKeyHash,
-    toBase64Url,
-    fromBase64Url,
     matchWindow,
     takeMatches,
     newPlayerRecord,
-    isSecured,
     onLeaderboard,
     summary,
     cleanPlies,

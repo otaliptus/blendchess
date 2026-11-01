@@ -224,7 +224,7 @@ test('account routes demand the site origin; public reads do not', async () => {
 
   const profile = await h.call('GET', '/api/players/ann', { origin: '' });
   assert.equal(profile.status, 200);
-  assert.equal(profile.public, true);
+  assert.ok(profile.cacheSeconds > 0, 'a public, cacheable read');
   assert.equal(profile.body.player.name, 'Ann');
   assert.equal(profile.body.player.secured, false);
   assert.equal(profile.body.player.sessions, undefined, 'no private fields in public profiles');
@@ -232,10 +232,13 @@ test('account routes demand the site origin; public reads do not', async () => {
   assert.equal((await h.call('GET', '/api/players/nobody', { origin: '' })).status, 404);
   assert.equal((await h.call('GET', '/api/games/not-an-id!', { origin: '' })).status, 404);
 
-  const headers = accountApi.responseHeaders({ origin: SITE }, { status: 200, public: false }, accountApi.parseOrigins(''));
+  const headers = accountApi.responseHeaders(SITE, { status: 200, cacheSeconds: 0 }, accountApi.parseOrigins(''));
   assert.equal(headers['Access-Control-Allow-Origin'], SITE);
   assert.equal(headers['Cache-Control'], 'no-store');
-  const foreign = accountApi.responseHeaders({ origin: 'https://evil.example' }, { status: 200, public: false }, accountApi.parseOrigins(''));
+  const foreign = accountApi.responseHeaders('https://evil.example', { status: 200, cacheSeconds: 0 }, accountApi.parseOrigins(''));
+  const publicRead = accountApi.responseHeaders('https://evil.example', { status: 200, cacheSeconds: 10 }, accountApi.parseOrigins(''));
+  assert.equal(publicRead['Access-Control-Allow-Origin'], '*');
+  assert.equal(publicRead['Cache-Control'], 'public, max-age=10');
   assert.equal(foreign['Access-Control-Allow-Origin'], undefined);
 });
 
@@ -350,7 +353,8 @@ test('practice games are recorded without touching ratings; unknown rooms are re
   const game = h.store.getGame(report.gameId);
   assert.equal(game.rated, false);
   assert.equal(game.white.before, game.white.after);
-  assert.equal(h.store.getPlayer(a.player.id).recent[0], report.gameId);
+  assert.equal(h.store.getPlayer(a.player.id).recent[0].id, report.gameId);
+  assert.equal(h.store.getPlayer(a.player.id).recent[0].rated, false);
 });
 
 test('a rematch puts the room back on the live list with colours swapped', async () => {
@@ -447,7 +451,7 @@ test('a device that takes over the queue owns the seat it leads to', async () =>
   h.conns.push(connB);
   await lobbySession.hello(h.store, h.hooks, connB, { token: deviceB });
   const hashB = await lobbyLogic.sha256Hex(deviceB);
-  assert.equal(h.store.getQueue()[0].session, hashB);
+  assert.equal(h.store.getQueue()[0].connId, 'conn-ann-b');
 
   // Re-queueing from yet another socket of device B keeps the binding on B as well.
   const connB2 = { id: 'conn-ann-b2', playerId: '', ipHash: 'net-a', inbox: [] };
@@ -456,7 +460,6 @@ test('a device that takes over the queue owns the seat it leads to', async () =>
   connB2.sessionHash = hashB;
   await lobbySession.queue(h.store, h.hooks, connB2, { control: '10+0' });
   assert.equal(h.store.getQueue()[0].connId, 'conn-ann-b2');
-  assert.equal(h.store.getQueue()[0].session, hashB);
 
   const bob = await h.guest('Bob', 'net-b');
   await lobbySession.queue(h.store, h.hooks, bob.conn, { control: '10+0' });
@@ -466,4 +469,22 @@ test('a device that takes over the queue owns the seat it leads to', async () =>
   // Device B signs the others out and keeps its own game.
   await h.call('POST', '/api/auth/logout-others', { token: deviceB });
   assert.deepEqual(h.revoked, []);
+});
+
+test('routes, aliases and cache keys come from one place', () => {
+  const route = (method, url) => {
+    const parsed = new URL(url, 'http://x');
+    return accountApi.routeOf(method, parsed.pathname, parsed.searchParams);
+  };
+  assert.deepEqual(route('GET', '/leaderboard?limit=5'), { path: '/api/leaderboard', query: { limit: 5 }, cacheKey: '/api/leaderboard?limit=5' });
+  // Trailing slashes and junk parameters never make a new cache key.
+  assert.equal(route('GET', '/api/live/?x=1').cacheKey, '/api/live');
+  assert.equal(route('GET', '/api/leaderboard?limit=abc').cacheKey, '/api/leaderboard?limit=20');
+  assert.equal(route('GET', '/api/leaderboard?limit=5000').cacheKey, '/api/leaderboard?limit=100');
+  assert.equal(route('GET', '/api/players/Ann').cacheKey, '/api/players/Ann');
+  // Account routes and writes are never cached.
+  assert.equal(route('GET', '/api/me').cacheKey, null);
+  assert.equal(route('POST', '/api/auth/key/login').cacheKey, null);
+  assert.equal(accountApi.isApiPath('/leaderboard'), true);
+  assert.equal(accountApi.isApiPath('/report'), false);
 });

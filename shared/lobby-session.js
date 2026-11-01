@@ -71,14 +71,12 @@
 
   // --- Sessions ---------------------------------------------------------------
   // A session is one device signed in to one player. The token goes to that device once; the
-  // store only ever holds its SHA-256.
+  // store only ever holds its SHA-256, mapped to the player id.
 
-  const SESSION_TOUCH_MS = 60 * 60 * 1000;
-
-  async function createSession(store, record, method, now = Date.now()) {
+  async function createSession(store, record) {
     const token = logic.makeToken();
     const hash = await logic.sha256Hex(token);
-    await store.saveSession(hash, { playerId: record.id, method, createdAt: now, lastUsed: now });
+    await store.saveSession(hash, record.id);
     const list = (Array.isArray(record.sessions) ? record.sessions : []).filter((item) => item !== hash);
     list.push(hash);
     while (list.length > logic.SESSIONS_PER_PLAYER) await store.removeSession(list.shift());
@@ -87,15 +85,14 @@
     return { token, hash };
   }
 
-  // Resolves a bearer token to its player, or null. Touches lastUsed at most once an hour.
-  async function sessionForToken(store, token, now = Date.now()) {
+  // Resolves a bearer token to { record, hash }, or null.
+  async function sessionForToken(store, token) {
     if (typeof token !== 'string') return null;
     const clean = token.trim().slice(0, 200);
     if (!clean) return null;
     const hash = await logic.sha256Hex(clean);
-    const found = await store.getSession(hash);
-    if (!found) return null;
-    const record = await store.getPlayer(found.playerId);
+    const playerId = await store.sessionOwner(hash);
+    const record = playerId ? await store.getPlayer(playerId) : null;
     if (!record) return null;
     if (!Array.isArray(record.sessions)) record.sessions = [];
     if (!record.sessions.includes(hash)) {
@@ -103,11 +100,7 @@
       record.sessions.push(hash);
       await store.savePlayer(record);
     }
-    if (now - (found.lastUsed || 0) > SESSION_TOUCH_MS) {
-      found.lastUsed = now;
-      await store.saveSession(hash, found);
-    }
-    return { record, hash, session: found };
+    return { record, hash };
   }
 
   // Recent lobby rooms a player holds a seat in, and the session each seat belongs to, so a sign-out
@@ -137,7 +130,16 @@
     return { id: record.id, name: record.name, rating: record.rating };
   }
 
-  function upsertLive(store, entry) {
+  function upsertLive(store, { roomCode, gameKey, control, rated, white, black }) {
+    const entry = {
+      roomCode,
+      gameKey,
+      control: logic.controlOf(control) ? control : null,
+      rated,
+      startedAt: Date.now(),
+      w: liveSide(white),
+      b: liveSide(black),
+    };
     return withLock('live', async () => {
       const now = Date.now();
       const list = (await store.getLive()).filter((item) => item.roomCode !== entry.roomCode && logic.liveIsFresh(item, now));
@@ -162,7 +164,7 @@
     const wantedName = logic.cleanName(payload.nickname, '');
     const now = Date.now();
 
-    const found = await sessionForToken(store, payload.token, now);
+    const found = await sessionForToken(store, payload.token);
     let record = found ? found.record : null;
     let sessionHash = found ? found.hash : '';
     let freshToken = '';
@@ -180,7 +182,7 @@
       record.name = await logic.uniqueNameAsync(store, record.name, record.id);
       await store.savePlayer(record);
       await store.saveName(record.name.toLowerCase(), record.id);
-      const created = await createSession(store, record, 'guest', now);
+      const created = await createSession(store, record);
       freshToken = created.token;
       sessionHash = created.hash;
       await store.recordCreation(ipHash, now);
@@ -199,13 +201,11 @@
     record.lastSeen = now;
     await store.savePlayer(record);
 
-    // A fresh socket for a player already waiting takes over the queue slot, and the seat it leads
-    // to belongs to this socket's session, not the one that queued first.
+    // A fresh socket for a player already waiting takes over the queue slot.
     const entries = await store.getQueue();
     const mine = entries.find((entry) => entry.playerId === record.id);
     if (mine) {
       mine.connId = conn.id;
-      mine.session = sessionHash || '';
       await store.saveQueue(entries);
     }
 
@@ -240,7 +240,6 @@
     if (mine) {
       if (mine.control === control) {
         mine.connId = conn.id;
-        mine.session = conn.sessionHash || '';
         await store.saveQueue(entries);
         await sendQueued(store, hooks, conn, control);
         return false;
@@ -273,9 +272,6 @@
       lastOpponent: record.lastOpponent || '',
       lastOpponentAt: record.lastOpponentAt || 0,
       ipHash: conn.ipHash || '',
-      // The session this player queued from: their seat belongs to it, so signing that session
-      // out also takes the seat away.
-      session: conn.sessionHash || '',
     });
     await store.saveQueue(entries);
     await sendQueued(store, hooks, conn, control);
@@ -333,9 +329,14 @@
       const blackRecord = await store.getPlayer(blackEntry.playerId);
       if (!whiteRecord || !blackRecord) continue;
 
+      // Each seat belongs to the session of the socket that receives the match: signing that
+      // session out later takes the seat away.
+      const whiteConn = connFor(hooks, whiteEntry);
+      const blackConn = connFor(hooks, blackEntry);
+      const sessionOf = (conn) => (conn && conn.sessionHash) || '';
       const seats = [
-        { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: whiteEntry.session || '' },
-        { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: blackEntry.session || '' },
+        { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: sessionOf(whiteConn) },
+        { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: sessionOf(blackConn) },
       ];
 
       let room = null;
@@ -361,28 +362,20 @@
         await store.saveActiveGame(first.playerId, { roomCode: room.roomCode, gameKey, at: now });
         await store.saveActiveGame(second.playerId, { roomCode: room.roomCode, gameKey, at: now });
       }
-      await upsertLive(store, {
-        roomCode: room.roomCode,
-        gameKey,
-        control: first.control,
-        rated: !sameNetwork,
-        startedAt: now,
-        w: liveSide(whiteRecord),
-        b: liveSide(blackRecord),
-      });
+      await upsertLive(store, { roomCode: room.roomCode, gameKey, control: first.control, rated: !sameNetwork, white: whiteRecord, black: blackRecord });
 
       whiteRecord.lastOpponent = blackRecord.id;
       whiteRecord.lastOpponentAt = now;
       blackRecord.lastOpponent = whiteRecord.id;
       blackRecord.lastOpponentAt = now;
-      rememberSeat(whiteRecord, room.roomCode, whiteEntry.session, now);
-      rememberSeat(blackRecord, room.roomCode, blackEntry.session, now);
+      rememberSeat(whiteRecord, room.roomCode, seats[0].session, now);
+      rememberSeat(blackRecord, room.roomCode, seats[1].session, now);
       await store.savePlayer(whiteRecord);
       await store.savePlayer(blackRecord);
 
       const control = logic.controlOf(first.control);
-      const tell = (entry, seat, opponentRecord, ticket) => {
-        send(hooks, connFor(hooks, entry), TYPES.MATCH_FOUND, {
+      const tell = (conn, seat, opponentRecord, ticket) => {
+        send(hooks, conn, TYPES.MATCH_FOUND, {
           roomCode: room.roomCode,
           ticket,
           color: seat.color,
@@ -396,18 +389,17 @@
           },
         });
       };
-      tell(whiteEntry, seats[0], blackRecord, room.tickets.w);
-      tell(blackEntry, seats[1], whiteRecord, room.tickets.b);
+      tell(whiteConn, seats[0], blackRecord, room.tickets.w);
+      tell(blackConn, seats[1], whiteRecord, room.tickets.b);
       started += 1;
     }
     return started;
   }
 
-  // Accepts the identities a room sends ({ playerId, color }) or bare ids in seat order.
+  // The identities a room sends: [{ playerId, color }, { playerId, color }].
   function readIdentities(players) {
     if (!Array.isArray(players) || players.length !== 2) return null;
-    const out = players.map((player, index) => {
-      if (typeof player === 'string') return { playerId: player, color: index === 0 ? 'w' : 'b' };
+    const out = players.map((player) => {
       if (!player || typeof player !== 'object' || typeof player.playerId !== 'string' || !player.playerId) return null;
       return { playerId: player.playerId, color: player.color === 'b' ? 'b' : 'w' };
     });
@@ -432,15 +424,7 @@
         await store.saveActiveGame(record.id, { roomCode, gameKey, at: now });
       }
     }
-    await upsertLive(store, {
-      roomCode,
-      gameKey,
-      control: logic.controlOf(payload.control) ? payload.control : null,
-      rated,
-      startedAt: now,
-      w: liveSide(white),
-      b: liveSide(black),
-    });
+    await upsertLive(store, { roomCode, gameKey, control: payload.control, rated, white, black });
     return { ok: true };
   }
 
@@ -531,7 +515,9 @@
     };
     await store.saveGame(game);
     for (const record of [whiteRecord, blackRecord]) {
-      record.recent = [game.id, ...(Array.isArray(record.recent) ? record.recent : [])].slice(0, logic.RECENT_GAMES);
+      // The profile's game list lives on the player record, so a profile is one read.
+      const earlier = (Array.isArray(record.recent) ? record.recent : []).filter((item) => item && typeof item === 'object');
+      record.recent = [logic.gameLine(game, record.id), ...earlier].slice(0, logic.RECENT_GAMES);
       await store.savePlayer(record);
     }
     if (rated) {

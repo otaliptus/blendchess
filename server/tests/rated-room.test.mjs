@@ -14,8 +14,8 @@ function createRatedHarness({ rated = true, clock = true, whiteNet = 'net-white'
     control: '5+3',
     clock: clock ? { baseMs: 300_000, incMs: 3_000 } : null,
     seats: [
-      { color: 'w', playerId: 'player-white', nickname: 'Wendy', rating: 1200, ticket: WHITE_TICKET, ipHash: whiteNet },
-      { color: 'b', playerId: 'player-black', nickname: 'Boris', rating: 1250, ticket: BLACK_TICKET, ipHash: blackNet },
+      { color: 'w', playerId: 'player-white', nickname: 'Wendy', rating: 1200, ticket: WHITE_TICKET, ipHash: whiteNet, session: 'session-white' },
+      { color: 'b', playerId: 'player-black', nickname: 'Boris', rating: 1250, ticket: BLACK_TICKET, ipHash: blackNet, session: 'session-black' },
     ],
   });
   const conns = [];
@@ -23,7 +23,7 @@ function createRatedHarness({ rated = true, clock = true, whiteNet = 'net-white'
   const hooks = {
     connections: () => conns.filter((conn) => !conn.closed),
     send: (conn, message) => conn.inbox.push(message),
-    close: (conn) => { conn.closed = true; },
+    close: (conn, code) => { conn.closed = code || true; },
     save: () => {},
     makeResumeToken: () => `token-${tokens += 1}`,
   };
@@ -337,34 +337,11 @@ test('a practice rematch waits until the finished game is recorded', () => {
 });
 
 test('signing a session out takes its seat away: socket closed, ticket and resume token dead', () => {
-  const state = rl.createRoomState('RATED1');
-  rl.applyReservation(state, {
-    rated: true,
-    control: '5+3',
-    clock: { baseMs: 300_000, incMs: 3_000 },
-    seats: [
-      { color: 'w', playerId: 'player-white', nickname: 'Wendy', rating: 1200, ticket: WHITE_TICKET, session: 'session-white' },
-      { color: 'b', playerId: 'player-black', nickname: 'Boris', rating: 1250, ticket: BLACK_TICKET, session: 'session-black' },
-    ],
-  });
-  const conns = [];
-  const hooks = {
-    connections: () => conns.filter((conn) => !conn.closed),
-    send: (conn, message) => conn.inbox.push(message),
-    close: (conn, code) => { conn.closed = code; },
-    save: () => {},
-    makeResumeToken: () => `token-${conns.length}`,
-  };
-  const connect = (id) => {
-    const conn = { id, role: null, playerId: '', inbox: [] };
-    conns.push(conn);
-    return conn;
-  };
-  const envelope = (type, payload = {}, playerId = '') => createMessage(type, 'RATED1', playerId, payload);
-  const white = connect('conn-w');
-  const black = connect('conn-b');
-  session.joinRoom(state, hooks, white, envelope(TYPES.JOIN_ROOM, { ticket: WHITE_TICKET }));
-  session.joinRoom(state, hooks, black, envelope(TYPES.JOIN_ROOM, { ticket: BLACK_TICKET }));
+  const h = createRatedHarness();
+  const { state, hooks } = h;
+  const { white, black } = seatBoth(h);
+  const connect = h.connect;
+  const envelope = h.envelope;
   const identity = white.inbox.find((message) => message.type === TYPES.ROOM_JOINED).payload;
 
   assert.equal(session.revokeSessions(state, hooks, ['someone-else']), false);

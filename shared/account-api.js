@@ -1,14 +1,18 @@
 (function installAccountApi() {
+  const protocol = globalThis.BlendChessProtocol;
   const logic = globalThis.BlendChessLobbyLogic;
   const lobbySession = globalThis.BlendChessLobbySession;
 
+  if (!protocol) throw new Error('shared/protocol.js must be loaded before account-api.js');
   if (!logic) throw new Error('shared/lobby-logic.js must be loaded before account-api.js');
   if (!lobbySession) throw new Error('shared/lobby-session.js must be loaded before account-api.js');
 
   // The HTTP side of the lobby: accounts (passkeys, account keys, device sessions), profiles,
   // game records, live games and the leaderboard. Transport-agnostic like lobby-session.js:
   //
-  // request = { method, path, origin, authorization, ipHash, body }   (body: parsed JSON or null)
+  // Transports call handleHttp(store, ctx, { method, url, origin, authorization, ipHash, bodyText })
+  // and send back { status, body } with responseHeaders(). handle() takes an already parsed
+  // { method, path, query, origin, authorization, ipHash, body }.
   // ctx = {
   //   origins: allowed site origins (localhost is always allowed, for development),
   //   webauthn: { generateRegistrationOptions, verifyRegistrationResponse,
@@ -17,12 +21,13 @@
   //   revokeSeats(rooms): tell each { roomCode, sessions } room to take away the seats those
   //     sessions hold and close their game sockets,
   // }
-  // Returns { status, body, public, cacheSeconds }.
+  // Results are { status, body, cacheSeconds }; a 200 with cacheSeconds > 0 is a public read.
 
   const RP_NAME = 'Blendchess';
   const DEFAULT_ORIGINS = ['https://blendchess.com', 'https://www.blendchess.com', 'https://blendchess.pages.dev'];
-  const PROFILE_GAMES = 20;
   const LIVE_LIST_MAX = 50;
+  const MAX_BODY_BYTES = 16 * 1024;
+  const PUBLIC_READS = ['/api/leaderboard', '/api/live', '/api/players/', '/api/games/'];
   const LIMIT_WINDOW_MS = 60 * 1000;
   const AUTH_REQUESTS_PER_MINUTE = 30;
   const FAILED_SIGNINS_PER_MINUTE = 10;
@@ -52,6 +57,22 @@
     return new URL(origin).hostname.replace(/^www\./, '');
   }
 
+  // How a request URL maps onto the API, for every transport: the /leaderboard alias, trailing
+  // slashes, the query parameters routes read, and the edge-cache key of a public read (built only
+  // from those parameters, so junk query strings cannot dodge the cache).
+  function routeOf(method, pathname, searchParams) {
+    const trimmed = String(pathname || '').replace(/\/+$/, '') || '/';
+    const path = trimmed === '/leaderboard' ? '/api/leaderboard' : trimmed;
+    const limit = Math.min(100, Math.max(1, Number(searchParams && searchParams.get('limit')) || 20));
+    const publicRead = method === 'GET' && PUBLIC_READS.some((route) => (route.endsWith('/') ? path.startsWith(route) : path === route));
+    const cacheKey = publicRead ? (path === '/api/leaderboard' ? `${path}?limit=${limit}` : path) : null;
+    return { path, query: { limit }, cacheKey };
+  }
+
+  function isApiPath(pathname) {
+    return pathname === '/leaderboard' || String(pathname || '').startsWith('/api/');
+  }
+
   // --- Rate limits (per network, per isolate) --------------------------------
 
   const hits = new Map();
@@ -75,20 +96,12 @@
 
   // --- Helpers ---------------------------------------------------------------
 
-  function reply(status, body, { cacheSeconds = 0, isPublic = false } = {}) {
-    return { status, body, public: isPublic, cacheSeconds };
-  }
-
-  function publicReply(body, cacheSeconds) {
-    return reply(200, body, { cacheSeconds, isPublic: true });
+  function reply(status, body, cacheSeconds = 0) {
+    return { status, body, cacheSeconds };
   }
 
   function failure(status, error, message) {
     return reply(status, { error, message });
-  }
-
-  function cleanLabel(value) {
-    return String(value || '').replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, 24) || 'Passkey';
   }
 
   function bearer(req) {
@@ -106,11 +119,9 @@
     return challenge;
   }
 
-  // The id starts with the expiry time (fixed-width base36), so stored challenges sort by expiry
-  // and a store can sweep the expired ones with one bounded range read.
   async function newChallenge(store, data) {
     const expiresAt = Date.now() + logic.CHALLENGE_TTL_MS;
-    const id = `${expiresAt.toString(36).padStart(9, '0')}-${logic.makeToken(16)}`;
+    const id = logic.makeChallengeId(expiresAt);
     await store.saveChallenge(id, { ...data, expiresAt });
     return id;
   }
@@ -141,30 +152,35 @@
     return { player: logic.summary(record), security: await securityOf(store, record) };
   }
 
-  // A signed-out session loses its seats in lobby games too: the rooms cancel the seat's ticket and
-  // resume token and close its game sockets.
-  async function revokeSeats(ctx, record, sessions) {
-    const rooms = lobbySession.seatsFor(record, sessions);
-    if (!rooms.length || typeof ctx.revokeSeats !== 'function') return;
-    try {
-      await ctx.revokeSeats(rooms);
-    } catch (error) {
-      console.error('seat revocation failed', error);
-    }
+  // Every change to a player's sign-in methods ends the same way: save, refresh the leaderboard
+  // (only secured accounts are listed), and answer with the account as it now stands.
+  async function saved(store, record, extra = {}) {
+    await store.savePlayer(record);
+    await store.bumpLeaderboard([record]);
+    return reply(200, { ...extra, ...(await meBody(store, record)) });
   }
 
-  // Sockets opened with a session that just ended are closed, so they cannot keep queueing.
-  function dropSockets(ctx, predicate) {
-    const hooks = ctx.hooks;
-    if (!hooks || typeof hooks.connections !== 'function') return;
-    for (const conn of hooks.connections()) {
-      if (predicate(conn)) {
+  // Ends these sessions of the player: their lobby sockets close, and the rooms revoke the seats
+  // they were matched with (ticket and resume token dead, game sockets closed).
+  async function endSessions(store, ctx, record, ended) {
+    for (const hash of ended) await store.removeSession(hash);
+    record.sessions = (record.sessions || []).filter((hash) => !ended.includes(hash));
+    await store.savePlayer(record);
+    for (const conn of ctx.hooks.connections()) {
+      if (ended.includes(conn.sessionHash)) {
         try {
-          hooks.close(conn, 4001, 'Signed out.');
+          ctx.hooks.close(conn, 4001, 'Signed out.');
         } catch {
           // already closed
         }
       }
+    }
+    const rooms = lobbySession.seatsFor(record, ended);
+    if (!rooms.length) return;
+    try {
+      await ctx.revokeSeats(rooms);
+    } catch (error) {
+      console.error('seat revocation failed', error);
     }
   }
 
@@ -190,12 +206,11 @@
 
   // --- Public routes ---------------------------------------------------------
 
-  async function leaderboard(store, limitParam) {
-    const limit = Math.min(100, Math.max(1, Number(limitParam) || 20));
-    const data = await store.leaderboard(limit);
+  async function leaderboard(store, limit) {
+    const data = await store.leaderboard(limit || 20);
     const live = liveByPlayer(await lobbySession.liveGames(store));
     const players = data.entries.map((entry) => ({ ...entry, live: live.has(entry.id) ? live.get(entry.id).roomCode : null }));
-    return publicReply({ players, total: data.total }, 10);
+    return reply(200, { players, total: data.total }, 10);
   }
 
   async function liveList(store) {
@@ -203,7 +218,7 @@
       .sort((a, b) => b.startedAt - a.startedAt)
       .slice(0, LIVE_LIST_MAX)
       .map(liveLine);
-    return publicReply({ games }, 5);
+    return reply(200, { games }, 5);
   }
 
   async function profile(store, rawName) {
@@ -213,12 +228,11 @@
     const record = id ? await store.getPlayer(id) : null;
     if (!record) return failure(404, 'NOT_FOUND', 'No such player.');
     const live = liveByPlayer(await lobbySession.liveGames(store)).get(record.id) || null;
-    const ids = (record.recent || []).slice(0, PROFILE_GAMES);
-    const games = ids.length ? await store.getGames(ids) : [];
-    return publicReply({
+    return reply(200, {
       player: logic.summary(record),
       live: live ? { ...liveLine(live), color: live.w.id === record.id ? 'w' : 'b' } : null,
-      games: games.map((game) => logic.gameLine(game, record.id)),
+      // Summaries written when each game was reported (see lobby-session reportNow).
+      games: (record.recent || []).filter((item) => item && typeof item === 'object'),
     }, 10);
   }
 
@@ -227,7 +241,7 @@
     const game = await store.getGame(id);
     if (!game) return failure(404, 'NOT_FOUND', 'No such game.');
     // Finished games never change.
-    return publicReply({ game: logic.publicGame(game) }, 86400);
+    return reply(200, { game: logic.publicGame(game) }, 86400);
   }
 
   // --- Account routes --------------------------------------------------------
@@ -294,19 +308,17 @@
     const now = Date.now();
     await store.saveCredential(credential.id, {
       playerId: record.id,
-      publicKey: logic.toBase64Url(credential.publicKey),
+      publicKey: protocol.toBase64Url(credential.publicKey),
       counter: Number(credential.counter) || 0,
       transports: Array.isArray(credential.transports) ? credential.transports.slice(0, 6) : [],
       rpID: challenge.rpID,
-      label: cleanLabel(body.label),
+      label: logic.cleanName(body.label, 'Passkey', 24),
       backedUp: Boolean(credentialBackedUp),
       createdAt: now,
       lastUsed: now,
     });
     record.passkeys = [...(record.passkeys || []), credential.id];
-    await store.savePlayer(record);
-    await store.bumpLeaderboard([record]);
-    return reply(200, await meBody(store, record));
+    return saved(store, record);
   }
 
   async function removePasskey(store, req, auth) {
@@ -315,9 +327,7 @@
     if (!id || !(record.passkeys || []).includes(id)) return failure(404, 'NOT_FOUND', 'No such passkey.');
     await store.removeCredential(id);
     record.passkeys = record.passkeys.filter((item) => item !== id);
-    await store.savePlayer(record);
-    await store.bumpLeaderboard([record]);
-    return reply(200, await meBody(store, record));
+    return saved(store, record);
   }
 
   async function loginOptions(store, ctx, req) {
@@ -331,8 +341,8 @@
     return reply(200, { challengeId, options });
   }
 
-  async function signedIn(store, record, method) {
-    const { token } = await lobbySession.createSession(store, record, method);
+  async function signedIn(store, record) {
+    const { token } = await lobbySession.createSession(store, record);
     return reply(200, { token, player: logic.summary(record) });
   }
 
@@ -357,7 +367,7 @@
         expectedRPID: challenge.rpID,
         credential: {
           id: credentialId,
-          publicKey: logic.fromBase64Url(credential.publicKey),
+          publicKey: protocol.fromBase64Url(credential.publicKey),
           counter: credential.counter,
           transports: credential.transports,
         },
@@ -372,7 +382,7 @@
     credential.counter = Number(verification.authenticationInfo && verification.authenticationInfo.newCounter) || credential.counter;
     credential.lastUsed = now;
     await store.saveCredential(credentialId, credential);
-    return signedIn(store, record, 'passkey');
+    return signedIn(store, record);
   }
 
   async function createKey(store, auth) {
@@ -384,9 +394,7 @@
     await store.saveKey(hash, record.id);
     record.keyHash = hash;
     record.keyCreatedAt = Date.now();
-    await store.savePlayer(record);
-    await store.bumpLeaderboard([record]);
-    return reply(200, { key, ...(await meBody(store, record)) });
+    return saved(store, record, { key });
   }
 
   async function removeKey(store, auth) {
@@ -394,9 +402,7 @@
     if (record.keyHash) await store.removeKey(record.keyHash);
     record.keyHash = '';
     record.keyCreatedAt = 0;
-    await store.savePlayer(record);
-    await store.bumpLeaderboard([record]);
-    return reply(200, await meBody(store, record));
+    return saved(store, record);
   }
 
   async function keyLogin(store, req, now) {
@@ -407,34 +413,24 @@
       hit('signin-failed', req.ipHash, now);
       return failure(401, 'KEY_INVALID', 'That account key is not valid.');
     }
-    return signedIn(store, record, 'key');
+    return signedIn(store, record);
   }
 
   async function logout(store, ctx, auth) {
-    const { record, hash } = auth;
-    await store.removeSession(hash);
-    record.sessions = (record.sessions || []).filter((item) => item !== hash);
-    await store.savePlayer(record);
-    dropSockets(ctx, (conn) => conn.sessionHash === hash);
-    await revokeSeats(ctx, record, [hash]);
+    await endSessions(store, ctx, auth.record, [auth.hash]);
     return reply(200, { ok: true });
   }
 
   async function logoutOthers(store, ctx, auth) {
     const { record, hash } = auth;
-    const ended = (record.sessions || []).filter((other) => other !== hash);
-    for (const other of ended) await store.removeSession(other);
-    record.sessions = [hash];
-    await store.savePlayer(record);
-    dropSockets(ctx, (conn) => conn.playerId === record.id && conn.sessionHash !== hash);
-    await revokeSeats(ctx, record, ended);
+    await endSessions(store, ctx, record, (record.sessions || []).filter((other) => other !== hash));
     return reply(200, await meBody(store, record));
   }
 
   // --- Router ----------------------------------------------------------------
 
   async function route(store, ctx, req) {
-    const path = String(req.path || '').replace(/\/+$/, '');
+    const path = String(req.path || '');
     const now = Date.now();
 
     if (req.method === 'GET') {
@@ -476,7 +472,7 @@
       return lobbySession.withLock('accounts', () => keyLogin(store, req, now));
     }
 
-    const auth = await lobbySession.sessionForToken(store, bearer(req), now);
+    const auth = await lobbySession.sessionForToken(store, bearer(req));
     if (!auth) return failure(401, 'NOT_AUTHENTICATED', 'Sign in first.');
 
     if (req.method === 'GET' && path === '/api/me') return reply(200, await meBody(store, auth.record));
@@ -484,7 +480,7 @@
 
     // Changes queue behind each other; a session signed out while this one waited must not proceed.
     const mutate = (work) => lobbySession.withLock('accounts', async () => {
-      if (!(await store.getSession(auth.hash))) return failure(401, 'NOT_AUTHENTICATED', 'Sign in first.');
+      if (!(await store.sessionOwner(auth.hash))) return failure(401, 'NOT_AUTHENTICATED', 'Sign in first.');
       return work();
     });
     switch (path) {
@@ -516,15 +512,33 @@
     }
   }
 
+  // The whole HTTP request, as both transports see it: route, size limit, JSON body, then handle().
+  async function handleHttp(store, ctx, request) {
+    const url = new URL(request.url, 'http://localhost');
+    const { path, query } = routeOf(request.method, url.pathname, url.searchParams);
+    const text = request.bodyText || '';
+    if (request.bodyTooLarge || text.length > MAX_BODY_BYTES) return failure(413, 'TOO_LARGE', 'Bodies must be under 16 KB.');
+    let body = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        return failure(400, 'INVALID', 'Body must be JSON.');
+      }
+    }
+    const { method, origin, authorization, ipHash } = request;
+    return handle(store, ctx, { method, path, query, origin, authorization, ipHash, body });
+  }
+
   // Both transports answer with the same headers. Public reads are cacheable by anyone; account
   // routes only ever answer the site's own origin.
-  function responseHeaders(req, result, origins) {
+  function responseHeaders(origin, result, origins) {
     const headers = { 'Content-Type': 'application/json; charset=utf-8' };
-    if (result.public && result.status === 200) {
+    if (result.cacheSeconds > 0 && result.status === 200) {
       headers['Access-Control-Allow-Origin'] = '*';
       headers['Cache-Control'] = `public, max-age=${result.cacheSeconds}`;
     } else {
-      if (originAllowed(req.origin, origins)) headers['Access-Control-Allow-Origin'] = req.origin;
+      if (originAllowed(origin, origins)) headers['Access-Control-Allow-Origin'] = origin;
       headers.Vary = 'Origin';
       headers['Cache-Control'] = 'no-store';
     }
@@ -543,11 +557,12 @@
   }
 
   const accountApiExports = {
-    DEFAULT_ORIGINS,
+    MAX_BODY_BYTES,
     parseOrigins,
-    originAllowed,
-    rpIdFor,
+    routeOf,
+    isApiPath,
     handle,
+    handleHttp,
     responseHeaders,
     preflightHeaders,
     // tests reset the per-isolate limiter between cases

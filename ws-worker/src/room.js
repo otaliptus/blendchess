@@ -177,24 +177,22 @@ export class GameHub extends DurableObject {
   // ranked one keeps blocking the queue.
   async registerActive() {
     if (!this.room || !rl.isLobbyRoom(this.room) || this.room.gameOver) return;
-    const gameKey = `${this.room.roomCode}:${this.room.gameId}`;
+    const gameKey = rl.lobbyGameKey(this.room);
     if (this.room.activeGameKey === gameKey) return;
     this.room.activeGameKey = gameKey;
+    let ok = false;
     try {
-      await this.lobby().fetch('https://lobby.internal/active', {
+      const response = await this.lobby().fetch('https://lobby.internal/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomCode: this.room.roomCode,
-          gameKey,
-          rated: Boolean(this.room.rated),
-          control: this.room.control,
-          players: this.ratedPlayers(),
-        }),
+        body: JSON.stringify(rl.lobbyActiveMessage(this.room)),
       });
+      ok = Boolean((await response.json()).ok);
     } catch {
-      this.room.activeGameKey = '';
+      ok = false;
     }
+    // Not acknowledged: the next change in the room tries again.
+    if (!ok && this.room) this.room.activeGameKey = '';
   }
 
   // Exactly one report per lobby game, retried by the alarm until the lobby acknowledges it.
@@ -222,26 +220,14 @@ export class GameHub extends DurableObject {
     // second change from sending the same report while this one is in flight.
     const room = this.room;
     const gameId = room.gameId;
-    const gameKey = `${room.roomCode}:${gameId}`;
     room.reportRetryAt = 0;
-    const winner = room.winner === 'White' ? 'w' : room.winner === 'Black' ? 'b' : null;
     let result = null;
     this.reporting = true;
     try {
       const response = await this.lobby().fetch('https://lobby.internal/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomCode: room.roomCode,
-          gameKey,
-          rated: Boolean(room.rated),
-          control: room.control,
-          players: this.ratedPlayers(),
-          winner,
-          result: room.result,
-          record: rl.gameRecord(room),
-          finishedAt: Date.now(),
-        }),
+        body: JSON.stringify(rl.lobbyReportMessage(room)),
       });
       result = await response.json();
     } catch {

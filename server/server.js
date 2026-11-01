@@ -14,7 +14,6 @@ const RATE_LIMIT_WINDOW_MS = 1_000;
 const RATE_LIMIT_MAX_MESSAGES = 40;
 const LOBBY_RATE_LIMIT_MAX_MESSAGES = 30;
 const TICK_MS = 500;
-const MAX_API_BODY_BYTES = 16 * 1024;
 // Sites allowed to call the account routes (localhost is always allowed).
 const SITE_ORIGINS = accountApi.parseOrigins(process.env.SITE_ORIGINS);
 
@@ -125,16 +124,10 @@ function createRatedRoom(match) {
 async function registerActive(room) {
   const state = room.state;
   if (!rl.isLobbyRoom(state) || state.gameOver) return;
-  const gameKey = `${state.roomCode}:${state.gameId}`;
+  const gameKey = rl.lobbyGameKey(state);
   if (state.activeGameKey === gameKey) return;
   state.activeGameKey = gameKey;
-  const result = await lobbySession.registerActive(lobbyStore, {
-    roomCode: state.roomCode,
-    gameKey,
-    rated: Boolean(state.rated),
-    control: state.control,
-    players: playerIdentitiesOf(state),
-  });
+  const result = await lobbySession.registerActive(lobbyStore, rl.lobbyActiveMessage(state));
   if (!result.ok) state.activeGameKey = '';
 }
 
@@ -154,22 +147,10 @@ async function reportResult(room) {
   }
   // `reported` turns true only once the lobby has the result (a rematch waits for it);
   // `room.reporting` keeps a second change from sending the same report meanwhile.
-  const gameKey = `${state.roomCode}:${state.gameId}`;
-  const winner = state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null;
   room.reporting = true;
   let result;
   try {
-    result = await lobbySession.report(lobbyStore, lobbyHooks(), {
-      roomCode: state.roomCode,
-      gameKey,
-      rated: Boolean(state.rated),
-      control: state.control,
-      players: playerIdentitiesOf(state),
-      winner,
-      result: state.result,
-      record: rl.gameRecord(state),
-      finishedAt: Date.now(),
-    });
+    result = await lobbySession.report(lobbyStore, lobbyHooks(), rl.lobbyReportMessage(state));
   } finally {
     room.reporting = false;
   }
@@ -337,56 +318,47 @@ async function revokeSeats(list) {
   }
 }
 
+// Reads a request body as text, giving up past the API's size limit.
 function readBody(req) {
   return new Promise((resolve) => {
     let size = 0;
     const chunks = [];
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > MAX_API_BODY_BYTES) {
-        resolve(undefined);
+      if (size > accountApi.MAX_BODY_BYTES) {
+        resolve({ text: '', tooLarge: true });
         req.destroy();
         return;
       }
       chunks.push(chunk);
     });
-    req.on('end', () => {
-      if (!chunks.length) {
-        resolve(null);
-        return;
-      }
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
-      } catch {
-        resolve(undefined);
-      }
-    });
-    req.on('error', () => resolve(undefined));
+    req.on('end', () => resolve({ text: Buffer.concat(chunks).toString('utf8'), tooLarge: false }));
+    req.on('error', () => resolve({ text: '', tooLarge: true }));
   });
 }
 
+let apiContext = null;
+
 // /api/*: accounts, profiles, game records, live games, leaderboard. Same handler as the Worker.
-async function handleApi(req, res, url) {
+async function handleApi(req, res) {
   const origin = req.headers.origin || '';
   if (req.method === 'OPTIONS') {
     res.writeHead(204, accountApi.preflightHeaders(origin, SITE_ORIGINS));
     res.end();
     return;
   }
-  const body = req.method === 'POST' ? await readBody(req) : null;
-  const request = {
+  const body = req.method === 'POST' ? await readBody(req) : { text: '', tooLarge: false };
+  apiContext = apiContext || { origins: SITE_ORIGINS, webauthn, hooks: lobbyHooks(), revokeSeats };
+  const result = await accountApi.handleHttp(lobbyStore, apiContext, {
     method: req.method,
-    path: url.pathname === '/leaderboard' ? '/api/leaderboard' : url.pathname,
-    query: { limit: url.searchParams.get('limit') },
+    url: req.url,
     origin,
     authorization: req.headers.authorization || '',
     ipHash: networkOf(req),
-    body,
-  };
-  const result = body === undefined
-    ? { status: 400, body: { error: 'INVALID', message: 'Body must be JSON under 16 KB.' }, public: false, cacheSeconds: 0 }
-    : await accountApi.handle(lobbyStore, { origins: SITE_ORIGINS, webauthn, hooks: lobbyHooks(), revokeSeats }, request);
-  res.writeHead(result.status, accountApi.responseHeaders(request, result, SITE_ORIGINS));
+    bodyText: body.text,
+    bodyTooLarge: body.tooLarge,
+  });
+  res.writeHead(result.status, accountApi.responseHeaders(origin, result, SITE_ORIGINS));
   res.end(JSON.stringify(result.body));
 }
 
@@ -397,8 +369,8 @@ const server = http.createServer((req, res) => {
     res.end('ok');
     return;
   }
-  if (url.pathname === '/leaderboard' || url.pathname.startsWith('/api/')) {
-    handleApi(req, res, url).catch((error) => {
+  if (accountApi.isApiPath(url.pathname)) {
+    handleApi(req, res).catch((error) => {
       console.error('api failed', error);
       if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'SERVER_ERROR' }));

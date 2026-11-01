@@ -290,6 +290,8 @@
     state.reservedAt = now;
     // Anyone may watch a lobby game, and every watcher sees the whole board: players are trusted.
     state.spectatorView = 'open';
+    // The lobby registered game 1 when it made the match; only rematches announce themselves.
+    state.activeGameKey = lobbyGameKey(state);
     // DISABLED: the same-network watcher rule (see spectatorPerspective). Uncomment to collect the
     // networks it needs; also uncomment the two call sites in room-session.js.
     // state.seatNetworks = {};
@@ -333,6 +335,34 @@
     return null;
   }
 
+  // --- Messages from a lobby room to the lobby (both transports send these) ---------
+
+  function lobbyGameKey(state) {
+    return `${state.roomCode}:${state.gameId}`;
+  }
+
+  // "This game started": a rematch goes back on the live list, and a ranked one blocks queueing.
+  function lobbyActiveMessage(state) {
+    return {
+      roomCode: state.roomCode,
+      gameKey: lobbyGameKey(state),
+      rated: Boolean(state.rated),
+      control: state.control,
+      players: playerIdentities(state),
+    };
+  }
+
+  // "This game ended": the result and the moves, once per game.
+  function lobbyReportMessage(state) {
+    return {
+      ...lobbyActiveMessage(state),
+      winner: state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null,
+      result: state.result,
+      record: gameRecord(state),
+      finishedAt: Date.now(),
+    };
+  }
+
   // The finished game as the lobby stores it: compact plies, see lobby-logic cleanPlies().
   function gameRecord(state) {
     const name = (pos) => (pos ? core.squareName(pos) : '');
@@ -347,6 +377,20 @@
         ply.forfeit ? 1 : 0,
       ]),
     };
+  }
+
+  // The inverse of gameRecord's plies, in the shape views use for moves (the client's replays).
+  function movesFromPlies(plies) {
+    return (plies || []).map(([from, to, san, promotion, capture, forfeit], index) => ({
+      ply: index + 1,
+      color: index % 2 ? 'b' : 'w',
+      forfeit: Boolean(forfeit),
+      capture: capture ? { square: capture, ...core.squareFromName(capture) } : null,
+      san: forfeit ? '--' : san,
+      from: core.squareFromName(from),
+      to: core.squareFromName(to),
+      promotion: promotion || null,
+    }));
   }
 
   // The player signed those sessions out: their seats stop accepting the ticket or a resume token.
@@ -923,6 +967,10 @@
     noteSeatNetwork,
     spectatorPerspective,
     revokeSeatSessions,
+    lobbyGameKey,
+    lobbyActiveMessage,
+    lobbyReportMessage,
+    movesFromPlies,
     gameRecord,
     reservedSeatsValid,
     findReservedSeat,

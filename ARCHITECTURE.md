@@ -67,12 +67,12 @@ hooks = { connections(), send(conn, msg), close(conn, code, reason), save(conn),
 ratings, finished-game records and the live list. It never holds a game.
 
 - **Sessions.** First contact mints a guest player and a 256-bit session token for that browser. Only
-  the token's SHA-256 is stored (`session:<hash>`), and the player record lists its session hashes
-  (at most 20), so one device can be signed out, or all the others. Tokens from before accounts
-  existed (`token:<hash>`) are still accepted and adopted on first use.
-- **Seats belong to sessions.** A queue entry carries the session it came from (a device that takes
-  over the queue place takes over the binding too), and the reservation hands each seat that session
-  (server-side only). The player record remembers its last five lobby rooms with their sessions.
+  the token's SHA-256 is stored, as `token:<hash>` -> player id (the key identities used before
+  accounts, so those are sessions too), and the player record lists its session hashes (at most 20),
+  so one device can be signed out, or all the others.
+- **Seats belong to sessions.** When the lobby makes a match, each seat is bound to the session of the
+  socket that receives the match (server-side only), and the player record remembers its last five
+  lobby rooms with their sessions.
   Signing a session out sends those rooms an internal `POST /revoke`: the seat's ticket and resume
   token stop working and its game sockets close with code `4001`. The Worker stores each revocation
   before sending it and clears it only when the room acknowledges; the lobby alarm retries the rest
@@ -101,16 +101,18 @@ ratings, finished-game records and the live list. It never holds a game.
   with an idempotency key of `roomCode:gameId`, the result and the compact move list
   (`[from, to, san, promotion, capture, forfeit]` per ply). A ranked game must match both players'
   active-game markers; a practice game must match the live entry. The lobby then updates ratings (ranked
-  only), stores the game as `game:<id>`, prepends the id to both players' `recent` list (50 kept) and
-  returns `{ updates, gameId }`. The room marks the game `reported` only then, and a rematch waits for
+  only), stores the game as `game:<id>`, prepends a one-line summary of it to both players' `recent`
+  list (the 20 a profile shows, so a profile is one read) and returns `{ updates, gameId }`. The room marks the game `reported` only then, and a rematch waits for
   it, so one game's result can never land on the next. The room re-broadcasts its views with the
   rating changes and `recordId`. A rejection the lobby marks `final` is not retried; other failures
   are retried by the room alarm. A room that dies before the game starts releases both players without
   a rating change.
-- **HTTP API.** `index.js` forwards `/api/*` to the lobby (`/leaderboard` is an alias). Public reads
-  (`/api/leaderboard`, `/api/live`, `/api/players/:name`, `/api/games/:id`) answer any origin and are
-  cached at the edge for a few seconds (game records for a day) once the Worker runs on a custom
-  domain; only the parameters a route reads make up the cache key. Account routes (`/api/me`,
+- **HTTP API.** `index.js` forwards `/api/*` to the lobby (`/leaderboard` is an alias). Both servers
+  hand the raw request to `accountApi.handleHttp`, and `accountApi.routeOf` is the single place that
+  maps a URL to a route, its query and its edge-cache key. Public reads (`/api/leaderboard`,
+  `/api/live`, `/api/players/:name`, `/api/games/:id`) answer any origin and are cached at the edge for
+  a few seconds (game records for a day) once the Worker runs on a custom domain; only the parameters
+  a route reads make up the cache key. Account routes (`/api/me`,
   `/api/auth/*`) take a bearer session token, answer only the site's own origins (`SITE_ORIGINS`, plus
   `localhost`), and are rate limited per network, with a tighter limit on failed sign-ins.
 - **Watching a full room.** Live room codes are public, so watchers or idle sockets could fill a room's

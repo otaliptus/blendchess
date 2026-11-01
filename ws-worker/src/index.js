@@ -14,12 +14,14 @@ const { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, normalizeRoomCode } = globalThis.B
 const { sha256Hex, networkKey } = globalThis.BlendChessLobbyLogic;
 const accountApi = globalThis.BlendChessAccountApi;
 const CREATE_ATTEMPTS = 5;
-const MAX_API_BODY_BYTES = 16 * 1024;
 
-// Public reads that may be served from the edge cache for a few seconds (game records for a day).
-function isCacheableRead(method, path) {
-  return method === 'GET' && (path === '/api/leaderboard' || path === '/api/live'
-    || path.startsWith('/api/players/') || path.startsWith('/api/games/'));
+// SITE_ORIGINS only changes with a deploy: parse it once per isolate.
+let siteOrigins = null;
+function originsOf(env) {
+  if (!siteOrigins || siteOrigins.raw !== env.SITE_ORIGINS) {
+    siteOrigins = { raw: env.SITE_ORIGINS, list: accountApi.parseOrigins(env.SITE_ORIGINS) };
+  }
+  return siteOrigins.list;
 }
 
 function isWebSocketUpgrade(request) {
@@ -64,23 +66,16 @@ async function forwardToLobby(env, request, ipHash) {
 // /api/* goes to the lobby, which owns accounts, profiles, game records and the live list.
 // /leaderboard is the pre-accounts path, kept so older clients keep working.
 async function handleApi(request, env, ctx, url) {
-  const origins = accountApi.parseOrigins(env.SITE_ORIGINS);
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: accountApi.preflightHeaders(request.headers.get('Origin') || '', origins) });
+    return new Response(null, { status: 204, headers: accountApi.preflightHeaders(request.headers.get('Origin') || '', originsOf(env)) });
   }
-  if (Number(request.headers.get('Content-Length') || 0) > MAX_API_BODY_BYTES) {
-    return new Response(JSON.stringify({ error: 'TOO_LARGE' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
-  }
+  const tooLarge = () => new Response(JSON.stringify({ error: 'TOO_LARGE' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
+  if (Number(request.headers.get('Content-Length') || 0) > accountApi.MAX_BODY_BYTES) return tooLarge();
 
-  // Trailing slashes are ignored by the lobby's router, so they must not make a new cache key either.
-  const trimmed = url.pathname.replace(/\/+$/, '') || '/';
-  const path = trimmed === '/leaderboard' ? '/api/leaderboard' : trimmed;
   // The edge cache only exists on a custom domain; on workers.dev these calls are no-ops.
-  const cache = isCacheableRead(request.method, path) && typeof caches !== 'undefined' ? caches.default : null;
-  // Only the parameters a route reads make up the key, so junk query strings cannot dodge the cache.
-  const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
-  const keyUrl = `${url.origin}${path}${path === '/api/leaderboard' ? `?limit=${limit}` : ''}`;
-  const cacheKey = cache ? new Request(keyUrl, { method: 'GET' }) : null;
+  const { path, cacheKey: key } = accountApi.routeOf(request.method, url.pathname, url.searchParams);
+  const cache = key && typeof caches !== 'undefined' ? caches.default : null;
+  const cacheKey = cache ? new Request(`${url.origin}${key}`, { method: 'GET' }) : null;
   if (cache) {
     try {
       const hit = await cache.match(cacheKey);
@@ -92,17 +87,15 @@ async function handleApi(request, env, ctx, url) {
 
   // Content-Length can be absent (chunked uploads), so the body itself is measured too.
   const body = request.method === 'POST' ? await request.text() : undefined;
-  if (body !== undefined && body.length > MAX_API_BODY_BYTES) {
-    return new Response(JSON.stringify({ error: 'TOO_LARGE' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
-  }
+  if (body !== undefined && body.length > accountApi.MAX_BODY_BYTES) return tooLarge();
 
   let response;
   try {
-    const ipHash = await networkHash(request);
     const target = new URL(request.url);
     target.pathname = path;
     const headers = new Headers(request.headers);
-    headers.set('X-IP-Hash', ipHash);
+    // Only writes are rate limited per network; reads skip the hashing.
+    headers.set('X-IP-Hash', request.method === 'GET' ? 'unknown' : await networkHash(request));
     response = await lobbyStub(env).fetch(new Request(target.toString(), { method: request.method, headers, body }));
   } catch {
     const fallback = path === '/api/leaderboard' ? { players: [], total: 0 } : { error: 'UNAVAILABLE' };
@@ -129,7 +122,7 @@ export default {
       return new Response('ok', { status: 200 });
     }
 
-    if (url.pathname === '/leaderboard' || url.pathname.startsWith('/api/')) {
+    if (accountApi.isApiPath(url.pathname)) {
       return handleApi(request, env, ctx, url);
     }
 
