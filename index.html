@@ -31,52 +31,60 @@
           <p class="tagline">chess in the fog of war</p>
         </div>
 
-        <section id="menuLobby" class="menu home-menu hidden" aria-labelledby="lobbyTitle">
-          <figure class="home-board">
-            <div id="logoBoard" class="logo-board" aria-hidden="true"></div>
-            <figcaption>You only see your own pieces.</figcaption>
-          </figure>
-          <div class="home-play">
-            <button class="menu-item continue-item" type="button" data-action="continue" id="continueItem" hidden>
-              <span class="menu-label">CONTINUE GAME</span><span class="menu-hint" id="continueHint"></span>
-            </button>
-            <div class="play-card px-panel">
-              <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
-              <div class="control-picker" role="group" aria-label="Time control">
-                <button type="button" class="control-chip" data-control="10+0">
-                  <span class="control-name">RAPID</span><span class="control-time">10 min</span>
-                  <small>a little time to think</small>
-                </button>
-                <button type="button" class="control-chip" data-control="5+3">
-                  <span class="control-name">BLITZ</span><span class="control-time">5 + 3</span>
-                  <small>5 min + 3 sec per move</small>
-                </button>
-              </div>
-              <button id="lobbyFind" class="px-btn primary play-button" type="button">FIND GAME</button>
-              <button id="lobbyCancel" class="px-btn play-button hidden" type="button">CANCEL SEARCH</button>
-              <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite">Ranked games. No signup needed.</p>
-              <details class="player-options">
-                <summary><span id="lobbyIdentity">Play as a guest</span><span class="edit-label">Edit name</span></summary>
-                <label class="field">
-                  <span class="field-label">YOUR NAME</span>
-                  <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
-                </label>
-              </details>
-            </div>
-            <div class="other-ways">
-              <button class="menu-item" type="button" data-action="create">
-                <span class="menu-label">PLAY A FRIEND</span><span class="menu-hint">invite or join online</span>
+        <div id="logoBoard" class="logo-board hidden" aria-hidden="true"></div>
+
+        <nav id="menuMain" class="menu px-panel hidden" aria-label="Main menu">
+          <button class="menu-item" type="button" data-action="continue" id="continueItem" hidden>
+            <span class="menu-label">CONTINUE</span><span class="menu-hint" id="continueHint"></span>
+          </button>
+          <button class="menu-item" type="button" data-action="online" id="onlineItem">
+            <span class="menu-label">PLAY ONLINE</span><span class="menu-hint">ranked matchmaking, elo &amp; a clock</span>
+          </button>
+          <button class="menu-item" type="button" data-action="local">
+            <span class="menu-label">LOCAL DUEL</span><span class="menu-hint">pass &amp; play on this device</span>
+          </button>
+          <button class="menu-item" type="button" data-action="create">
+            <span class="menu-label">CREATE ROOM</span><span class="menu-hint">invite a friend online</span>
+          </button>
+          <button class="menu-item" type="button" data-action="join">
+            <span class="menu-label">JOIN ROOM</span><span class="menu-hint">play or watch with a code</span>
+          </button>
+          <button class="menu-item" type="button" data-action="archive">
+            <span class="menu-label">ARCHIVE</span><span class="menu-hint">replay finished games</span>
+          </button>
+          <button class="menu-item" type="button" data-action="help">
+            <span class="menu-label">HOW TO PLAY</span><span class="menu-hint">rules of the fog</span>
+          </button>
+        </nav>
+
+        <section id="menuLobby" class="menu lobby-menu hidden" aria-labelledby="lobbyTitle">
+          <div class="play-card px-panel">
+            <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
+            <div class="control-picker" role="group" aria-label="Time control">
+              <button type="button" class="control-chip" data-control="10+0">
+                <span class="control-name">RAPID</span><span class="control-time">10 min</span>
+                <small>a little time to think</small>
               </button>
-              <button class="menu-item" type="button" data-action="local">
-                <span class="menu-label">PASS &amp; PLAY</span><span class="menu-hint">share this device</span>
+              <button type="button" class="control-chip" data-control="5+3">
+                <span class="control-name">BLITZ</span><span class="control-time">5 + 3</span>
+                <small>5 min + 3 sec per move</small>
               </button>
             </div>
-            <nav class="home-links" aria-label="Explore">
-              <button class="link-btn" type="button" data-action="help">How to play</button>
-              <button class="link-btn" type="button" data-action="community">Watch &amp; rankings</button>
-              <button class="link-btn" type="button" data-action="archive">Past games</button>
-            </nav>
-            <p id="secureHint" class="secure-hint hidden"><button id="secureHintBtn" class="link-btn" type="button">Save your progress</button> to play on any device.</p>
+            <button id="lobbyFind" class="px-btn primary play-button" type="button">FIND GAME</button>
+            <button id="lobbyCancel" class="px-btn play-button hidden" type="button">CANCEL SEARCH</button>
+            <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite">Ranked games. No signup needed.</p>
+            <details class="player-options">
+              <summary><span id="lobbyIdentity">Play as a guest</span><span class="edit-label">Edit name</span></summary>
+              <label class="field">
+                <span class="field-label">YOUR NAME</span>
+                <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
+              </label>
+            </details>
+          </div>
+          <p id="secureHint" class="secure-hint hidden"><button id="secureHintBtn" class="link-btn" type="button">Save your progress</button> to play on any device.</p>
+          <div class="menu-row">
+            <button class="px-btn ghost" type="button" data-action="back">BACK</button>
+            <button class="px-btn" type="button" data-action="community">WATCH &amp; RANKINGS</button>
           </div>
         </section>
 
@@ -198,7 +206,7 @@
         </section>
 
         <section id="menuJoin" class="menu px-panel hidden" aria-labelledby="joinTitle">
-          <h2 id="joinTitle" class="menu-title" tabindex="-1">JOIN A FRIEND</h2>
+          <h2 id="joinTitle" class="menu-title" tabindex="-1">JOIN ROOM</h2>
           <label class="field">
             <span class="field-label">ROOM CODE</span>
             <input id="roomCodeInput" class="code-input" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC123" />
@@ -215,7 +223,7 @@
         </section>
 
         <section id="menuArchive" class="menu px-panel wide hidden" aria-labelledby="archiveTitle">
-          <h2 id="archiveTitle" class="menu-title" tabindex="-1">PAST GAMES</h2>
+          <h2 id="archiveTitle" class="menu-title" tabindex="-1">ARCHIVE</h2>
           <ol id="archiveList" class="archive-list"></ol>
           <div class="menu-row">
             <button class="px-btn ghost" type="button" data-action="back">BACK</button>

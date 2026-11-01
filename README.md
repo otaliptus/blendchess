@@ -17,16 +17,16 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 ## Modes
 
-- `Pass & Play`: share one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
-- `Play a Friend`: create an invite, send the link, play. Use **Have a code? Join a game** to join or watch an existing room. Reconnects resume your seat automatically.
-- `Play Online`: matchmaking directly on the home screen. Pick Blitz 5+3 or Rapid 10+0 and **Find game** to get paired by rating, play with a server-enforced clock, and climb the Elo leaderboard.
-- `Watch & rankings`: every game the lobby arranges is listed under **Live now** and anyone can watch it with the whole board visible. In private rooms spectators see the fog, unless the host turns on **party mode**.
+- `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
+- `Create Room` / `Join Room`: create a room and send its invite link, or join or watch with a code. Reconnects resume your seat automatically.
+- `Play Online`: open matchmaking from the main menu. Pick Blitz 5+3 or Rapid 10+0 and **Find game** to get paired by rating, play with a server-enforced clock, and climb the Elo leaderboard.
+- `Watch & rankings`: available inside **Play Online**. Every game the lobby arranges is listed under **Live now** and anyone can watch it with the whole board visible. In private rooms spectators see the fog, unless the host turns on **party mode**.
 - `Profiles`: every player has a public page with their rating, record and recent games. Each game opens as a full replay with a shareable link (`?game=...`); profiles are at `?p=name`.
-- `Past games`: finished games are saved on your device for replay and PGN export.
+- `Archive`: finished games are saved on your device for replay and PGN export.
 
 ## Accounts
 
-- **Start as a guest.** The home screen makes you an account on your first visit, with nothing to fill in. It lives in this browser only. Open **Edit name** to change your nickname.
+- **Start as a guest.** Opening **Play Online** makes you an account, with nothing to fill in. It lives in this browser only. Open **Edit name** to change your nickname.
 - **Save your progress.** In `ACCOUNT`, choose **Save with passkey** (your phone or computer's face, fingerprint or PIN; it syncs through your password manager). **Use an account key instead** offers a code you save somewhere safe (`BLND-XXXX-...`); it works on any device. Either one lets you sign in on another device and keeps your rating if you clear the browser. Having both is a backup. Existing accounts can use **Already have an account? Sign in**.
 - **Devices.** Each browser you sign in on gets its own session. Under **Devices & sign out**, `SIGN OUT OTHER DEVICES` ends all of them but the one you're on, including any ranked game they are sitting in (their clock keeps running).
 - **Leaderboard.** Guests are rated like everyone else, but only secured accounts are listed.
@@ -63,8 +63,8 @@ What it cannot stop: someone running an engine locally, two accounts on differen
 
 ## How to play
 
-1. Open the game and select **Find game**. Rapid (10 minutes) is selected by default; Blitz (5 minutes + 3 seconds per move) is also available.
-2. For a private game, choose **Play a Friend**, or **Pass & Play** to share a device. Optional hard mode and spectator settings are under **Game options**.
+1. Choose **Play Online** from the main menu, then **Find game**. Rapid (10 minutes) is selected by default; Blitz (5 minutes + 3 seconds per move) is also available.
+2. For a private game, choose **Create Room** or **Join Room**. Choose **Local Duel** to share a device. Optional hard mode and spectator settings are under **Game options**.
 3. Click or drag your pieces. Dots mark squares that *might* be legal; dashed corners are pawn captures worth a try. Keyboard works too: arrows, Enter, Esc.
 4. Offer a draw or resign when needed. After the game: replay, PGN, rematch.
 
