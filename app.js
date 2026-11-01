@@ -94,6 +94,7 @@
     ...load(STORAGE.settings, {}),
   };
   if (!isWsUrl(settings.serverUrl)) settings.serverUrl = DEFAULT_SERVER_URL;
+  let serverRevision = 0;
 
   function saveSettings() {
     save(STORAGE.settings, settings);
@@ -341,11 +342,17 @@
     for (const id of MENU_PANELS) $(id).classList.toggle('hidden', id !== panel);
     if (panel === 'menuLobby') refreshContinue();
     if (panel === 'menuArchive') renderArchiveList();
-    const first = panel === 'menuLobby' ? ($('continueItem').hidden ? $('lobbyFind') : $('continueItem')) : $(panel).querySelector('h2');
-    if (first) {
-      first.tabIndex = first.tagName === 'H2' ? -1 : 0;
-      first.focus({ preventScroll: true });
-    }
+    // Callers finish rendering queue/account state before focus moves into the panel.
+    queueMicrotask(() => {
+      if (app.mode || $(panel).classList.contains('hidden')) return;
+      const first = panel === 'menuLobby'
+        ? ($('continueItem').hidden ? ($('lobbyFind').classList.contains('hidden') ? $('lobbyCancel') : $('lobbyFind')) : $('continueItem'))
+        : $(panel).querySelector('h2');
+      if (first) {
+        first.tabIndex = first.tagName === 'H2' ? -1 : 0;
+        first.focus({ preventScroll: true });
+      }
+    });
     window.scrollTo(0, 0);
   }
 
@@ -1117,16 +1124,36 @@
     return settings.serverUrl.replace(/^ws/, 'http').replace(/\/+$/, '');
   }
 
+  function selectServer(url) {
+    if (url === settings.serverUrl) return false;
+    leaveLobbyPanel();
+    serverRevision += 1;
+    settings.serverUrl = url;
+    settings.nickname = (loadIdentity() || {}).name || '';
+    lobbyState.player = null;
+    account.me = null;
+    account.notice = '';
+    return true;
+  }
+
+  function captureAccountContext() {
+    const revision = serverRevision;
+    const token = (loadIdentity() || {}).token;
+    return () => revision === serverRevision && token === (loadIdentity() || {}).token;
+  }
+
   const versionRequests = new Map();
   function syncDataVersion() {
     const serverUrl = settings.serverUrl;
-    if (versionRequests.has(serverUrl)) return versionRequests.get(serverUrl);
+    const revision = serverRevision;
+    const requestKey = `${revision}:${serverUrl}`;
+    if (versionRequests.has(requestKey)) return versionRequests.get(requestKey);
     const task = (async () => {
       try {
         const response = await fetch(`${httpServerUrl()}/api/config`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
         if (!response.ok) return false;
         const { dataVersion: version } = await response.json();
-        if (settings.serverUrl !== serverUrl) return false;
+        if (serverRevision !== revision) return false;
         const reset = dataVersion.apply(window.localStorage, {
           version, serverUrl, defaultServerUrl: DEFAULT_SERVER_URL, identityKey: identityKey(), keys: STORAGE,
         });
@@ -1140,8 +1167,8 @@
         return false;
       }
     })();
-    versionRequests.set(serverUrl, task);
-    task.then(() => versionRequests.delete(serverUrl));
+    versionRequests.set(requestKey, task);
+    task.then(() => versionRequests.delete(requestKey));
     return task;
   }
 
@@ -1193,8 +1220,9 @@
 
   async function openLobbySocket() {
     if (lobbyState.ws && (lobbyState.ws.readyState === WebSocket.OPEN || lobbyState.ws.readyState === WebSocket.CONNECTING)) return;
+    const revision = serverRevision;
     await syncDataVersion();
-    if (app.mode || $('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
+    if (revision !== serverRevision || app.mode || $('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
     clearTimeout(lobbyState.reconnectTimer);
     let ws;
     try {
@@ -1209,6 +1237,7 @@
     lobbyState.status = 'connecting';
     renderLobby();
     ws.onopen = () => {
+      if (ws !== lobbyState.ws || revision !== serverRevision) return;
       const identity = loadIdentity();
       ws.send(JSON.stringify(protocol.createMessage(TYPES.LOBBY_HELLO, '', '', {
         token: identity ? identity.token : '',
@@ -1519,6 +1548,10 @@
   // ---------------------------------------------------------------------------
 
   async function api(path, { method = 'GET', body, auth = false } = {}) {
+    const revision = serverRevision;
+    const currentAccount = captureAccountContext();
+    const isCurrent = () => revision === serverRevision && (!(auth || path.startsWith('/api/auth/')) || currentAccount());
+    const stale = { ok: false, status: 0, data: {}, stale: true };
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (auth) {
@@ -1542,6 +1575,7 @@
         cache: auth ? 'no-store' : 'default',
       });
     } catch {
+      if (!isCurrent()) return stale;
       return { ok: false, status: 0, data: { message: 'Server unreachable.' } };
     }
     let data = {};
@@ -1550,7 +1584,7 @@
     } catch {
       // empty or non-JSON body
     }
-    return { ok: response.ok, status: response.status, data };
+    return isCurrent() ? { ok: response.ok, status: response.status, data } : stale;
   }
 
   // A link to this page with these parameters (empty ones dropped). A non-default server travels
@@ -1601,6 +1635,7 @@
   // A finished lobby game from the server, opened in the archive viewer.
   async function openServerGame(id) {
     const result = await api(`/api/games/${encodeURIComponent(id)}`);
+    if (result.stale) return false;
     if (!result.ok || !result.data.game) {
       toast(result.status === 404 ? 'That game was not found.' : 'Could not load the game.', 'bad');
       return false;
@@ -1634,7 +1669,7 @@
     setUrl({ p: clean });
     renderProfile();
     const result = await api(`/api/players/${encodeURIComponent(clean)}`);
-    if (profileState.name !== clean) return;
+    if (result.stale || profileState.name !== clean) return;
     if (!result.ok) {
       $('profileGames').replaceChildren(el('li', {
         class: 'empty-note',
@@ -1811,6 +1846,7 @@
       return;
     }
     const result = await api('/api/me', { auth: true });
+    if (result.stale) return;
     if (result.ok) {
       account.me = result.data;
       lobbyState.player = result.data.player;
@@ -1839,6 +1875,7 @@
   // returns null; otherwise the response data.
   async function accountPost(path, body, failText, { auth = true } = {}) {
     const result = await api(path, { method: 'POST', body, auth });
+    if (result.stale) return null;
     if (result.ok) return result.data;
     toast(result.data.message || failText, 'bad');
     return null;
@@ -1898,7 +1935,7 @@
     account.busy = true;
     renderAccount();
     try {
-      await work();
+      await work(captureAccountContext());
     } finally {
       account.busy = false;
       renderAccount();
@@ -1906,7 +1943,7 @@
   }
 
   function addPasskey() {
-    return busy(async () => {
+    return busy(async (isCurrent) => {
       const start = await accountPost('/api/auth/passkey/register/options', {}, 'Could not start adding a passkey.');
       if (!start) return;
       let credential;
@@ -1916,6 +1953,7 @@
         passkeyError(error, 'Your device could not create a passkey.');
         return;
       }
+      if (!isCurrent()) return;
       const me = await accountPost('/api/auth/passkey/register/verify', {
         challengeId: start.challengeId,
         label: deviceLabel(),
@@ -2002,7 +2040,9 @@
     lobbyState.player = data.player;
     closeLobbySocket();
     account.notice = '';
+    const isCurrent = captureAccountContext();
     await refreshMe();
+    if (!isCurrent()) return;
     $('accountSignIn').open = false;
     $('accountTitle').focus();
     sfx.play('join');
@@ -2011,7 +2051,7 @@
 
   async function signInWithPasskey() {
     if (!(await confirmLeaveGuest())) return;
-    await busy(async () => {
+    await busy(async (isCurrent) => {
       const start = await accountPost('/api/auth/passkey/login/options', {}, 'Could not start signing in.', { auth: false });
       if (!start) return;
       let credential;
@@ -2021,6 +2061,7 @@
         passkeyError(error, 'Your device could not use a passkey.');
         return;
       }
+      if (!isCurrent()) return;
       const session = await accountPost('/api/auth/passkey/login/verify', {
         challengeId: start.challengeId,
         response: credentialJson(credential),
@@ -2058,6 +2099,7 @@
     if (!(await confirmDialog('SIGN OUT HERE?', 'You can sign back in with your passkey or account key.', 'SIGN OUT', 'danger'))) return;
     await busy(async () => {
       const result = await api('/api/auth/logout', { method: 'POST', body: {}, auth: true });
+      if (result.stale) return;
       if (!result.ok && result.status !== 401) {
         toast(result.data.message || 'Could not sign out.', 'bad');
         return;
@@ -2316,7 +2358,7 @@
 
   async function resumeOnline(session, { auto = false } = {}) {
     if (!session || !session.roomCode) return;
-    if (session.serverUrl && isWsUrl(session.serverUrl)) settings.serverUrl = session.serverUrl;
+    if (session.serverUrl && isWsUrl(session.serverUrl)) selectServer(session.serverUrl);
     net.roomCode = session.roomCode;
     net.playerId = session.playerId;
     net.resumeToken = session.resumeToken;
@@ -3222,11 +3264,7 @@
       let changedServer = false;
       if (!app.mode && url && url !== settings.serverUrl) {
         if (isWsUrl(url)) {
-          leaveLobbyPanel();
-          settings.serverUrl = url;
-          lobbyState.player = null;
-          account.me = null;
-          changedServer = true;
+          changedServer = selectServer(url);
         }
         else toast('Server URL must start with ws:// or wss://', 'bad');
       }
@@ -3297,7 +3335,7 @@
     const params = new URLSearchParams(window.location.search);
     const wsParam = params.get('ws');
     if (wsParam && isWsUrl(wsParam)) {
-      settings.serverUrl = wsParam;
+      selectServer(wsParam);
       applySettings();
     }
     await syncDataVersion();
