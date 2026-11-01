@@ -119,6 +119,7 @@
 
     const ticket = typeof payload.ticket === 'string' ? payload.ticket.trim() : '';
     let seat = rl.findReservedSeat(state, ticket);
+    const viaTicket = Boolean(seat);
 
     if (!seat) {
       const requestedId = typeof envelope.playerId === 'string' ? envelope.playerId.trim() : '';
@@ -132,7 +133,13 @@
         sendError(state, hooks, conn, ERROR_CODES.PLAYER_NOT_FOUND, 'That seat is not part of this game.');
         return false;
       }
-    } else {
+    }
+    // Revocation clears the ticket and resume token already; this keeps any path from re-seating it.
+    if (seat.revoked) {
+      sendError(state, hooks, conn, ERROR_CODES.TICKET_INVALID, 'This device was signed out of the account.');
+      return false;
+    }
+    if (viaTicket) {
       // A second tab with the same ticket replaces the first one instead of taking a new seat.
       for (const other of hooks.connections()) {
         if (other.id !== conn.id && other.role === 'player' && other.playerId === seat.playerId) {
@@ -272,6 +279,23 @@
     return true;
   }
 
+  // The lobby says these sessions were signed out: their seats are revoked and their game sockets
+  // closed (code 4001). Returns true when room state changed.
+  function revokeSessions(state, hooks, sessions) {
+    const playerIds = rl.revokeSeatSessions(state, sessions);
+    if (!playerIds.length) return false;
+    for (const conn of hooks.connections()) {
+      if (conn.role !== 'player' || !playerIds.includes(conn.playerId)) continue;
+      rl.removePlayer(state, conn.playerId);
+      conn.role = null;
+      conn.playerId = '';
+      hooks.save(conn);
+      hooks.close(conn, 4001, 'Signed out.');
+    }
+    broadcastViews(state, hooks);
+    return true;
+  }
+
   // Returns true when room state changed.
   function handleClose(state, hooks, conn) {
     if (conn.role === 'spectator') {
@@ -295,6 +319,7 @@
     joinRoom,
     handleMessage,
     handleClose,
+    revokeSessions,
     broadcastViews,
   };
 

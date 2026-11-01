@@ -110,6 +110,26 @@
     return { record, hash, session: found };
   }
 
+  // Recent lobby rooms a player holds a seat in, and the session each seat belongs to, so a sign-out
+  // can reach them. A room lives at most a day; five is plenty.
+  const SEAT_MEMORY_MS = 24 * 60 * 60 * 1000;
+
+  function rememberSeat(record, roomCode, session, now) {
+    const kept = (Array.isArray(record.seatRooms) ? record.seatRooms : [])
+      .filter((item) => item.roomCode !== roomCode && now - item.at < SEAT_MEMORY_MS);
+    record.seatRooms = [{ roomCode, session: session || '', at: now }, ...kept].slice(0, 5);
+  }
+
+  // The rooms (and the sessions in them) that a set of ended sessions held seats in.
+  function seatsFor(record, sessions, now = Date.now()) {
+    const byRoom = new Map();
+    for (const item of Array.isArray(record.seatRooms) ? record.seatRooms : []) {
+      if (!item.session || !sessions.includes(item.session) || now - item.at >= SEAT_MEMORY_MS) continue;
+      byRoom.set(item.roomCode, [...(byRoom.get(item.roomCode) || []), item.session]);
+    }
+    return [...byRoom].map(([roomCode, list]) => ({ roomCode, sessions: list }));
+  }
+
   // --- Live games -------------------------------------------------------------
   // Every lobby-arranged game in progress, so people can find one to watch.
 
@@ -250,6 +270,9 @@
       lastOpponent: record.lastOpponent || '',
       lastOpponentAt: record.lastOpponentAt || 0,
       ipHash: conn.ipHash || '',
+      // The session this player queued from: their seat belongs to it, so signing that session
+      // out also takes the seat away.
+      session: conn.sessionHash || '',
     });
     await store.saveQueue(entries);
     await sendQueued(store, hooks, conn, control);
@@ -308,8 +331,8 @@
       if (!whiteRecord || !blackRecord) continue;
 
       const seats = [
-        { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '' },
-        { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '' },
+        { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: whiteEntry.session || '' },
+        { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: blackEntry.session || '' },
       ];
 
       let room = null;
@@ -349,6 +372,8 @@
       whiteRecord.lastOpponentAt = now;
       blackRecord.lastOpponent = whiteRecord.id;
       blackRecord.lastOpponentAt = now;
+      rememberSeat(whiteRecord, room.roomCode, whiteEntry.session, now);
+      rememberSeat(blackRecord, room.roomCode, blackEntry.session, now);
       await store.savePlayer(whiteRecord);
       await store.savePlayer(blackRecord);
 
@@ -599,6 +624,7 @@
 
   const lobbySessionExports = {
     withLock,
+    seatsFor,
     createSession,
     sessionForToken,
     liveGames,

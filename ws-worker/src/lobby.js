@@ -48,9 +48,6 @@ class StorageLobbyStore {
   constructor(storage) {
     this.storage = storage;
     this.cache = new Map();
-    // Passkey challenges live a few minutes and anyone can ask for one, so they stay in memory: no
-    // storage write per request. An eviction between options and verify just means "try again".
-    this.challenges = new Map();
   }
 
   // Bounded insert-order cache: enough to absorb a burst without growing for the life of the object.
@@ -128,25 +125,28 @@ class StorageLobbyStore {
     await this.remove(`key:${hash}`);
   }
 
+  // Passkey challenges are stored, not kept in memory: the object can hibernate while someone is
+  // still at the passkey prompt. They bypass the read cache and are deleted once used.
   async getChallenge(id) {
-    const value = this.challenges.get(id);
-    if (value && value.expiresAt > Date.now()) return value;
-    this.challenges.delete(id);
-    return null;
+    const value = await this.storage.get(`chal:${id}`);
+    return value && value.expiresAt > Date.now() ? value : null;
   }
 
   async saveChallenge(id, data) {
-    const now = Date.now();
-    if (this.challenges.size >= 5000) {
-      for (const [key, value] of this.challenges) if (value.expiresAt <= now) this.challenges.delete(key);
-      // Still full of live challenges: drop the oldest rather than grow without bound.
-      while (this.challenges.size >= 5000) this.challenges.delete(this.challenges.keys().next().value);
-    }
-    this.challenges.set(id, { ...data });
+    await this.storage.put(`chal:${id}`, data);
+    await this.sweepChallenges();
   }
 
   async removeChallenge(id) {
-    this.challenges.delete(id);
+    await this.storage.delete(`chal:${id}`);
+  }
+
+  // Challenge ids start with their expiry, so everything before "now" is expired. Each new challenge
+  // sweeps up to 128 old ones, which keeps up with however many are being created.
+  async sweepChallenges() {
+    const end = `chal:${Date.now().toString(36).padStart(9, '0')}`;
+    const expired = await this.storage.list({ prefix: 'chal:', end, limit: 128 });
+    if (expired.size) await this.storage.delete([...expired.keys()]);
   }
 
   async getGame(id) {
@@ -223,7 +223,9 @@ class StorageLobbyStore {
 
   // Keeps a small sorted board instead of scanning every player on each request.
   async bumpLeaderboard(records = []) {
-    const top = ((await this.read('top')) || []).slice();
+    // Entries from before accounts (or from accounts that later removed their sign-in methods)
+    // carry no `secured`: they are dropped here and filtered out on read.
+    const top = ((await this.read('top')) || []).filter((entry) => entry && entry.secured);
     const stats = (await this.read('stats')) || { ranked: 0 };
     for (const record of records) {
       const index = top.findIndex((entry) => entry.id === record.id);
@@ -241,7 +243,7 @@ class StorageLobbyStore {
   }
 
   async leaderboard(limit) {
-    const top = (await this.read('top')) || [];
+    const top = ((await this.read('top')) || []).filter((entry) => entry && entry.secured);
     const stats = (await this.read('stats')) || { ranked: 0 };
     return { entries: top.slice(0, limit), total: stats.ranked };
   }
@@ -439,11 +441,33 @@ export class LobbyHub extends DurableObject {
         }
       }
     }
-    if (!result) result = await accountApi.handle(this.store, { origins: this.origins, webauthn, hooks: this.hooks() }, req);
+    if (!result) {
+      result = await accountApi.handle(this.store, {
+        origins: this.origins,
+        webauthn,
+        hooks: this.hooks(),
+        revokeSeats: (rooms) => this.revokeSeats(rooms),
+      }, req);
+    }
     return new Response(JSON.stringify(result.body), {
       status: result.status,
       headers: accountApi.responseHeaders(req, result, this.origins),
     });
+  }
+
+  // Signed-out sessions lose their seats: each room cancels them and closes their game sockets.
+  async revokeSeats(rooms) {
+    await Promise.all(rooms.map(async ({ roomCode, sessions }) => {
+      try {
+        await this.env.GAME_HUB.get(this.env.GAME_HUB.idFromName(roomCode)).fetch('https://room.internal/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessions }),
+        });
+      } catch (error) {
+        console.error('seat revocation failed', roomCode, error);
+      }
+    }));
   }
 
   runInternal(work) {

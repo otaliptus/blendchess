@@ -50,5 +50,5 @@ URL format: `https://<worker>.workers.dev` -> `wss://<worker>.workers.dev`. Heal
 - Limits: 16 KiB per message, 40 messages per second per socket, 64 sockets per room and 4 per network (an IPv4 address or an IPv6 /64). In a full room, a connection marked `seat=1` closes an idle socket or the newest watcher so a player can always get back to a seat.
 - The lobby caps sockets (6 per network), queue entries (500 total, 6 per network), new identities (10 per network per hour, widen with `--var NEW_PLAYER_LIMIT:100` on a dev deployment only), room creation (12 per network per minute plus a global cap) and message rate.
 - Tickets and the room reservation are server-side only: `index.js` never forwards `/reserve`, `/report`, `/active`, `/release` or `/limit/create` from the internet. From outside, the lobby is reachable only through `?lobby=1` and `/api/*`.
-- A daily lobby alarm prunes week-old report markers. Passkey challenges are kept in memory for five minutes, never in storage.
+- A daily lobby alarm prunes week-old report markers. Passkey challenges are stored for five minutes (the object may hibernate during the prompt); their ids start with the expiry, and each new one sweeps up to 128 expired ones.
 - The old single `global-hub` instance is no longer used. Its stored state is orphaned and harmless.

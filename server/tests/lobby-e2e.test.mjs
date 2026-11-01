@@ -225,7 +225,7 @@ test('lobby rejects unauthenticated queueing and oversized frames', async () => 
 
 // Only meaningful against the Worker: the Node server has no internal routes at all.
 test('internal Durable Object paths are not reachable from the internet', { skip: !EXTERNAL_URL }, async () => {
-  for (const path of ['/report', '/active', '/release', '/reserve', '/limit/create']) {
+  for (const path of ['/report', '/active', '/release', '/reserve', '/revoke', '/limit/create']) {
     const response = await fetch(`${HTTP_URL}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -294,4 +294,43 @@ test('accounts: an account key signs in a second device; signing out others ends
   assert.equal((await api('/api/auth/logout', { token: second.token, method: 'POST', body: {} })).status, 200);
   assert.equal((await api('/api/me', { token: second.token })).status, 401);
   again.close();
+});
+
+test('signing other devices out ends the old device’s game: socket closed, ticket refused', async () => {
+  const ann = await connect('lobby=1');
+  const bea = await connect('lobby=1');
+  ann.send('lobby_hello', '', { nickname: 'RevokeAnn' });
+  const annReady = await ann.next((message) => message.type === 'lobby_ready');
+  bea.send('lobby_hello', '', { nickname: 'RevokeBea' });
+  await bea.next((message) => message.type === 'lobby_ready');
+  ann.send('lobby_queue', '', { control: '10+0' });
+  await ann.next((message) => message.type === 'lobby_queued');
+  bea.send('lobby_queue', '', { control: '10+0' });
+  const annMatch = (await ann.next((message) => message.type === 'match_found')).payload;
+  const beaMatch = (await bea.next((message) => message.type === 'match_found')).payload;
+  const roomCode = annMatch.roomCode;
+
+  const annGame = await connect(`room=${roomCode}&seat=1`);
+  annGame.send('join_room', roomCode, { ticket: annMatch.ticket });
+  await annGame.next((message) => message.type === 'room_joined');
+  const beaGame = await connect(`room=${roomCode}&seat=1`);
+  beaGame.send('join_room', roomCode, { ticket: beaMatch.ticket });
+  await beaGame.next((message) => message.type === 'room_joined');
+
+  // Ann's account gets a key; a second device signs in with it and signs every other device out.
+  const { key } = await (await api('/api/auth/key/create', { token: annReady.payload.token, method: 'POST', body: {} })).json();
+  const second = await (await api('/api/auth/key/login', { method: 'POST', body: { key } })).json();
+  const closed = new Promise((resolve) => annGame.ws.on('close', (code) => resolve(code)));
+  assert.equal((await api('/api/auth/logout-others', { token: second.token, method: 'POST', body: {} })).status, 200);
+  assert.equal(await closed, 4001, 'the old device is thrown out of the game');
+
+  // Neither the ticket nor a fresh connection gets the seat back.
+  const retry = await connect(`room=${roomCode}&seat=1`);
+  retry.send('join_room', roomCode, { ticket: annMatch.ticket });
+  assert.equal((await retry.next((message) => message.type === 'error')).payload.errorCode, 'TICKET_INVALID');
+
+  // Bea is unaffected and sees Ann as disconnected.
+  const view = await beaGame.next((message) => isView(message) && message.payload.game.players.some((seat) => !seat.connected));
+  assert.ok(view);
+  for (const client of [ann, bea, beaGame, retry]) client.close();
 });

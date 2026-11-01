@@ -2104,12 +2104,12 @@
         net.lastMessageAt = Date.now();
         onServerMessage(event.data);
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (ws !== net.ws) return;
         net.ws = null;
         stopHeartbeat();
         if (!opened) reject(new Error('Could not reach the game server.'));
-        onSocketClosed();
+        onSocketClosed(event && event.code);
       };
     });
   }
@@ -2362,8 +2362,21 @@
     }
   }
 
-  function onSocketClosed() {
+  function onSocketClosed(code) {
     setNetStatus('offline');
+    if (code === 4001) {
+      // The account signed this device out: the seat is gone, so don't try to reconnect.
+      leaveOnline();
+      remove(identityKey());
+      lobbyState.player = null;
+      app.mode = null;
+      app.view = null;
+      app.replay = null;
+      $('gameOver').classList.add('hidden');
+      showMenuPanel('menuMain');
+      toast('This device was signed out of the account.', 'bad');
+      return;
+    }
     if (net.intentionalClose || app.mode !== 'online' || !net.roomCode) return;
     if (net.role === 'player' || net.role === 'spectator') scheduleReconnect();
   }

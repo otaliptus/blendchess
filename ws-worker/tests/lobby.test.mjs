@@ -165,15 +165,19 @@ function createCtx(storageMap = new Map()) {
         storageMap.set(key, structuredClone(value));
       },
       async delete(key) {
-        storageMap.delete(key);
+        for (const item of Array.isArray(key) ? key : [key]) storageMap.delete(item);
       },
       async deleteAll() {
         storageMap.clear();
       },
       async list(options = {}) {
         const result = new Map();
-        for (const [key, value] of storageMap) {
-          if (!options.prefix || key.startsWith(options.prefix)) result.set(key, structuredClone(value));
+        for (const key of [...storageMap.keys()].sort()) {
+          if (options.prefix && !key.startsWith(options.prefix)) continue;
+          if (options.end && key >= options.end) continue;
+          if (options.startAfter && key <= options.startAfter) continue;
+          if (options.limit && result.size >= options.limit) break;
+          result.set(key, structuredClone(storageMap.get(key)));
         }
         return result;
       },
@@ -406,4 +410,48 @@ test('the queue survives an eviction but drops sockets that are gone', async () 
   const again = new LobbyHub(hub.ctx, env);
   await hub.ctx.ready;
   assert.equal((await again.store.getQueue()).length, 0);
+});
+
+test('a passkey challenge survives the lobby hibernating mid-prompt, and expired ones are swept', async () => {
+  const storageMap = new Map();
+  const first = new LobbyHub(createCtx(storageMap), createEnv());
+  const api = (hub, path, body) => hub.fetch(new MockRequest(`https://lobby.internal${path}`, {
+    method: 'POST',
+    headers: { Origin: 'https://blendchess.com', 'X-IP-Hash': 'ip-a' },
+    body: JSON.stringify(body),
+  }));
+  // An expired challenge left over from earlier.
+  storageMap.set('chal:000000001-old', { kind: 'login', challenge: 'x', expiresAt: 1 });
+
+  const options = await (await api(first, '/api/auth/passkey/login/options', {})).json();
+  assert.ok(options.challengeId);
+  assert.ok(storageMap.has(`chal:${options.challengeId}`), 'stored, not only in memory');
+  assert.ok(!storageMap.has('chal:000000001-old'), 'the expired challenge was swept');
+
+  // The object is evicted and recreated over the same storage while the person uses their passkey.
+  const second = new LobbyHub(createCtx(storageMap), createEnv());
+  const verify = await api(second, '/api/auth/passkey/login/verify', {
+    challengeId: options.challengeId,
+    response: { id: 'unknown-credential', response: {} },
+  });
+  const body = await verify.json();
+  assert.equal(body.error, 'PASSKEY_UNKNOWN', 'the challenge was still there; only the credential is unknown');
+  assert.ok(!storageMap.has(`chal:${options.challengeId}`), 'used challenges are deleted');
+});
+
+test('guests stored on the leaderboard before accounts are not listed, and leave on the next update', async () => {
+  const storageMap = new Map([
+    ['top', [
+      { id: 'old-guest', name: 'OldGuest', rating: 1300, games: 4, wins: 3, losses: 1, draws: 0, provisional: true },
+    ]],
+    ['stats', { ranked: 1 }],
+  ]);
+  const hub = new LobbyHub(createCtx(storageMap), createEnv());
+  const read = async () => (await hub.fetch(new MockRequest('https://lobby.internal/api/leaderboard?limit=10'))).json();
+  assert.deepEqual((await read()).players, []);
+  assert.equal((await read()).total, 1);
+
+  const record = { ...logic.newPlayerRecord('Secured'), games: 1, keyHash: 'k' };
+  await hub.store.bumpLeaderboard([record]);
+  assert.deepEqual(storageMap.get('top').map((entry) => entry.name), ['Secured']);
 });

@@ -68,6 +68,7 @@ function readReservation(body) {
       nickname: rl.cleanNickname(seat.nickname, seat.color === 'w' ? 'White' : 'Black'),
       rating: Number.isFinite(Number(seat.rating)) ? Number(seat.rating) : null,
       ipHash: typeof seat.ipHash === 'string' ? seat.ipHash.slice(0, 64) : '',
+      session: typeof seat.session === 'string' ? seat.session.slice(0, 128) : '',
     });
   }
   return {
@@ -360,6 +361,16 @@ export class GameHub extends DurableObject {
       if (request.method !== 'POST') return new Response('Method not allowed.', { status: 405 });
 
       return this.reserve(request);
+    }
+    // POST /revoke, from the lobby only: these sessions were signed out, so their seats go.
+    if (url.pathname === '/revoke') {
+      if (request.method !== 'POST') return new Response('Method not allowed.', { status: 405 });
+      const body = await request.json().catch(() => null);
+      const sessions = body && Array.isArray(body.sessions) ? body.sessions.slice(0, 32) : [];
+      if (!this.room || !sessions.length) return json({ ok: true, revoked: false });
+      const revoked = session.revokeSessions(this.room, this.hooks(), sessions);
+      if (revoked) await this.afterChange();
+      return json({ ok: true, revoked });
     }
 
     const upgrade = request.headers.get('Upgrade');

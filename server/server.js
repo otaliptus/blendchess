@@ -328,6 +328,15 @@ async function handleLobbyMessage(conn, rawData) {
   await lobbySession.handleMessage(lobbyStore, lobbyHooks(), conn, parsed.envelope);
 }
 
+// Signed-out sessions lose their seats in lobby rooms: tickets and resume tokens stop working and
+// their game sockets close.
+async function revokeSeats(list) {
+  for (const { roomCode, sessions } of list) {
+    const room = rooms.get(roomCode);
+    if (room && session.revokeSessions(room.state, hooksFor(room), sessions)) await afterRoomChange(room);
+  }
+}
+
 function readBody(req) {
   return new Promise((resolve) => {
     let size = 0;
@@ -376,7 +385,7 @@ async function handleApi(req, res, url) {
   };
   const result = body === undefined
     ? { status: 400, body: { error: 'INVALID', message: 'Body must be JSON under 16 KB.' }, public: false, cacheSeconds: 0 }
-    : await accountApi.handle(lobbyStore, { origins: SITE_ORIGINS, webauthn, hooks: lobbyHooks() }, request);
+    : await accountApi.handle(lobbyStore, { origins: SITE_ORIGINS, webauthn, hooks: lobbyHooks(), revokeSeats }, request);
   res.writeHead(result.status, accountApi.responseHeaders(request, result, SITE_ORIGINS));
   res.end(JSON.stringify(result.body));
 }

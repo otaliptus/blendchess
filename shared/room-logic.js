@@ -280,6 +280,9 @@
         nickname: cleanNickname(seat && seat.nickname, color === 'w' ? 'White' : 'Black'),
         rating: Number.isFinite(Number(seat && seat.rating)) ? Number(seat.rating) : null,
         ticket: String((seat && seat.ticket) || ''),
+        // The lobby session the seat was matched from (server-side only, never in a view).
+        session: String((seat && seat.session) || '').slice(0, 128),
+        revoked: false,
         joined: false,
       };
     }
@@ -344,6 +347,24 @@
         ply.forfeit ? 1 : 0,
       ]),
     };
+  }
+
+  // The player signed those sessions out: their seats stop accepting the ticket or a resume token.
+  // Returns the ids of the players whose seats were revoked.
+  function revokeSeatSessions(state, sessions) {
+    const list = Array.isArray(sessions) ? sessions.filter((item) => typeof item === 'string' && item) : [];
+    const revoked = [];
+    if (!state.reservedSeats || !list.length) return revoked;
+    for (const color of ['w', 'b']) {
+      const seat = state.reservedSeats[color];
+      if (!seat || seat.revoked || !seat.session || !list.includes(seat.session)) continue;
+      seat.revoked = true;
+      seat.ticket = '';
+      const player = getPlayer(state, seat.playerId);
+      if (player) player.resumeToken = '';
+      revoked.push(seat.playerId);
+    }
+    return revoked;
   }
 
   function reservedSeatsValid(state) {
@@ -901,6 +922,7 @@
     isLobbyRoom,
     noteSeatNetwork,
     spectatorPerspective,
+    revokeSeatSessions,
     gameRecord,
     reservedSeatsValid,
     findReservedSeat,

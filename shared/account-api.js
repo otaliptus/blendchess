@@ -14,6 +14,8 @@
   //   webauthn: { generateRegistrationOptions, verifyRegistrationResponse,
   //               generateAuthenticationOptions, verifyAuthenticationResponse },
   //   hooks: lobby hooks (connections(), close()), to drop sockets of a signed-out session,
+  //   revokeSeats(rooms): tell each { roomCode, sessions } room to take away the seats those
+  //     sessions hold and close their game sockets,
   // }
   // Returns { status, body, public, cacheSeconds }.
 
@@ -104,9 +106,12 @@
     return challenge;
   }
 
+  // The id starts with the expiry time (fixed-width base36), so stored challenges sort by expiry
+  // and a store can sweep the expired ones with one bounded range read.
   async function newChallenge(store, data) {
-    const id = logic.makeToken(16);
-    await store.saveChallenge(id, { ...data, expiresAt: Date.now() + logic.CHALLENGE_TTL_MS });
+    const expiresAt = Date.now() + logic.CHALLENGE_TTL_MS;
+    const id = `${expiresAt.toString(36).padStart(9, '0')}-${logic.makeToken(16)}`;
+    await store.saveChallenge(id, { ...data, expiresAt });
     return id;
   }
 
@@ -134,6 +139,18 @@
 
   async function meBody(store, record) {
     return { player: logic.summary(record), security: await securityOf(store, record) };
+  }
+
+  // A signed-out session loses its seats in lobby games too: the rooms cancel the seat's ticket and
+  // resume token and close its game sockets.
+  async function revokeSeats(ctx, record, sessions) {
+    const rooms = lobbySession.seatsFor(record, sessions);
+    if (!rooms.length || typeof ctx.revokeSeats !== 'function') return;
+    try {
+      await ctx.revokeSeats(rooms);
+    } catch (error) {
+      console.error('seat revocation failed', error);
+    }
   }
 
   // Sockets opened with a session that just ended are closed, so they cannot keep queueing.
@@ -399,17 +416,18 @@
     record.sessions = (record.sessions || []).filter((item) => item !== hash);
     await store.savePlayer(record);
     dropSockets(ctx, (conn) => conn.sessionHash === hash);
+    await revokeSeats(ctx, record, [hash]);
     return reply(200, { ok: true });
   }
 
   async function logoutOthers(store, ctx, auth) {
     const { record, hash } = auth;
-    for (const other of record.sessions || []) {
-      if (other !== hash) await store.removeSession(other);
-    }
+    const ended = (record.sessions || []).filter((other) => other !== hash);
+    for (const other of ended) await store.removeSession(other);
     record.sessions = [hash];
     await store.savePlayer(record);
     dropSockets(ctx, (conn) => conn.playerId === record.id && conn.sessionHash !== hash);
+    await revokeSeats(ctx, record, ended);
     return reply(200, await meBody(store, record));
   }
 

@@ -54,7 +54,8 @@ function makeLobby() {
       return { roomCode: `ROOM${String(roomSeq).padStart(2, '0')}`, tickets: { w: 'w'.repeat(24), b: 'b'.repeat(24) } };
     },
   };
-  const ctx = { origins: accountApi.parseOrigins(''), webauthn: fakeWebauthn(), hooks };
+  const revoked = [];
+  const ctx = { origins: accountApi.parseOrigins(''), webauthn: fakeWebauthn(), hooks, revokeSeats: async (rooms) => { revoked.push(...rooms); } };
   const call = (method, path, { token = '', origin = SITE, body = null, ipHash = 'net-1' } = {}) => accountApi.handle(store, ctx, {
     method,
     path,
@@ -71,7 +72,7 @@ function makeLobby() {
     const ready = conn.inbox.find((message) => message.type === TYPES.LOBBY_READY);
     return { conn, token: ready.payload.token, player: ready.payload.player };
   };
-  return { store, hooks, conns, call, guest };
+  return { store, hooks, conns, call, guest, revoked };
 }
 
 async function registerPasskey(h, token, id = 'cred-1') {
@@ -414,4 +415,22 @@ test('a change queued behind a sign-out of its own session does not go through',
   assert.equal(late.status, 401);
   assert.equal(late.body.key, undefined);
   assert.equal(h.store.getPlayer(ann.player.id).keyHash, '');
+});
+
+test('signing other devices out revokes the seats they were matched with', async () => {
+  const h = makeLobby();
+  const { a, match } = await matchPair(h);
+  const firstHash = await lobbyLogic.sha256Hex(a.token);
+  assert.equal(h.store.getPlayer(a.player.id).seatRooms[0].session, firstHash);
+
+  // Ann secures the account and signs in on a second device, then signs the first one out.
+  const { key } = (await h.call('POST', '/api/auth/key/create', { token: a.token })).body;
+  const second = (await h.call('POST', '/api/auth/key/login', { body: { key } })).body.token;
+  await h.call('POST', '/api/auth/logout-others', { token: second });
+  assert.deepEqual(h.revoked, [{ roomCode: match.roomCode, sessions: [firstHash] }]);
+
+  // Signing out the second device has no seat to revoke: it was never matched.
+  h.revoked.length = 0;
+  await h.call('POST', '/api/auth/logout', { token: second });
+  assert.deepEqual(h.revoked, []);
 });

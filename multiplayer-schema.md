@@ -59,8 +59,8 @@ the sign-in routes need `Authorization: Bearer <session token>`. `me` is `{ play
 | `POST /api/auth/key/create` | `{}` | `{ key, ...me }`. The key is shown once; a new key retires the old one. |
 | `POST /api/auth/key/remove` | `{}` | `me` |
 | `POST /api/auth/key/login` | `{ key }` | `{ token, player }` (no token needed; case, dashes and the `BLND` prefix are optional) |
-| `POST /api/auth/logout` | `{}` | `{ ok: true }`; lobby sockets opened with that session close with code `4001` |
-| `POST /api/auth/logout-others` | `{}` | `me`; every other session of the account ends |
+| `POST /api/auth/logout` | `{}` | `{ ok: true }`; lobby sockets opened with that session, and game sockets in seats it was matched with, close with code `4001` |
+| `POST /api/auth/logout-others` | `{}` | `me`; every other session of the account ends, and lobby-game seats they were matched with are revoked (their game sockets close with `4001`) |
 
 Sign-in rate limits: 30 account requests per minute per network, 10 failed sign-ins per minute per network.
 

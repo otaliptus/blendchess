@@ -335,3 +335,55 @@ test('a practice rematch waits until the finished game is recorded', () => {
   assert.equal(h.state.gameId, 2);
   assert.ok(black);
 });
+
+test('signing a session out takes its seat away: socket closed, ticket and resume token dead', () => {
+  const state = rl.createRoomState('RATED1');
+  rl.applyReservation(state, {
+    rated: true,
+    control: '5+3',
+    clock: { baseMs: 300_000, incMs: 3_000 },
+    seats: [
+      { color: 'w', playerId: 'player-white', nickname: 'Wendy', rating: 1200, ticket: WHITE_TICKET, session: 'session-white' },
+      { color: 'b', playerId: 'player-black', nickname: 'Boris', rating: 1250, ticket: BLACK_TICKET, session: 'session-black' },
+    ],
+  });
+  const conns = [];
+  const hooks = {
+    connections: () => conns.filter((conn) => !conn.closed),
+    send: (conn, message) => conn.inbox.push(message),
+    close: (conn, code) => { conn.closed = code; },
+    save: () => {},
+    makeResumeToken: () => `token-${conns.length}`,
+  };
+  const connect = (id) => {
+    const conn = { id, role: null, playerId: '', inbox: [] };
+    conns.push(conn);
+    return conn;
+  };
+  const envelope = (type, payload = {}, playerId = '') => createMessage(type, 'RATED1', playerId, payload);
+  const white = connect('conn-w');
+  const black = connect('conn-b');
+  session.joinRoom(state, hooks, white, envelope(TYPES.JOIN_ROOM, { ticket: WHITE_TICKET }));
+  session.joinRoom(state, hooks, black, envelope(TYPES.JOIN_ROOM, { ticket: BLACK_TICKET }));
+  const identity = white.inbox.find((message) => message.type === TYPES.ROOM_JOINED).payload;
+
+  assert.equal(session.revokeSessions(state, hooks, ['someone-else']), false);
+  assert.equal(session.revokeSessions(state, hooks, ['session-white']), true);
+  assert.equal(white.closed, 4001);
+  assert.equal(black.closed, undefined, 'the opponent keeps playing');
+  assert.equal(rl.getPlayer(state, 'player-white').connected, false);
+
+  const withTicket = connect('conn-ticket');
+  session.joinRoom(state, hooks, withTicket, envelope(TYPES.JOIN_ROOM, { ticket: WHITE_TICKET }));
+  assert.equal(withTicket.inbox.at(-1).payload.errorCode, ERROR_CODES.TICKET_INVALID);
+  const withResume = connect('conn-resume');
+  session.joinRoom(state, hooks, withResume, envelope(TYPES.JOIN_ROOM, { resume: true, resumeToken: identity.resumeToken }, identity.playerId));
+  assert.equal(withResume.inbox.at(-1).payload.errorCode, ERROR_CODES.TICKET_INVALID);
+
+  // The revocation survives a rematch's colour swap.
+  rl.resign(state, rl.getPlayer(state, 'player-black'));
+  state.reported = true;
+  rl.resetGame(state, { swapColors: true });
+  assert.equal(state.reservedSeats.b.playerId, 'player-white');
+  assert.equal(state.reservedSeats.b.revoked, true);
+});

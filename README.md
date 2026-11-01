@@ -28,7 +28,7 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 - **Start as a guest.** The lobby makes you an account on your first visit, with nothing to fill in. It lives in this browser only. Your nickname is unique and can be changed in the lobby.
 - **Secure it to keep it.** In `ACCOUNT`, add a **passkey** (your phone or computer's face, fingerprint or PIN; it syncs through your password manager) or get an **account key** (`BLND-XXXX-...`, a code you save somewhere safe; it works on any device). Either one lets you sign in on another device and keeps your rating if you clear the browser. Having both is a backup.
-- **Devices.** Each browser you sign in on gets its own session. `SIGN OUT OTHER DEVICES` ends all of them but the one you're on.
+- **Devices.** Each browser you sign in on gets its own session. `SIGN OUT OTHER DEVICES` ends all of them but the one you're on, including any ranked game they are sitting in (their clock keeps running).
 - **Leaderboard.** Guests are rated like everyone else, but only secured accounts are listed.
 - Passkeys are offered on `blendchess.com` (and on `localhost` for development); a passkey belongs to the domain it was made on. Account keys work everywhere.
 

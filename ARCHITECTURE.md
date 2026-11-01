@@ -70,12 +70,18 @@ ratings, finished-game records and the live list. It never holds a game.
   the token's SHA-256 is stored (`session:<hash>`), and the player record lists its session hashes
   (at most 20), so one device can be signed out, or all the others. Tokens from before accounts
   existed (`token:<hash>`) are still accepted and adopted on first use.
+- **Seats belong to sessions.** A queue entry carries the session it came from, and the reservation
+  hands each seat that session (server-side only). The player record remembers its last five lobby
+  rooms with their sessions. Signing a session out sends those rooms an internal `POST /revoke`: the
+  seat's ticket and resume token stop working and its game sockets close with code `4001`.
 - **Securing an account.** A player can add passkeys (WebAuthn, discoverable credentials, verified with
   `@simplewebauthn/server`; `cred:<id>` holds the public key, counter and RP ID) and one account key
   (120 bits of Crockford base32, stored as `key:<sha256>`; high entropy means no slow hash is needed).
   Either makes the account *secured*, which is what puts it on the leaderboard. The RP ID is the page's
   host without `www.`, so `blendchess.com` and `www.blendchess.com` share passkeys. Challenges are
-  single use, tied to the origin that asked for them, and expire after five minutes.
+  stored (the object may hibernate during the prompt), single use, tied to the origin that asked for
+  them, and expire after five minutes; their ids start with the expiry so expired ones are swept in
+  order.
 - **Queue.** Entries live in storage (Worker) or memory (Node) and carry the socket id, so an eviction
   drops players whose sockets are gone. Matching pairs the closest ratings within a window that widens
   with wait time; controls never mix; immediate rematches are suppressed.
