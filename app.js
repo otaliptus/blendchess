@@ -3,10 +3,10 @@
   const protocol = window.BlendChessProtocol;
   const rl = window.BlendChessRoomLogic;
   const guards = window.BlendChessStateGuards;
-  const dataVersion = window.BlendChessDataVersion;
   const sprites = window.BlendChessSprites;
   const sfx = window.BlendChessSfx;
   const fx = window.BlendChessFx;
+  const dataVersion = window.BlendChessDataVersion;
   if (!core || !protocol || !rl || !guards || !dataVersion || !sprites || !sfx || !fx) {
     throw new Error('Load chess-core.js, shared/*.js and client/*.js before app.js.');
   }
@@ -94,7 +94,6 @@
     ...load(STORAGE.settings, {}),
   };
   if (!isWsUrl(settings.serverUrl)) settings.serverUrl = DEFAULT_SERVER_URL;
-  let serverRevision = 0;
 
   function saveSettings() {
     save(STORAGE.settings, settings);
@@ -112,6 +111,7 @@
     sfx.setSound(settings.sound);
     fx.setEnabled(settings.fx);
     $('soundBtn').setAttribute('aria-pressed', String(settings.sound));
+    $('musicBtn').setAttribute('aria-pressed', String(settings.music));
     document.querySelectorAll('[data-theme-choice]').forEach((button) => {
       button.setAttribute('aria-pressed', String(button.dataset.themeChoice === settings.theme));
     });
@@ -325,36 +325,25 @@
   // Menu
   // ---------------------------------------------------------------------------
 
-  const MENU_PANELS = ['menuMain', 'menuLobby', 'menuCommunity', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
+  const MENU_PANELS = ['menuMain', 'menuLobby', 'menuProfile', 'menuAccount', 'menuSetup', 'menuJoin', 'menuArchive', 'menuHelp'];
   let setupMode = 'local';
 
   function showScreen(name) {
     $('menuScreen').classList.toggle('hidden', name !== 'menu');
     $('gameScreen').classList.toggle('hidden', name !== 'game');
-    $('accountBtn').classList.toggle('hidden', name === 'game');
   }
 
   function showMenuPanel(panel) {
     if (panel !== 'menuLobby') leaveLobbyPanel();
     if (panel !== 'menuProfile' && new URLSearchParams(window.location.search).has('p')) setUrl({});
     showScreen('menu');
-    document.querySelector('.logo-wrap').classList.toggle('hidden', panel !== 'menuMain');
-    $('logoBoard').classList.toggle('hidden', panel !== 'menuMain');
+    $('pressStart').classList.toggle('hidden', panel !== 'title');
+    $('logoBoard').classList.toggle('hidden', panel !== 'title' && panel !== 'menuMain');
     for (const id of MENU_PANELS) $(id).classList.toggle('hidden', id !== panel);
     if (panel === 'menuMain') refreshContinue();
     if (panel === 'menuArchive') renderArchiveList();
-    // Callers finish rendering queue/account state before focus moves into the panel.
-    queueMicrotask(() => {
-      if (app.mode || $(panel).classList.contains('hidden')) return;
-      let first = $(panel).querySelector('h2');
-      if (panel === 'menuMain') first = $(panel).querySelector('.menu-item:not([hidden])');
-      if (panel === 'menuLobby') first = $('lobbyFind').classList.contains('hidden') ? $('lobbyCancel') : $('lobbyFind');
-      if (first) {
-        first.tabIndex = first.tagName === 'H2' ? -1 : 0;
-        first.focus({ preventScroll: true });
-      }
-    });
-    window.scrollTo(0, 0);
+    const first = panel === 'title' ? $('pressStart') : $(panel).querySelector('input, .menu-item:not([hidden]), .px-btn.primary');
+    if (first) setTimeout(() => first.focus(), 0);
   }
 
   function refreshContinue() {
@@ -379,7 +368,6 @@
     $('openSpectatorsField').classList.toggle('hidden', mode === 'local');
     $('nicknameInput').value = settings.nickname;
     $('setupGo').textContent = mode === 'local' ? 'START' : 'CREATE';
-    $('gameOptions').open = $('hardModeInput').checked || (mode === 'create' && $('openSpectatorsInput').checked);
     showMenuPanel('menuSetup');
   }
 
@@ -393,12 +381,10 @@
     sfx.play('click');
     if (action === 'back') showMenuPanel('menuMain');
     else if (action === 'online') openLobbyPanel();
-    else if (action === 'community') openCommunityPanel();
     else if (action === 'local') openSetup('local');
     else if (action === 'create') openSetup('create');
     else if (action === 'join') {
       $('joinNicknameInput').value = settings.nickname;
-      $('joinTitle').textContent = 'JOIN ROOM';
       showMenuPanel('menuJoin');
     } else if (action === 'archive') showMenuPanel('menuArchive');
     else if (action === 'help') showMenuPanel('menuHelp');
@@ -408,26 +394,33 @@
     }
   }
 
+  // Decorative title board: pieces flicker in and out of the fog.
+  let logoTimer = null;
+  function initLogoBoard() {
+    const board = $('logoBoard');
+    const initial = core.createInitialBoard();
+    for (let r = 0; r < 8; r += 1) {
+      for (let c = 0; c < 8; c += 1) {
+        const square = el('div', { class: `sq ${(r + c) % 2 ? 'dark' : 'light'} fog` });
+        square.style.setProperty('--fog-delay', `${-Math.random() * 9}s`);
+        const piece = initial[r][c];
+        if (piece) square.append(el('img', { class: 'piece', src: sprites.piece(piece.color, piece.type), alt: '' }));
+        board.append(square);
+      }
+    }
+    const squares = [...board.children];
+    clearInterval(logoTimer);
+    logoTimer = setInterval(() => {
+      if (board.classList.contains('hidden') || document.hidden) return;
+      const square = squares[Math.floor(Math.random() * squares.length)];
+      const img = square.querySelector('img');
+      if (img) img.style.visibility = img.style.visibility === 'hidden' ? 'visible' : 'hidden';
+    }, 260);
+  }
+
   // ---------------------------------------------------------------------------
   // Board
   // ---------------------------------------------------------------------------
-
-  // The title board uses the same pixel pieces and fog as the game.
-  function initLogoBoard() {
-    const board = $('logoBoard');
-    core.createInitialBoard().forEach((row, r) => {
-      row.forEach((piece, c) => {
-        const square = el('div', { class: `sq ${(r + c) % 2 ? 'dark' : 'light'}${r < 4 ? ' fog' : ''}` });
-        square.style.setProperty('--fog-delay', `${-(r * 8 + c) % 9}s`);
-        if (piece) {
-          const img = el('img', { class: `piece${piece.color === 'b' ? ' enemy' : ''}`, src: sprites.piece(piece.color, piece.type), alt: '' });
-          img.style.setProperty('--piece-delay', `${-(r * 8 + c) % 7}s`);
-          square.append(img);
-        }
-        board.append(square);
-      });
-    });
-  }
 
   const boardEl = $('board');
   const squareEls = [];
@@ -1029,7 +1022,6 @@
   }
 
   function enterGame(mode) {
-    leaveLobbyPanel();
     app.mode = mode;
     app.view = null;
     app.prevView = null;
@@ -1138,67 +1130,9 @@
     return settings.serverUrl.replace(/^ws/, 'http').replace(/\/+$/, '');
   }
 
-  function selectServer(url) {
-    if (url === settings.serverUrl) return false;
-    leaveLobbyPanel();
-    serverRevision += 1;
-    settings.serverUrl = url;
-    settings.nickname = (loadIdentity() || {}).name || '';
-    lobbyState.player = null;
-    account.me = null;
-    account.notice = '';
-    return true;
-  }
-
-  function captureAccountContext() {
-    const revision = serverRevision;
-    const token = (loadIdentity() || {}).token;
-    return () => revision === serverRevision && token === (loadIdentity() || {}).token;
-  }
-
-  const versionRequests = new Map();
-  function syncDataVersion() {
-    const serverUrl = settings.serverUrl;
-    const revision = serverRevision;
-    const requestKey = `${revision}:${serverUrl}`;
-    if (versionRequests.has(requestKey)) return versionRequests.get(requestKey);
-    const task = (async () => {
-      try {
-        const response = await fetch(`${httpServerUrl()}/api/config`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
-        if (!response.ok) return false;
-        const { dataVersion: version } = await response.json();
-        if (serverRevision !== revision) return false;
-        const reset = dataVersion.apply(window.localStorage, {
-          version, serverUrl, defaultServerUrl: DEFAULT_SERVER_URL, identityKey: identityKey(), keys: STORAGE,
-        });
-        if (reset) {
-          forgetAccount();
-          if (serverUrl === DEFAULT_SERVER_URL) local.state = null;
-        }
-        return reset;
-      } catch {
-        // Offline play and older servers remain usable. Retry on the next connection or visit.
-        return false;
-      }
-    })();
-    versionRequests.set(requestKey, task);
-    task.then(() => versionRequests.delete(requestKey));
-    return task;
-  }
-
-  function onDataReset() {
-    leaveLobbyPanel();
-    leaveGameScreen();
-    forgetAccount();
-    showMenuPanel('menuMain');
-    toast('Game data was reset. Start again as a new guest.', 'warn');
-    void syncDataVersion();
-  }
-
   function lobbyStatusText() {
     if (lobbyState.status === 'connecting') return 'Connecting to the lobby...';
-    if (lobbyState.findWanted) return 'Connecting to find an opponent...';
-    if (lobbyState.status === 'off') return 'Offline. Try again, or play on this device.';
+    if (lobbyState.status === 'off') return lobbyState.player ? 'Lobby offline. Press FIND GAME to reconnect.' : 'Lobby offline. Press FIND GAME to retry.';
     if (lobbyState.status === 'queued' || lobbyState.status === 'queued-pending') {
       const queued = lobbyState.queued;
       const waiting = queued && queued.waiting
@@ -1214,9 +1148,13 @@
     const panel = $('menuLobby');
     if (!panel) return;
     const player = lobbyState.player;
+    $('lobbyIdentity').textContent = player
+      ? `${player.name} · ${player.rating}${player.provisional ? ' · provisional' : ''} · ${player.wins}W ${player.losses}L ${player.draws}D${player.secured ? ' · secured' : ' · guest'}`
+      : 'RANKED: play your first game to get a rating.';
+    $('lobbyIdentity').dataset.tone = player ? 'ready' : '';
     $('myProfileBtn').disabled = !player;
     $('lobbyStatus').textContent = lobbyStatusText();
-    const queued = lobbyState.findWanted || lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+    const queued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
     $('lobbyFind').classList.toggle('hidden', queued);
     $('lobbyCancel').classList.toggle('hidden', !queued);
     $('lobbyFind').disabled = lobbyState.status === 'matched';
@@ -1227,18 +1165,56 @@
     });
   }
 
+  // An intentional release reset (DATA_VERSION in shared/protocol.js) wipes the server's accounts and
+  // games. Before connecting, the client asks which version the server runs and, if it went up,
+  // clears what it saved for that server. One request per server at a time; offline is fine.
+  const versionChecks = new Map();
+  function syncDataVersion() {
+    const serverUrl = settings.serverUrl;
+    if (versionChecks.has(serverUrl)) return versionChecks.get(serverUrl);
+    const check = (async () => {
+      try {
+        const response = await fetch(`${httpServerUrl()}/api/config`, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+        if (!response.ok) return false;
+        const { dataVersion: version } = await response.json();
+        const reset = dataVersion.apply(window.localStorage, {
+          version, serverUrl, defaultServerUrl: DEFAULT_SERVER_URL, identityKey: identityKey(), keys: STORAGE,
+        });
+        if (reset) {
+          forgetAccount();
+          if (serverUrl === DEFAULT_SERVER_URL) local.state = null;
+        }
+        return reset;
+      } catch {
+        return false;
+      } finally {
+        versionChecks.delete(serverUrl);
+      }
+    })();
+    versionChecks.set(serverUrl, check);
+    return check;
+  }
+
+  // The server was reset while we were connected (or between visits): start over as a new guest.
+  function onDataReset() {
+    leaveLobbyPanel();
+    leaveGameScreen();
+    forgetAccount();
+    showMenuPanel('menuMain');
+    toast('Game data was reset. You start again as a new guest.', 'bad');
+    void syncDataVersion();
+  }
+
   async function openLobbySocket() {
     if (lobbyState.ws && (lobbyState.ws.readyState === WebSocket.OPEN || lobbyState.ws.readyState === WebSocket.CONNECTING)) return;
-    const revision = serverRevision;
     await syncDataVersion();
-    if (revision !== serverRevision || app.mode || $('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
+    if (app.mode || $('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
     clearTimeout(lobbyState.reconnectTimer);
     let ws;
     try {
       ws = new WebSocket(buildSocketUrl({ lobby: '1' }));
     } catch {
       lobbyState.status = 'off';
-      lobbyState.findWanted = false;
       renderLobby();
       return;
     }
@@ -1246,7 +1222,6 @@
     lobbyState.status = 'connecting';
     renderLobby();
     ws.onopen = () => {
-      if (ws !== lobbyState.ws || revision !== serverRevision) return;
       const identity = loadIdentity();
       ws.send(JSON.stringify(protocol.createMessage(TYPES.LOBBY_HELLO, '', '', {
         token: identity ? identity.token : '',
@@ -1275,8 +1250,7 @@
         forgetAccount();
         toast('This device was signed out.', 'bad');
       }
-      const wasQueued = lobbyState.findWanted || lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
-      lobbyState.findWanted = false;
+      const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
       lobbyState.status = 'off';
       renderLobby();
       if (wasQueued && lobbyState.reconnectAttempts < 5) scheduleLobbyReconnect();
@@ -1303,7 +1277,7 @@
     lobbyState.reconnectAttempts += 1;
     const delay = Math.min(8000, 600 * 2 ** lobbyState.reconnectAttempts);
     lobbyState.reconnectTimer = setTimeout(() => {
-      if (app.mode || $('menuLobby').classList.contains('hidden')) return;
+      if ($('menuLobby').classList.contains('hidden')) return;
       if (lobbyState.status !== 'off') return;
       lobbyState.resumeQueue = lobbyState.control;
       openLobbySocket();
@@ -1317,7 +1291,6 @@
   }
 
   function openLobbyPanel() {
-    clearInterval(lobbyState.refreshTimer);
     const identity = loadIdentity();
     $('lobbyNameInput').value = settings.nickname || (identity && identity.name) || '';
     lobbyState.control = load(STORAGE.lobbyControl, lobbyState.control);
@@ -1325,15 +1298,12 @@
     showMenuPanel('menuLobby');
     renderLobby();
     openLobbySocket();
-  }
-
-  function openCommunityPanel() {
-    showMenuPanel('menuCommunity');
     refreshLobbyLists();
-    // Refresh live games only while someone is browsing them.
+    // Only the live list changes on its own; the leaderboard refreshes after your games and on demand.
+    // Once a minute keeps an open lobby tab cheap for the single lobby object on the free plan.
     clearInterval(lobbyState.refreshTimer);
     lobbyState.refreshTimer = setInterval(() => {
-      if (!document.hidden && !$('menuCommunity').classList.contains('hidden')) fetchLive();
+      if (!document.hidden && !$('menuLobby').classList.contains('hidden')) fetchLive();
     }, 60_000);
   }
 
@@ -1359,14 +1329,12 @@
     if (!lobbyState.player) {
       // The socket's hello is already on its way; queue as soon as the lobby answers.
       lobbyState.findWanted = true;
-      renderLobby();
       if (!lobbyState.ws) openLobbySocket();
       else if (lobbyState.status === 'off') openLobbySocket();
       return;
     }
     if (!lobbyState.ws || lobbyState.ws.readyState !== WebSocket.OPEN) {
       lobbyState.findWanted = true;
-      renderLobby();
       openLobbySocket();
       return;
     }
@@ -1386,10 +1354,8 @@
   }
 
   function cancelQueue() {
-    lobbyState.findWanted = false;
-    lobbyState.resumeQueue = null;
     lobbySend(TYPES.LOBBY_CANCEL, {});
-    lobbyState.status = lobbyState.ws && lobbyState.ws.readyState === WebSocket.OPEN ? 'ready' : 'off';
+    lobbyState.status = 'ready';
     lobbyState.queued = null;
     renderLobby();
   }
@@ -1422,7 +1388,7 @@
       class: `link-btn ${extraClass}`.trim(),
       type: 'button',
       text: label,
-      onclick: () => openProfile(name, 'menuCommunity'),
+      onclick: () => openProfile(name, 'menuLobby'),
     });
   }
 
@@ -1461,7 +1427,7 @@
         ? el('button', { class: 'lb-live', type: 'button', text: 'LIVE', title: `Watch ${player.name} play`, onclick: () => watchRoom(player.live) })
         : el('span', { class: 'lb-live-empty' }),
       el('span', { class: 'lb-rating', text: String(player.rating) }))));
-    $('leaderboardMeta').textContent = `${data.total} rated player${data.total === 1 ? '' : 's'} · secured accounts are listed · * provisional`;
+    $('leaderboardMeta').textContent = '* provisional rating';
   }
 
   function onLobbyMessage(message) {
@@ -1557,25 +1523,24 @@
   // ---------------------------------------------------------------------------
 
   async function api(path, { method = 'GET', body, auth = false } = {}) {
-    const revision = serverRevision;
-    const currentAccount = captureAccountContext();
-    const isCurrent = () => revision === serverRevision && (!(auth || path.startsWith('/api/auth/')) || currentAccount());
-    const stale = { ok: false, status: 0, data: {}, stale: true };
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (auth) {
       const identity = loadIdentity();
       if (identity) headers.Authorization = `Bearer ${identity.token}`;
     }
+    const url = new URL(`${httpServerUrl()}${path}`);
+    if (!auth && method === 'GET') {
+      let version = 1;
+      try {
+        version = dataVersion.current(window.localStorage, settings.serverUrl);
+      } catch {
+        // storage blocked: the default version is right for a browser that never saw a reset
+      }
+      url.searchParams.set('dataVersion', String(version));
+    }
     let response;
     try {
-      const url = new URL(`${httpServerUrl()}${path}`);
-      // A reset must also bypass old browser-cached profiles and immutable game records.
-      if (!auth && method === 'GET') {
-        let version = 1;
-        try { version = dataVersion.current(window.localStorage, settings.serverUrl); } catch { /* storage unavailable */ }
-        url.searchParams.set('dataVersion', String(version));
-      }
       response = await fetch(url, {
         method,
         headers,
@@ -1584,7 +1549,6 @@
         cache: auth ? 'no-store' : 'default',
       });
     } catch {
-      if (!isCurrent()) return stale;
       return { ok: false, status: 0, data: { message: 'Server unreachable.' } };
     }
     let data = {};
@@ -1593,7 +1557,7 @@
     } catch {
       // empty or non-JSON body
     }
-    return isCurrent() ? { ok: response.ok, status: response.status, data } : stale;
+    return { ok: response.ok, status: response.status, data };
   }
 
   // A link to this page with these parameters (empty ones dropped). A non-default server travels
@@ -1644,7 +1608,6 @@
   // A finished lobby game from the server, opened in the archive viewer.
   async function openServerGame(id) {
     const result = await api(`/api/games/${encodeURIComponent(id)}`);
-    if (result.stale) return false;
     if (!result.ok || !result.data.game) {
       toast(result.status === 404 ? 'That game was not found.' : 'Could not load the game.', 'bad');
       return false;
@@ -1678,7 +1641,7 @@
     setUrl({ p: clean });
     renderProfile();
     const result = await api(`/api/players/${encodeURIComponent(clean)}`);
-    if (result.stale || profileState.name !== clean) return;
+    if (profileState.name !== clean) return;
     if (!result.ok) {
       $('profileGames').replaceChildren(el('li', {
         class: 'empty-note',
@@ -1745,15 +1708,12 @@
   function leaveProfile() {
     sfx.play('click');
     if (profileState.returnTo === 'menuLobby') openLobbyPanel();
-    else if (profileState.returnTo === 'menuCommunity') openCommunityPanel();
-    else if (profileState.returnTo === 'menuAccount') openAccount();
-    else showMenuPanel('menuMain');
+    else showMenuPanel(profileState.returnTo || 'menuMain');
   }
 
   // --- Passkeys -----------------------------------------------------------------
-  // Each production hostname gets its own passkeys. Account keys can carry an account between
-  // pages.dev and the custom domain, where the player can add another passkey.
-
+  // Each hostname gets its own passkeys (they belong to the domain they were made on). An account
+  // key carries an account between pages.dev and the custom domain.
   const PASSKEY_HOSTS = ['blendchess.com', 'www.blendchess.com', 'blendchess.pages.dev', 'localhost'];
 
   function passkeysAvailable() {
@@ -1842,7 +1802,6 @@
   async function openAccount() {
     sfx.play('click');
     account.notice = '';
-    for (const id of ['accountKeyOptions', 'savedMethods', 'accountSignIn', 'accountDevices', 'keySignIn']) $(id).open = false;
     showMenuPanel('menuAccount');
     renderAccount();
     await refreshMe();
@@ -1855,7 +1814,6 @@
       return;
     }
     const result = await api('/api/me', { auth: true });
-    if (result.stale) return;
     if (result.ok) {
       account.me = result.data;
       lobbyState.player = result.data.player;
@@ -1884,7 +1842,6 @@
   // returns null; otherwise the response data.
   async function accountPost(path, body, failText, { auth = true } = {}) {
     const result = await api(path, { method: 'POST', body, auth });
-    if (result.stale) return null;
     if (result.ok) return result.data;
     toast(result.data.message || failText, 'bad');
     return null;
@@ -1895,24 +1852,12 @@
     const player = me && me.player;
     const security = (me && me.security) || { passkeys: [], hasKey: false, sessions: 0 };
     const available = passkeysAvailable();
-    $('accountTitle').textContent = player ? 'YOUR ACCOUNT' : 'SIGN IN';
     $('accountSummary').textContent = account.notice || (player
-      ? `${player.name} · ${player.rating} · ${player.secured ? 'saved' : 'guest'}`
-      : '');
-    $('accountSummary').hidden = !$('accountSummary').textContent;
+      ? `${player.name} · ${player.rating} · ${player.secured ? 'secured account' : 'guest: lives only in this browser'}`
+      : 'No account on this device yet. Open PLAY ONLINE to get one, or sign in below.');
     $('accountSummary').dataset.tone = player && player.secured ? 'ready' : '';
     $('accountMethods').classList.toggle('hidden', !player);
     $('accountDevices').classList.toggle('hidden', !player || !player.secured);
-    $('myProfileBtn').hidden = !player;
-    $('myProfileBtn').disabled = !player;
-    $('savedMethods').classList.toggle('hidden', !security.passkeys.length && !security.hasKey);
-    $('addPasskeyBtn').textContent = player && player.secured ? 'ADD PASSKEY' : 'SAVE WITH PASSKEY';
-    $('signInSummary').textContent = player && player.secured ? 'Switch account' : 'Sign in';
-    if (!player && !loadIdentity()) $('accountSignIn').open = true;
-    if (!available) {
-      $('accountKeyOptions').open = true;
-      $('keySignIn').open = true;
-    }
 
     const rows = security.passkeys.map((passkey) => el('li', { class: 'method-row' },
       el('span', { class: 'method-name', text: `PASSKEY · ${passkey.label}` }),
@@ -1934,7 +1879,7 @@
     for (const id of ['addPasskeyBtn', 'makeKeyBtn', 'passkeyLoginBtn', 'keyLoginBtn', 'logoutOthersBtn', 'logoutBtn']) {
       $(id).disabled = account.busy;
     }
-    $('sessionsText').textContent = `${security.sessions} signed-in device${security.sessions === 1 ? '' : 's'}`;
+    $('sessionsText').textContent = `${security.sessions} device${security.sessions === 1 ? '' : 's'} signed in to this account.`;
   }
 
   async function busy(work) {
@@ -1942,7 +1887,7 @@
     account.busy = true;
     renderAccount();
     try {
-      await work(captureAccountContext());
+      await work();
     } finally {
       account.busy = false;
       renderAccount();
@@ -1950,7 +1895,7 @@
   }
 
   function addPasskey() {
-    return busy(async (isCurrent) => {
+    return busy(async () => {
       const start = await accountPost('/api/auth/passkey/register/options', {}, 'Could not start adding a passkey.');
       if (!start) return;
       let credential;
@@ -1960,7 +1905,6 @@
         passkeyError(error, 'Your device could not create a passkey.');
         return;
       }
-      if (!isCurrent()) return;
       const me = await accountPost('/api/auth/passkey/register/verify', {
         challengeId: start.challengeId,
         label: deviceLabel(),
@@ -2047,18 +1991,14 @@
     lobbyState.player = data.player;
     closeLobbySocket();
     account.notice = '';
-    const isCurrent = captureAccountContext();
     await refreshMe();
-    if (!isCurrent()) return;
-    $('accountSignIn').open = false;
-    $('accountTitle').focus();
     sfx.play('join');
     toast(`Signed in as ${data.player.name}.`);
   }
 
   async function signInWithPasskey() {
     if (!(await confirmLeaveGuest())) return;
-    await busy(async (isCurrent) => {
+    await busy(async () => {
       const start = await accountPost('/api/auth/passkey/login/options', {}, 'Could not start signing in.', { auth: false });
       if (!start) return;
       let credential;
@@ -2068,7 +2008,6 @@
         passkeyError(error, 'Your device could not use a passkey.');
         return;
       }
-      if (!isCurrent()) return;
       const session = await accountPost('/api/auth/passkey/login/verify', {
         challengeId: start.challengeId,
         response: credentialJson(credential),
@@ -2106,21 +2045,20 @@
     if (!(await confirmDialog('SIGN OUT HERE?', 'You can sign back in with your passkey or account key.', 'SIGN OUT', 'danger'))) return;
     await busy(async () => {
       const result = await api('/api/auth/logout', { method: 'POST', body: {}, auth: true });
-      if (result.stale) return;
       if (!result.ok && result.status !== 401) {
         toast(result.data.message || 'Could not sign out.', 'bad');
         return;
       }
-      forgetAccount('Signed out. Sign in below, or go back to play as a guest.');
+      forgetAccount('Signed out. Sign in below, or open PLAY ONLINE to start as a new guest.');
       closeLobbySocket();
       toast('Signed out.');
     });
   }
 
-  // Return to the main selection menu after managing an account.
+  // The account panel is only reached from the lobby.
   function leaveAccount() {
     sfx.play('click');
-    showMenuPanel('menuMain');
+    openLobbyPanel();
   }
 
   // ---------------------------------------------------------------------------
@@ -2142,11 +2080,11 @@
   }
 
   async function openSocket(params) {
-    closeSocket();
     if (await syncDataVersion()) {
       onDataReset();
       throw new Error('Game data was reset. Start a new game.');
     }
+    closeSocket();
     net.intentionalClose = false;
     return new Promise((resolve, reject) => {
       let ws;
@@ -2365,7 +2303,7 @@
 
   async function resumeOnline(session, { auto = false } = {}) {
     if (!session || !session.roomCode) return;
-    if (session.serverUrl && isWsUrl(session.serverUrl)) selectServer(session.serverUrl);
+    if (session.serverUrl && isWsUrl(session.serverUrl)) settings.serverUrl = session.serverUrl;
     net.roomCode = session.roomCode;
     net.playerId = session.playerId;
     net.resumeToken = session.resumeToken;
@@ -3119,6 +3057,12 @@
   // ---------------------------------------------------------------------------
 
   function wireMenu() {
+    $('pressStart').addEventListener('click', () => {
+      sfx.unlock();
+      sfx.play('start');
+      if (settings.music) sfx.setMusic(true);
+      showMenuPanel('menuMain');
+    });
     document.querySelectorAll('[data-action]').forEach((button) => {
       button.addEventListener('click', () => onMenuAction(button.dataset.action));
     });
@@ -3141,7 +3085,7 @@
       refreshLobbyLists();
     });
     $('myProfileBtn').addEventListener('click', () => {
-      if (lobbyState.player) openProfile(lobbyState.player.name, 'menuAccount');
+      if (lobbyState.player) openProfile(lobbyState.player.name, 'menuLobby');
     });
     $('accountBtn').addEventListener('click', openAccount);
     $('profileBack').addEventListener('click', leaveProfile);
@@ -3240,15 +3184,6 @@
   }
 
   function wireChrome() {
-    // Browsers allow audio after the first gesture; a splash screen is unnecessary.
-    const unlockAudio = () => {
-      sfx.unlock();
-      if (settings.music) sfx.setMusic(true);
-      document.removeEventListener('pointerdown', unlockAudio);
-      document.removeEventListener('keydown', unlockAudio);
-    };
-    document.addEventListener('pointerdown', unlockAudio);
-    document.addEventListener('keydown', unlockAudio);
     $('brandBtn').addEventListener('click', () => {
       if (app.mode) backToMenu();
       else showMenuPanel('menuMain');
@@ -3259,27 +3194,25 @@
       applySettings();
       sfx.play('click');
     });
+    $('musicBtn').addEventListener('click', () => {
+      settings.music = !settings.music;
+      saveSettings();
+      applySettings();
+      sfx.setMusic(settings.music);
+    });
     $('settingsBtn').addEventListener('click', () => {
       sfx.play('click');
-      $('serverUrlInput').disabled = Boolean(app.mode);
       $('settings').classList.remove('hidden');
       $('settingsClose').focus();
     });
     $('settingsClose').addEventListener('click', () => {
       const url = $('serverUrlInput').value.trim();
-      const inLobby = !$('menuLobby').classList.contains('hidden');
-      let changedServer = false;
-      if (!app.mode && url && url !== settings.serverUrl) {
-        if (isWsUrl(url)) {
-          changedServer = selectServer(url);
-        }
+      if (url && url !== settings.serverUrl) {
+        if (isWsUrl(url)) settings.serverUrl = url;
         else toast('Server URL must start with ws:// or wss://', 'bad');
       }
       saveSettings();
       $('settings').classList.add('hidden');
-      if (changedServer && inLobby) openLobbyPanel();
-      else if (changedServer) showMenuPanel('menuMain');
-      else $('settingsBtn').focus();
       sfx.play('click');
     });
     document.querySelectorAll('[data-theme-choice]').forEach((button) => {
@@ -3317,6 +3250,9 @@
         $('soundBtn').click();
       } else if (app.replay && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') && document.activeElement !== boardEl) {
         stepReplay(event.key === 'ArrowLeft' ? 'prev' : 'next');
+      } else if (!$('menuScreen').classList.contains('hidden') && !$('pressStart').classList.contains('hidden') && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        $('pressStart').click();
       }
     });
     boardEl.addEventListener('keydown', (event) => {
@@ -3334,28 +3270,29 @@
     });
   }
 
-  async function boot() {
+  function boot() {
     applySettings();
     $('umpireFace').src = sprites.umpire('idle');
     initBoard();
     initLogoBoard();
+    wireMenu();
+    wireGame();
+    wireChrome();
     setInterval(updateClocks, 250);
 
     const params = new URLSearchParams(window.location.search);
     const wsParam = params.get('ws');
     if (wsParam && isWsUrl(wsParam)) {
-      selectServer(wsParam);
+      settings.serverUrl = wsParam;
       applySettings();
     }
-    await syncDataVersion();
-    wireMenu();
-    wireGame();
-    wireChrome();
+    // Picks up a release reset early; connecting waits for it anyway.
+    void syncDataVersion();
     // Shared links: a replay, a profile, or a game to watch.
     const gameParam = params.get('game');
     if (gameParam) {
       openServerGame(gameParam).then((ok) => {
-        if (!ok) showMenuPanel('menuMain');
+        if (!ok) showMenuPanel('title');
       });
       return;
     }
@@ -3386,7 +3323,7 @@
       setTimeout(() => $('joinGo').focus(), 0);
       return;
     }
-    showMenuPanel('menuMain');
+    showMenuPanel('title');
   }
 
   boot();

@@ -297,6 +297,35 @@ button {
   justify-content: flex-end;
 }
 
+.palette {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.palette-dot {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  margin: 3px;
+  box-shadow: 0 0 0 3px var(--ink);
+}
+
+.palette-dot[data-theme-choice='arcade'] { background: linear-gradient(135deg, #ff4fa3 50%, #7458c8 50%); }
+.palette-dot[data-theme-choice='handheld'] { background: linear-gradient(135deg, #9bbc0f 50%, #306230 50%); }
+.palette-dot[data-theme-choice='amber'] { background: linear-gradient(135deg, #ffb000 50%, #2a1806 50%); }
+.palette-dot[data-theme-choice='paper'] { background: linear-gradient(135deg, #efe6d2 50%, #b58d5a 50%); }
+
+.palette-dot[aria-pressed='true'] {
+  box-shadow: 0 0 0 3px var(--ink), 0 0 0 6px var(--warn);
+}
+
+.palette-dot:hover {
+  transform: translateY(-2px);
+}
+
 .chip-btn {
   font-family: 'Press Start 2P', monospace;
   font-size: 9px;
@@ -306,7 +335,6 @@ button {
   color: var(--muted);
   box-shadow: 0 -3px 0 var(--ink), 0 3px 0 var(--ink), -3px 0 0 var(--ink), 3px 0 0 var(--ink);
   margin: 3px;
-  min-height: 44px;
 }
 
 .chip-btn[aria-pressed='true'] {
@@ -356,7 +384,6 @@ button {
   inset: 0;
   overflow: hidden;
   pointer-events: none;
-  opacity: 0;
 }
 
 .logo::before {
@@ -393,11 +420,6 @@ button {
   letter-spacing: 0.2em;
 }
 
-.menu.lobby-menu {
-  width: min(560px, 100%);
-  gap: 16px;
-}
-
 .logo-board {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
@@ -406,83 +428,20 @@ button {
   box-shadow: 0 -4px 0 var(--ink), 0 4px 0 var(--ink), -4px 0 0 var(--ink), 4px 0 0 var(--ink), 10px 12px 0 rgba(0, 0, 0, 0.3);
 }
 
-.logo-board .sq { cursor: default; }
-
-.logo-board .piece.enemy {
-  animation: title-fog 7s steps(1) infinite;
-  animation-delay: var(--piece-delay, 0s);
+.logo-board .sq {
+  cursor: default;
 }
 
-@keyframes title-fog {
-  0%, 20%, 80%, 100% { opacity: 1; }
-  25%, 75% { opacity: 0; }
+.press-start {
+  border: 0;
+  background: none;
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(12px, 3vw, 18px);
+  color: var(--warn);
+  text-shadow: 3px 3px 0 var(--ink);
+  padding: 12px;
+  animation: blink 1s steps(2) infinite;
 }
-
-.play-card {
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.play-card .menu-title {
-  margin: 0 0 4px;
-}
-
-.play-card .control-picker {
-  margin: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.play-button {
-  min-height: 52px;
-  margin: 8px 4px 0;
-}
-
-.play-card .lobby-status {
-  margin: 0;
-  min-height: 1.3em;
-  text-align: center;
-  font-size: 19px;
-  color: var(--muted);
-}
-
-.play-card .lobby-status:empty {
-  min-height: 0;
-  margin-top: -12px;
-}
-
-.panel-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.panel-heading .menu-title { flex: 1; min-width: 0; margin: 0; line-height: 1.5; }
-.panel-heading .link-btn { min-height: 36px; }
-
-.disclosure {
-  margin-top: 12px;
-  border-top: 2px solid var(--panel-2);
-  padding-top: 8px;
-}
-
-.disclosure > summary {
-  padding: 10px 0;
-  min-height: 44px;
-  color: var(--accent-2);
-  cursor: pointer;
-}
-
-.disclosure > .px-btn,
-.sign-in-options > .px-btn { margin-top: 12px; }
-#menuAccount { width: min(560px, 100%); }
-#menuAccount .account-block { border: 0; padding: 0; }
-#menuAccount .lobby-identity { line-height: 1.4; }
-.theme-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
-.sound-toggle { margin-bottom: 12px; }
 
 @keyframes blink {
   50% { opacity: 0; }
@@ -510,8 +469,8 @@ button {
 
 .menu-item {
   display: flex;
-  align-items: center;
-  min-height: 44px;
+  align-items: baseline;
+  gap: 14px;
   width: 100%;
   border: 0;
   background: transparent;
@@ -1625,6 +1584,12 @@ button {
   color: var(--accent-2);
 }
 
+/* Nothing to report (ready, not searching): no blank gap above the buttons. */
+.lobby-status:empty {
+  min-height: 0;
+  margin: 0;
+}
+
 .leaderboard-block {
   margin-top: 18px;
   border-top: 4px solid var(--ink);
@@ -1764,6 +1729,24 @@ button {
 /* --------------------------------------------------------------------------
    Accounts, live games, profiles
    -------------------------------------------------------------------------- */
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.account-row .lobby-identity {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.account-buttons {
+  display: flex;
+  flex-shrink: 0;
+}
 
 .live-players {
   display: flex;
@@ -2291,15 +2274,29 @@ button {
 }
 
 @media (max-width: 560px) {
-  .menu-screen { padding-top: 12px; gap: 20px; }
-  .logo-wrap { margin-top: 8px; }
-  .play-card { padding: 18px 14px; }
+  #musicBtn {
+    display: none;
+  }
+
+  .control-picker {
+    grid-template-columns: 1fr;
+  }
+
   .leaderboard-row {
     grid-template-columns: 3ch 1fr auto 6ch;
   }
 
   .lb-games {
     display: none;
+  }
+
+  .account-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .account-buttons {
+    justify-content: flex-end;
   }
 
   .profile-stats {
@@ -2338,6 +2335,11 @@ button {
     gap: 2px;
   }
 
+  .palette {
+    gap: 2px;
+    margin-right: 2px;
+  }
+
   .invite {
     flex-direction: column;
     gap: 4px;
@@ -2369,6 +2371,11 @@ button {
     font-size: 20px;
   }
 
+  .palette-dot {
+    width: 16px;
+    height: 16px;
+  }
+
   body {
     font-size: 20px;
   }
@@ -2377,9 +2384,38 @@ button {
     font-size: 11px;
   }
 
-  .chip-btn {
+  .palette {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.palette-dot {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  margin: 3px;
+  box-shadow: 0 0 0 3px var(--ink);
+}
+
+.palette-dot[data-theme-choice='arcade'] { background: linear-gradient(135deg, #ff4fa3 50%, #7458c8 50%); }
+.palette-dot[data-theme-choice='handheld'] { background: linear-gradient(135deg, #9bbc0f 50%, #306230 50%); }
+.palette-dot[data-theme-choice='amber'] { background: linear-gradient(135deg, #ffb000 50%, #2a1806 50%); }
+.palette-dot[data-theme-choice='paper'] { background: linear-gradient(135deg, #efe6d2 50%, #b58d5a 50%); }
+
+.palette-dot[aria-pressed='true'] {
+  box-shadow: 0 0 0 3px var(--ink), 0 0 0 6px var(--warn);
+}
+
+.palette-dot:hover {
+  transform: translateY(-2px);
+}
+
+.chip-btn {
     font-size: 8px;
-    padding: 10px 6px;
+    padding: 6px;
   }
 
   .actions {
@@ -2388,6 +2424,11 @@ button {
 
   .px-btn {
     font-size: 10px;
+  }
+
+  .menu-item {
+    flex-direction: column;
+    gap: 4px;
   }
 
   .player-name {
@@ -2400,10 +2441,6 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .logo::before,
-  .logo::after { display: none; }
-
-  .logo-board .piece.enemy { animation: none; opacity: 0; }
   *,
   *::before,
   *::after {
