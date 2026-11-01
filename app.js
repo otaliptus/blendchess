@@ -364,11 +364,9 @@
     if (session && session.roomCode) {
       item.hidden = false;
       item.dataset.kind = 'online';
-      $('continueHint').textContent = `online room ${session.roomCode}`;
     } else if (localSave && localSave.state && !localSave.state.gameOver) {
       item.hidden = false;
       item.dataset.kind = 'local';
-      $('continueHint').textContent = `local duel, move ${Math.floor(localSave.state.log.length / 2) + 1}`;
     } else {
       item.hidden = true;
     }
@@ -377,12 +375,10 @@
   function openSetup(mode) {
     setupMode = mode;
     $('setupTitle').textContent = mode === 'local' ? 'LOCAL DUEL' : 'CREATE ROOM';
-    $('setupHelp').textContent = mode === 'local' ? 'Take turns on this device. Pass it over after each move.' : 'Create a game, then send your friend the link.';
     $('nicknameField').classList.toggle('hidden', mode === 'local');
     $('openSpectatorsField').classList.toggle('hidden', mode === 'local');
     $('nicknameInput').value = settings.nickname;
     $('setupGo').textContent = mode === 'local' ? 'START' : 'CREATE';
-    $('joinFriendBtn').classList.toggle('hidden', mode === 'local');
     $('gameOptions').open = $('hardModeInput').checked || (mode === 'create' && $('openSpectatorsInput').checked);
     showMenuPanel('menuSetup');
   }
@@ -1211,18 +1207,13 @@
       return `Looking for a ${controlLabel(lobbyState.control)} opponent. ${waiting}.`;
     }
     if (lobbyState.status === 'matched') return 'Match found!';
-    return 'Ranked games. No signup needed.';
+    return '';
   }
 
   function renderLobby() {
     const panel = $('menuLobby');
     if (!panel) return;
     const player = lobbyState.player;
-    $('lobbyIdentity').textContent = player
-      ? `${player.name} · ${player.rating}`
-      : 'Play as a guest';
-    $('lobbyIdentity').dataset.tone = player ? 'ready' : '';
-    $('secureHint').classList.toggle('hidden', !player || player.secured);
     $('myProfileBtn').disabled = !player;
     $('lobbyStatus').textContent = lobbyStatusText();
     const queued = lobbyState.findWanted || lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
@@ -1904,21 +1895,19 @@
     const player = me && me.player;
     const security = (me && me.security) || { passkeys: [], hasKey: false, sessions: 0 };
     const available = passkeysAvailable();
-    $('accountTitle').textContent = player ? (player.secured ? 'YOUR ACCOUNT' : 'SAVE YOUR PROGRESS') : 'SIGN IN';
+    $('accountTitle').textContent = player ? 'YOUR ACCOUNT' : 'SIGN IN';
     $('accountSummary').textContent = account.notice || (player
-      ? `${player.name} · ${player.rating} · ${player.secured ? 'saved account' : 'guest on this browser'}`
-      : 'Sign in to bring your rating and games to this device.');
+      ? `${player.name} · ${player.rating} · ${player.secured ? 'saved' : 'guest'}`
+      : '');
+    $('accountSummary').hidden = !$('accountSummary').textContent;
     $('accountSummary').dataset.tone = player && player.secured ? 'ready' : '';
     $('accountMethods').classList.toggle('hidden', !player);
     $('accountDevices').classList.toggle('hidden', !player || !player.secured);
     $('myProfileBtn').hidden = !player;
     $('myProfileBtn').disabled = !player;
     $('savedMethods').classList.toggle('hidden', !security.passkeys.length && !security.hasKey);
-    $('accountHelp').textContent = player && player.secured ? 'Your progress is saved. Add a backup if you like.' : 'Keep your rating and games on any device.';
     $('addPasskeyBtn').textContent = player && player.secured ? 'ADD PASSKEY' : 'SAVE WITH PASSKEY';
-    $('passkeyHelp').hidden = !available;
-    $('accountKeyOptions').querySelector('summary').textContent = player && player.secured ? 'Account key backup' : 'Use an account key instead';
-    $('signInSummary').textContent = player && player.secured ? 'Switch account' : 'Already have an account? Sign in';
+    $('signInSummary').textContent = player && player.secured ? 'Switch account' : 'Sign in';
     if (!player && !loadIdentity()) $('accountSignIn').open = true;
     if (!available) {
       $('accountKeyOptions').open = true;
@@ -1945,7 +1934,7 @@
     for (const id of ['addPasskeyBtn', 'makeKeyBtn', 'passkeyLoginBtn', 'keyLoginBtn', 'logoutOthersBtn', 'logoutBtn']) {
       $(id).disabled = account.busy;
     }
-    $('sessionsText').textContent = `${security.sessions} device${security.sessions === 1 ? '' : 's'} signed in to this account.`;
+    $('sessionsText').textContent = `${security.sessions} signed-in device${security.sessions === 1 ? '' : 's'}`;
   }
 
   async function busy(work) {
@@ -3155,7 +3144,6 @@
       if (lobbyState.player) openProfile(lobbyState.player.name, 'menuAccount');
     });
     $('accountBtn').addEventListener('click', openAccount);
-    $('secureHintBtn').addEventListener('click', openAccount);
     $('profileBack').addEventListener('click', leaveProfile);
     $('profileShare').addEventListener('click', () => copyLink({ p: profileState.name }, 'Profile link copied!'));
     $('accountBack').addEventListener('click', leaveAccount);
