@@ -19,8 +19,15 @@
           <span class="brand-blend">BLEND</span><span class="brand-chess">CHESS</span>
         </button>
         <div class="topbar-actions">
-          <button id="accountBtn" class="chip-btn" type="button">ACCOUNT</button>
-          <button id="settingsBtn" class="chip-btn" type="button">SETTINGS</button>
+          <div class="palette" role="group" aria-label="Colour theme">
+            <button type="button" class="palette-dot" data-theme-choice="arcade" title="Arcade"></button>
+            <button type="button" class="palette-dot" data-theme-choice="handheld" title="Handheld"></button>
+            <button type="button" class="palette-dot" data-theme-choice="amber" title="Amber"></button>
+            <button type="button" class="palette-dot" data-theme-choice="paper" title="Paper"></button>
+          </div>
+          <button id="soundBtn" class="chip-btn" type="button" aria-pressed="true" title="Sound effects (M)">SFX</button>
+          <button id="musicBtn" class="chip-btn" type="button" aria-pressed="false" title="Music">MUSIC</button>
+          <button id="settingsBtn" class="chip-btn" type="button" title="Settings">OPTIONS</button>
         </div>
       </header>
 
@@ -31,7 +38,9 @@
           <p class="tagline">chess in the fog of war</p>
         </div>
 
-        <div id="logoBoard" class="logo-board hidden" aria-hidden="true"></div>
+        <div id="logoBoard" class="logo-board" aria-hidden="true"></div>
+
+        <button id="pressStart" class="press-start" type="button">PRESS START</button>
 
         <nav id="menuMain" class="menu px-panel hidden" aria-label="Main menu">
           <button class="menu-item" type="button" data-action="continue" id="continueItem" hidden>
@@ -57,35 +66,33 @@
           </button>
         </nav>
 
-        <section id="menuLobby" class="menu lobby-menu hidden" aria-labelledby="lobbyTitle">
-          <div class="play-card px-panel">
-            <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
-            <label class="field">
-              <span class="field-label">NAME</span>
-              <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
-            </label>
-            <div class="control-picker" role="group" aria-label="Time control">
-              <button type="button" class="control-chip" data-control="10+0" aria-label="Rapid: 10 minutes, no increment">
-                <span class="control-name">RAPID</span><span class="control-time">10 min</span>
-              </button>
-              <button type="button" class="control-chip" data-control="5+3" aria-label="Blitz: 5 minutes plus 3 seconds per move">
-                <span class="control-name">BLITZ</span><span class="control-time">5 + 3</span>
-              </button>
+
+        <section id="menuLobby" class="menu px-panel wide hidden" aria-labelledby="lobbyTitle">
+          <h2 id="lobbyTitle" class="menu-title">PLAY ONLINE</h2>
+          <div class="account-row">
+            <p id="lobbyIdentity" class="lobby-identity">RANKED: play your first game to get a rating.</p>
+            <div class="account-buttons">
+              <button id="myProfileBtn" class="px-btn small" type="button">PROFILE</button>
+              <button id="accountBtn" class="px-btn small" type="button">ACCOUNT</button>
             </div>
-            <button id="lobbyFind" class="px-btn primary play-button" type="button">FIND GAME</button>
-            <button id="lobbyCancel" class="px-btn play-button hidden" type="button">CANCEL SEARCH</button>
-            <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite"></p>
           </div>
+          <label class="field">
+            <span class="field-label">YOUR NAME</span>
+            <input id="lobbyNameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
+          </label>
+          <div class="control-picker" role="group" aria-label="Time control">
+            <button type="button" class="control-chip" data-control="5+3" aria-label="Blitz: 5 minutes plus 3 seconds per move">
+              <span class="control-name">BLITZ</span><span class="control-time">5 + 3</span>
+            </button>
+            <button type="button" class="control-chip" data-control="10+0" aria-label="Rapid: 10 minutes, no increment">
+              <span class="control-name">RAPID</span><span class="control-time">10 + 0</span>
+            </button>
+          </div>
+          <p id="lobbyStatus" class="lobby-status" role="status" aria-live="polite"></p>
           <div class="menu-row">
             <button class="px-btn ghost" type="button" data-action="back">BACK</button>
-            <button class="px-btn" type="button" data-action="community">WATCH &amp; RANKINGS</button>
-          </div>
-        </section>
-
-        <section id="menuCommunity" class="menu px-panel wide hidden" aria-labelledby="communityTitle">
-          <div class="panel-heading">
-            <h2 id="communityTitle" class="menu-title" tabindex="-1">WATCH &amp; RANKINGS</h2>
-            <button class="link-btn" type="button" data-action="back">Back</button>
+            <button id="lobbyCancel" class="px-btn danger hidden" type="button">CANCEL</button>
+            <button id="lobbyFind" class="px-btn primary" type="button">FIND GAME</button>
           </div>
           <div class="leaderboard-block">
             <div class="leaderboard-head">
@@ -123,79 +130,71 @@
         </section>
 
         <section id="menuAccount" class="menu px-panel wide hidden" aria-labelledby="accountTitle">
-          <div class="panel-heading">
-            <h2 id="accountTitle" class="menu-title" tabindex="-1">YOUR ACCOUNT</h2>
-            <button id="accountBack" class="link-btn" type="button">Back</button>
-          </div>
+          <h2 id="accountTitle" class="menu-title">ACCOUNT</h2>
           <p id="accountSummary" class="lobby-identity"></p>
-          <button id="myProfileBtn" class="px-btn" type="button">MY PROFILE &amp; GAMES</button>
 
           <div id="accountMethods" class="account-block">
-            <button id="addPasskeyBtn" class="px-btn primary" type="button">SAVE WITH PASSKEY</button>
-            <details id="accountKeyOptions" class="disclosure">
-              <summary>Account key</summary>
+            <h3 class="lobby-subtitle">SIGN-IN METHODS</h3>
+            <ul id="methodList" class="method-list"></ul>
+            <div class="menu-row wrap">
+              <button id="addPasskeyBtn" class="px-btn primary" type="button">ADD PASSKEY</button>
               <button id="makeKeyBtn" class="px-btn" type="button">GET ACCOUNT KEY</button>
-            </details>
-            <details id="savedMethods" class="disclosure">
-              <summary>Saved sign-in methods</summary>
-              <ul id="methodList" class="method-list"></ul>
-            </details>
+            </div>
+            <p class="field-help">Either one keeps your account if this browser forgets it, and signs you in elsewhere.</p>
           </div>
 
-          <details id="accountSignIn" class="disclosure">
-            <summary id="signInSummary">Sign in</summary>
-            <div class="sign-in-options">
+          <div class="account-block">
+            <h3 class="lobby-subtitle">SIGN IN ON THIS DEVICE</h3>
+            <div class="menu-row wrap">
               <button id="passkeyLoginBtn" class="px-btn" type="button">SIGN IN WITH PASSKEY</button>
-              <details id="keySignIn" class="disclosure">
-                <summary>Account key</summary>
-                <label class="field">
-                  <span class="field-label">ACCOUNT KEY</span>
-                  <input id="keyLoginInput" class="key-input" maxlength="48" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Paste your account key" />
-                </label>
-                <button id="keyLoginBtn" class="px-btn" type="button">SIGN IN</button>
-              </details>
             </div>
-          </details>
+            <label class="field">
+              <span class="field-label">ACCOUNT KEY</span>
+              <input id="keyLoginInput" class="key-input" maxlength="48" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="BLND-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" />
+            </label>
+            <div class="menu-row wrap">
+              <button id="keyLoginBtn" class="px-btn" type="button">SIGN IN WITH KEY</button>
+            </div>
+          </div>
 
-          <details id="accountDevices" class="disclosure">
-            <summary>Devices &amp; sign out</summary>
+          <div id="accountDevices" class="account-block">
+            <h3 class="lobby-subtitle">DEVICES</h3>
             <p id="sessionsText" class="field-help"></p>
             <div class="menu-row wrap">
               <button id="logoutOthersBtn" class="px-btn" type="button">SIGN OUT OTHER DEVICES</button>
               <button id="logoutBtn" class="px-btn danger" type="button">SIGN OUT HERE</button>
             </div>
-          </details>
+          </div>
+
+          <div class="menu-row">
+            <button id="accountBack" class="px-btn ghost" type="button">BACK</button>
+          </div>
         </section>
 
         <section id="menuSetup" class="menu px-panel hidden" aria-labelledby="setupTitle">
-          <div class="panel-heading">
-            <h2 id="setupTitle" class="menu-title" tabindex="-1">PLAY A FRIEND</h2>
-            <button class="link-btn" type="button" data-action="back">Back</button>
-          </div>
+          <h2 id="setupTitle" class="menu-title">NEW DUEL</h2>
           <label class="field" id="nicknameField">
             <span class="field-label">YOUR NAME</span>
             <input id="nicknameInput" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Player" />
           </label>
-          <details id="gameOptions" class="disclosure">
-            <summary>Game options</summary>
-            <label class="toggle">
-              <input id="hardModeInput" type="checkbox" />
-              <span class="toggle-box" aria-hidden="true"></span>
-              <span class="toggle-text">HARD MODE<small>an illegal try costs your turn (unless you're in check)</small></span>
-            </label>
-            <label class="toggle" id="openSpectatorsField">
-              <input id="openSpectatorsInput" type="checkbox" />
-              <span class="toggle-box" aria-hidden="true"></span>
-              <span class="toggle-text">PARTY MODE<small>spectators see the whole board live. Only for watchers you trust.</small></span>
-            </label>
-          </details>
+          <label class="toggle">
+            <input id="hardModeInput" type="checkbox" />
+            <span class="toggle-box" aria-hidden="true"></span>
+            <span class="toggle-text">HARD MODE<small>an illegal try costs your turn (unless you're in check)</small></span>
+          </label>
+          <label class="toggle" id="openSpectatorsField">
+            <input id="openSpectatorsInput" type="checkbox" />
+            <span class="toggle-box" aria-hidden="true"></span>
+            <span class="toggle-text">PARTY MODE<small>spectators see the whole board live. Only for watchers you trust.</small></span>
+          </label>
           <div class="menu-row">
+            <button class="px-btn ghost" type="button" data-action="back">BACK</button>
             <button class="px-btn primary" type="button" id="setupGo">START</button>
           </div>
         </section>
 
         <section id="menuJoin" class="menu px-panel hidden" aria-labelledby="joinTitle">
-          <h2 id="joinTitle" class="menu-title" tabindex="-1">JOIN ROOM</h2>
+          <h2 id="joinTitle" class="menu-title">JOIN ROOM</h2>
           <label class="field">
             <span class="field-label">ROOM CODE</span>
             <input id="roomCodeInput" class="code-input" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC123" />
@@ -212,7 +211,7 @@
         </section>
 
         <section id="menuArchive" class="menu px-panel wide hidden" aria-labelledby="archiveTitle">
-          <h2 id="archiveTitle" class="menu-title" tabindex="-1">ARCHIVE</h2>
+          <h2 id="archiveTitle" class="menu-title">ARCHIVE</h2>
           <ol id="archiveList" class="archive-list"></ol>
           <div class="menu-row">
             <button class="px-btn ghost" type="button" data-action="back">BACK</button>
@@ -224,7 +223,7 @@
           <h2 id="helpTitle" class="menu-title">HOW TO PLAY</h2>
           <div class="help">
             <p><b>Normal chess, one twist:</b> you only see your own pieces.</p>
-            <p><b>Play online:</b> find an opponent, play against the clock, and build your rating. Watchers can see the full board. Leaving does not stop your clock.</p>
+            <p><b>Ranked (<i>Play Online</i>):</b> the same fog, plus a server clock and an Elo rating. Watchers see the whole board. Leaving does not stop your clock.</p>
             <div class="help-cards">
               <figure class="help-card">
                 <img src="assets/help/fog.gif" width="80" height="80" alt="Enemy pieces fade into fog; only your pieces stay visible" />
@@ -359,14 +358,7 @@
 
     <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-box px-panel">
-        <h2 id="settingsTitle" class="menu-title">SETTINGS</h2>
-        <div class="theme-picker" role="group" aria-label="Colour theme">
-          <button type="button" class="chip-btn" data-theme-choice="arcade">Arcade</button>
-          <button type="button" class="chip-btn" data-theme-choice="handheld">Handheld</button>
-          <button type="button" class="chip-btn" data-theme-choice="amber">Amber</button>
-          <button type="button" class="chip-btn" data-theme-choice="paper">Paper</button>
-        </div>
-        <button id="soundBtn" class="chip-btn sound-toggle" type="button" aria-pressed="true">SOUND EFFECTS (M)</button>
+        <h2 id="settingsTitle" class="menu-title">OPTIONS</h2>
         <label class="toggle">
           <input id="musicInput" type="checkbox" />
           <span class="toggle-box" aria-hidden="true"></span>
