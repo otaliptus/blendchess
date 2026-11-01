@@ -415,6 +415,23 @@
   // Board
   // ---------------------------------------------------------------------------
 
+  // The title board uses the same pixel pieces and fog as the game.
+  function initLogoBoard() {
+    const board = $('logoBoard');
+    core.createInitialBoard().forEach((row, r) => {
+      row.forEach((piece, c) => {
+        const square = el('div', { class: `sq ${(r + c) % 2 ? 'dark' : 'light'}${r < 4 ? ' fog' : ''}` });
+        square.style.setProperty('--fog-delay', `${-(r * 8 + c) % 9}s`);
+        if (piece) {
+          const img = el('img', { class: `piece${piece.color === 'b' ? ' enemy' : ''}`, src: sprites.piece(piece.color, piece.type), alt: '' });
+          img.style.setProperty('--piece-delay', `${-(r * 8 + c) % 7}s`);
+          square.append(img);
+        }
+        board.append(square);
+      });
+    });
+  }
+
   const boardEl = $('board');
   const squareEls = [];
 
@@ -3330,6 +3347,7 @@
     applySettings();
     $('umpireFace').src = sprites.umpire('idle');
     initBoard();
+    initLogoBoard();
     setInterval(updateClocks, 250);
 
     const params = new URLSearchParams(window.location.search);
