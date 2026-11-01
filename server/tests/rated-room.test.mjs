@@ -337,3 +337,16 @@ test('PGN names a flag fall as a time forfeit', () => {
   assert.match(pgn, /\[Termination "time forfeit"\]/);
   assert.match(pgn, /0-1/);
 });
+
+test('a practice rematch waits until the finished game is recorded', () => {
+  const h = createRatedHarness({ rated: false });
+  const { white, black } = seatBoth(h);
+  session.handleMessage(h.state, h.hooks, white, h.envelope(TYPES.RESIGN));
+  assert.equal(h.state.gameOver, true);
+  const blackPlayer = rl.getPlayer(h.state, 'player-black');
+  assert.equal(rl.newGame(h.state, blackPlayer).reason, ERROR_CODES.ROOM_NOT_READY, 'not before the report lands');
+  h.state.reported = true;
+  assert.equal(rl.newGame(h.state, blackPlayer).ok, true);
+  assert.equal(h.state.gameId, 2);
+  assert.ok(black);
+});

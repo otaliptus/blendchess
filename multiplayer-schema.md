@@ -24,7 +24,7 @@ The Cloudflare Worker gives every room its own Durable Object, so it routes on t
 | --- | --- |
 | Ranked lobby (queue, identity) | `wss://<worker>/?lobby=1`, then send `lobby_hello` |
 | Create a room | `wss://<worker>/?create=1`, then send `create_room` |
-| Join, watch, resume | `wss://<worker>/?room=ABCD12`, then send `join_room` |
+| Join, watch, resume | `wss://<worker>/?room=ABCD12`, then send `join_room`. Add `&seat=1` when coming with a ticket or resume token: a full room then makes space by closing a socket that holds no seat. |
 
 The Node server accepts the same URLs and ignores the query string. Both backends also serve the HTTP
 API below.
@@ -276,4 +276,5 @@ human-readable `message`. Lobby errors use `QUEUE_FULL`, `ALREADY_IN_GAME`, `NOT
 - Node: up to 10,000 rooms in memory. Worker: up to 64 sockets per room, 4 per network.
 - Lobby: 500 queued players, 6 per network; 6 lobby sockets per network; 10 new identities per network
   per hour; room creation capped per network and globally.
+- "Per network" means per IPv4 address or per IPv6 /64.
 - Idle rooms with nobody connected are deleted after an hour (Worker: Durable Object alarm).

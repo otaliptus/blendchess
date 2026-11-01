@@ -76,6 +76,25 @@
     return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
   }
 
+  // What counts as "one network": an IPv4 address (a household or office behind NAT shares one), or
+  // an IPv6 /64 (each device on a network has its own address, often rotating, but they share the
+  // /64). Loopback is not a shared network: tabs on a dev machine are different people. Returns
+  // 'unknown' for those and for anything unparseable.
+  function networkKey(address) {
+    let text = String(address || '').split(',')[0].trim().toLowerCase().replace(/%.*$/, '');
+    const mapped = text.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) text = mapped[1];
+    if (!text || text === '127.0.0.1' || text === '::1') return 'unknown';
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(text)) return text;
+    if (!/^[0-9a-f:]+$/.test(text) || (text.match(/::/g) || []).length > 1) return 'unknown';
+    const [head, tail] = text.includes('::') ? text.split('::') : [text, null];
+    const left = head ? head.split(':') : [];
+    const right = tail ? tail.split(':') : [];
+    const groups = tail === null ? left : [...left, ...new Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+    if (groups.length !== 8 || groups.some((group) => group.length > 4)) return 'unknown';
+    return `${groups.slice(0, 4).map((group) => parseInt(group || '0', 16).toString(16)).join(':')}::/64`;
+  }
+
   function makeGameId() {
     return randomString(GAME_ID_LENGTH, ID_ALPHABET);
   }
@@ -468,6 +487,7 @@
     makeToken,
     makePlayerId,
     makeGameId,
+    networkKey,
     sha256Hex,
     makeAccountKey,
     normalizeAccountKey,

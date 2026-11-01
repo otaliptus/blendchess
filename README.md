@@ -44,13 +44,13 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 The server is the authority for everything that decides a rating:
 
 - Ranked rooms are created only by the lobby, for exactly two players. Each seat is locked by a random ticket handed to that player; without it nobody can take a seat.
-- Watchers see the whole board, except a watcher on the same network as one of the players: they see exactly that player's side. A second tab on your own phone or Wi-Fi shows you nothing new.
+- Watchers see the whole board, except a watcher on a network one of the players has used: they see exactly that player's side. A second tab, or another device on your Wi-Fi, shows you nothing new. (A network is one IPv4 address, or one IPv6 /64, so every device on an IPv6 home network counts.)
 - Results are reported by the room itself, once per game, and the lobby only accepts results for games it arranged. Duplicate reports change nothing.
 - Two accounts on the same network get an unrated practice game instead.
 - Rating changes are clamped, new identities are rate limited per network, and the queue, room creation, socket count, message size and message rate are all capped.
 - Options (hard mode, party mode) are fixed in lobby-arranged games.
 
-What it cannot stop: someone running an engine locally, two accounts on different networks colluding, or a friend somewhere else watching the live board and telling you where the enemy pieces are. Ranked is for fun first. The same-network rules, the rating clamp and rematch avoidance make cheating and boosting take effort, not make them impossible.
+What it cannot stop: someone running an engine locally, two accounts on different networks colluding, or the live board being watched from another network (a friend elsewhere, or your own phone on mobile data or a VPN) and relayed to a player. Ranked is for fun first. The same-network rules, the rating clamp and rematch avoidance make cheating and boosting take effort, not make them impossible.
 
 ## Rules in plain English
 

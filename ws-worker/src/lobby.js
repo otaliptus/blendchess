@@ -48,6 +48,9 @@ class StorageLobbyStore {
   constructor(storage) {
     this.storage = storage;
     this.cache = new Map();
+    // Passkey challenges live a few minutes and anyone can ask for one, so they stay in memory: no
+    // storage write per request. An eviction between options and verify just means "try again".
+    this.challenges = new Map();
   }
 
   // Bounded insert-order cache: enough to absorb a burst without growing for the life of the object.
@@ -126,16 +129,24 @@ class StorageLobbyStore {
   }
 
   async getChallenge(id) {
-    const value = await this.read(`chal:${id}`);
-    return value && value.expiresAt > Date.now() ? value : null;
+    const value = this.challenges.get(id);
+    if (value && value.expiresAt > Date.now()) return value;
+    this.challenges.delete(id);
+    return null;
   }
 
   async saveChallenge(id, data) {
-    await this.write(`chal:${id}`, data);
+    const now = Date.now();
+    if (this.challenges.size >= 5000) {
+      for (const [key, value] of this.challenges) if (value.expiresAt <= now) this.challenges.delete(key);
+      // Still full of live challenges: drop the oldest rather than grow without bound.
+      while (this.challenges.size >= 5000) this.challenges.delete(this.challenges.keys().next().value);
+    }
+    this.challenges.set(id, { ...data });
   }
 
   async removeChallenge(id) {
-    await this.remove(`chal:${id}`);
+    this.challenges.delete(id);
   }
 
   async getGame(id) {
@@ -547,25 +558,19 @@ export class LobbyHub extends DurableObject {
     await this.scheduleAlarm();
   }
 
-  // Once a day: drop report markers older than a week and sign-in challenges that expired.
+  // Once a day: drop report markers older than a week.
   async pruneReportsIfDue() {
     const last = (await this.ctx.storage.get('lastPrune')) || 0;
     const now = Date.now();
     if (now - last < PRUNE_INTERVAL_MS) return;
-    const expired = {
-      'report:': (value) => now - (value.at || 0) > REPORT_TTL_MS,
-      'chal:': (value) => (value.expiresAt || 0) <= now,
-    };
-    for (const [prefix, isExpired] of Object.entries(expired)) {
-      let cursor;
-      for (let page = 0; page < 5; page += 1) {
-        const batch = await this.ctx.storage.list({ prefix, limit: 1000, startAfter: cursor });
-        for (const [key, value] of batch) {
-          if (value && isExpired(value)) await this.store.remove(key);
-        }
-        if (batch.size < 1000) break;
-        cursor = [...batch.keys()].at(-1);
+    let cursor;
+    for (let page = 0; page < 5; page += 1) {
+      const batch = await this.ctx.storage.list({ prefix: 'report:', limit: 1000, startAfter: cursor });
+      for (const [key, value] of batch) {
+        if (value && now - (value.at || 0) > REPORT_TTL_MS) await this.store.remove(key);
       }
+      if (batch.size < 1000) break;
+      cursor = [...batch.keys()].at(-1);
     }
     await this.ctx.storage.put('lastPrune', now);
   }

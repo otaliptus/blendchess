@@ -11,7 +11,7 @@ import { GameHub } from './room.js';
 import { LobbyHub } from './lobby.js';
 
 const { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, normalizeRoomCode } = globalThis.BlendChessProtocol;
-const { sha256Hex } = globalThis.BlendChessLobbyLogic;
+const { sha256Hex, networkKey } = globalThis.BlendChessLobbyLogic;
 const accountApi = globalThis.BlendChessAccountApi;
 const CREATE_ATTEMPTS = 5;
 const MAX_API_BODY_BYTES = 16 * 1024;
@@ -36,12 +36,10 @@ function makeRoomCode() {
 // The raw IP never leaves this function: Durable Objects only ever see a hash.
 async function networkHash(request) {
   // Only the platform header is trustworthy; X-Forwarded-For is client-controlled.
-  const ip = request.headers.get('CF-Connecting-IP');
-  if (!ip) return 'unknown';
-  const address = String(ip).split(',')[0].trim();
-  // Local development: everything comes from loopback, which is not a shared network.
-  if (['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) return 'unknown';
-  return (await sha256Hex(address)).slice(0, 32);
+  // One network is an IPv4 address or an IPv6 /64; loopback (local development) is 'unknown'.
+  const network = networkKey(request.headers.get('CF-Connecting-IP'));
+  if (network === 'unknown') return network;
+  return (await sha256Hex(network)).slice(0, 32);
 }
 
 function lobbyStub(env) {
@@ -74,12 +72,14 @@ async function handleApi(request, env, ctx, url) {
     return new Response(JSON.stringify({ error: 'TOO_LARGE' }), { status: 413, headers: { 'Content-Type': 'application/json' } });
   }
 
-  const path = url.pathname === '/leaderboard' ? '/api/leaderboard' : url.pathname;
+  // Trailing slashes are ignored by the lobby's router, so they must not make a new cache key either.
+  const trimmed = url.pathname.replace(/\/+$/, '') || '/';
+  const path = trimmed === '/leaderboard' ? '/api/leaderboard' : trimmed;
   // The edge cache only exists on a custom domain; on workers.dev these calls are no-ops.
   const cache = isCacheableRead(request.method, path) && typeof caches !== 'undefined' ? caches.default : null;
   // Only the parameters a route reads make up the key, so junk query strings cannot dodge the cache.
-  const limit = url.searchParams.get('limit');
-  const keyUrl = `${url.origin}${path}${path === '/api/leaderboard' && limit ? `?limit=${encodeURIComponent(limit)}` : ''}`;
+  const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 20));
+  const keyUrl = `${url.origin}${path}${path === '/api/leaderboard' ? `?limit=${limit}` : ''}`;
   const cacheKey = cache ? new Request(keyUrl, { method: 'GET' }) : null;
   if (cache) {
     try {

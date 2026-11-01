@@ -270,6 +270,10 @@
     }
     const { credential, credentialBackedUp } = verification.registrationInfo;
     if (await store.getCredential(credential.id)) return failure(409, 'PASSKEY_EXISTS', 'That passkey is already registered.');
+    // Checked again here: several option requests could be in flight at once.
+    if ((record.passkeys || []).length >= logic.PASSKEYS_PER_PLAYER) {
+      return failure(409, 'TOO_MANY_PASSKEYS', 'This account already has the maximum number of passkeys.');
+    }
     const now = Date.now();
     await store.saveCredential(credential.id, {
       playerId: record.id,
@@ -460,7 +464,11 @@
     if (req.method === 'GET' && path === '/api/me') return reply(200, await meBody(store, auth.record));
     if (req.method !== 'POST') return failure(404, 'NOT_FOUND', 'Unknown route.');
 
-    const mutate = (work) => lobbySession.withLock('accounts', work);
+    // Changes queue behind each other; a session signed out while this one waited must not proceed.
+    const mutate = (work) => lobbySession.withLock('accounts', async () => {
+      if (!(await store.getSession(auth.hash))) return failure(401, 'NOT_AUTHENTICATED', 'Sign in first.');
+      return work();
+    });
     switch (path) {
       case '/api/auth/passkey/register/options':
         return registerOptions(store, ctx, req, auth);

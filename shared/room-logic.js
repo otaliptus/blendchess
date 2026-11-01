@@ -490,10 +490,10 @@
     touchState(state);
     if (!player || !player.connected) return { ok: false, reason: ERROR_CODES.WRONG_COLOR };
     if (isGameInProgress(state)) return { ok: false, reason: ERROR_CODES.GAME_IN_PROGRESS };
-    // A rated rematch needs both players present, and the finished result fully recorded:
-    // nobody should be handed a loss while away, and no game may go unrated by accident.
-    if (state.rated && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
-    if (state.rated && state.gameOver && !state.reported) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    // A lobby rematch needs both players present, and the finished game fully recorded first:
+    // nobody should be handed a loss while away, and no result may land on the next game.
+    if (isLobbyRoom(state) && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+    if (isLobbyRoom(state) && state.gameOver && !state.reported) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
 
     const swapColors = state.gameOver;
     resetGame(state, { swapColors });

@@ -38,7 +38,12 @@ lines it comes from.
 Lobby games are open to watchers, who see the whole board (`spectatorView: 'open'` is fixed at
 reservation). The one exception is `spectatorPerspective(state, ipHash)`: in a ranked game, a watcher
 whose network matches one either player has used (`seatNetworks`, kept server-side by player id) gets
-that player's view instead. A second tab on the same device or Wi-Fi therefore reveals nothing.
+that player's view instead. A second tab, or another device on the same Wi-Fi, therefore reveals
+nothing; a device on another network (mobile data, a VPN) does, and nothing on the server can tell.
+
+"One network" everywhere (this rule, same-network practice games, every per-network limit) is
+`networkKey(address)`: an IPv4 address, or an IPv6 /64, since devices on one IPv6 network each have
+their own (often rotating) address but share the prefix. Loopback is `unknown` and never matches.
 
 The client can't run `generateLegalMoves` any more, since it doesn't know where the enemy is. Instead it uses
 `generatePlausibleMovesForPiece`, which only respects your own pieces. It powers the move hints and stops
@@ -87,15 +92,21 @@ ratings, finished-game records and the live list. It never holds a game.
   (`[from, to, san, promotion, capture, forfeit]` per ply). A ranked game must match both players'
   active-game markers; a practice game must match the live entry. The lobby then updates ratings (ranked
   only), stores the game as `game:<id>`, prepends the id to both players' `recent` list (50 kept) and
-  returns `{ updates, gameId }`. The room re-broadcasts its views with the rating changes and
-  `recordId`. A rejection the lobby marks `final` is not retried; other failures are retried by the room
-  alarm. A room that dies before the game starts releases both players without a rating change.
+  returns `{ updates, gameId }`. The room marks the game `reported` only then, and a rematch waits for
+  it, so one game's result can never land on the next. The room re-broadcasts its views with the
+  rating changes and `recordId`. A rejection the lobby marks `final` is not retried; other failures
+  are retried by the room alarm. A room that dies before the game starts releases both players without
+  a rating change.
 - **HTTP API.** `index.js` forwards `/api/*` to the lobby (`/leaderboard` is an alias). Public reads
   (`/api/leaderboard`, `/api/live`, `/api/players/:name`, `/api/games/:id`) answer any origin and are
   cached at the edge for a few seconds (game records for a day) once the Worker runs on a custom
   domain; only the parameters a route reads make up the cache key. Account routes (`/api/me`,
   `/api/auth/*`) take a bearer session token, answer only the site's own origins (`SITE_ORIGINS`, plus
   `localhost`), and are rate limited per network, with a tighter limit on failed sign-ins.
+- **Watching a full room.** Live room codes are public, so watchers or idle sockets could fill a room's
+  64 connections. A connection opened with `seat=1` (the client sends it when it holds a ticket or a
+  resume token) closes an idle socket, or failing that the newest watcher, to make room; it still has to
+  present a valid ticket or token to sit down.
 - **Abuse limits.** Ranked rooms have clocks and fixed options. Queue length, queue entries per network,
   sockets per network, new identities per network per hour, room creation per network per minute (plus
   a global cap), API requests and message size and rate are all bounded. Two accounts on the same
@@ -120,7 +131,8 @@ above the board says whose move it is and summarizes what the opponent did. The 
 leaderboard, live list and profiles over HTTP. The account panel runs the passkey ceremonies with the
 browser's WebAuthn API (offered only on `blendchess.com` and `localhost`, where a passkey will keep
 working) and shows a new account key once. Links: `?p=name` opens a profile, `?game=id` a replay,
-`?watch=CODE` a live game.
+`?watch=CODE` a live game. The sign-in token is stored per server URL, so a link that points the
+client at another server (`?ws=`) never sends it the main server's token.
 Supporting modules:
 
 - `client/sprites.js`: 16x16 pixel pieces and the umpire, drawn to canvas once and cached as data URLs.

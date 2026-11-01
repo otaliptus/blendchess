@@ -28,10 +28,10 @@ const rooms = new Map();
 const lobbyStore = lobbyLogic.createMemoryStore();
 const lobbyConnections = new Set();
 
-// Loopback addresses are not a shared network: two tabs on the dev machine are different people.
+// One network is an IPv4 address or an IPv6 /64. Loopback is not a shared network: two tabs on the
+// dev machine are different people.
 function networkOf(req) {
-  const address = req.socket.remoteAddress || 'unknown';
-  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address) ? 'unknown' : address;
+  return lobbyLogic.networkKey(req.socket.remoteAddress);
 }
 
 function send(conn, message) {
@@ -142,7 +142,7 @@ async function registerActive(room) {
 // the views with the rating changes and the record id attached.
 async function reportResult(room) {
   const state = room.state;
-  if (!rl.isLobbyRoom(state) || !state.gameOver || state.reported) return false;
+  if (!rl.isLobbyRoom(state) || !state.gameOver || state.reported || room.reporting) return false;
   const players = playerIdentitiesOf(state).map((player) => player.playerId);
   if (state.noContest) {
     // Nobody gets rated for an opponent who never arrived; just free both players.
@@ -152,25 +152,33 @@ async function reportResult(room) {
     }
     return false;
   }
-  state.reported = true;
+  // `reported` turns true only once the lobby has the result (a rematch waits for it);
+  // `room.reporting` keeps a second change from sending the same report meanwhile.
   const gameKey = `${state.roomCode}:${state.gameId}`;
   const winner = state.winner === 'White' ? 'w' : state.winner === 'Black' ? 'b' : null;
-  const result = await lobbySession.report(lobbyStore, lobbyHooks(), {
-    roomCode: state.roomCode,
-    gameKey,
-    rated: Boolean(state.rated),
-    control: state.control,
-    players: playerIdentitiesOf(state),
-    winner,
-    result: state.result,
-    record: rl.gameRecord(state),
-    finishedAt: Date.now(),
-  });
+  room.reporting = true;
+  let result;
+  try {
+    result = await lobbySession.report(lobbyStore, lobbyHooks(), {
+      roomCode: state.roomCode,
+      gameKey,
+      rated: Boolean(state.rated),
+      control: state.control,
+      players: playerIdentitiesOf(state),
+      winner,
+      result: state.result,
+      record: rl.gameRecord(state),
+      finishedAt: Date.now(),
+    });
+  } finally {
+    room.reporting = false;
+  }
   if (!result.ok) {
     // A final rejection (a game the lobby never arranged) is not retried.
-    if (!result.final) state.reported = false;
+    if (result.final) state.reported = true;
     return false;
   }
+  state.reported = true;
   state.ratingUpdates = result.updates || null;
   state.recordId = result.gameId || null;
   session.broadcastViews(state, hooksFor(room));

@@ -1111,12 +1111,19 @@
   // Ranked lobby: identity, queue, matchmaking, leaderboard
   // ---------------------------------------------------------------------------
 
+  // A sign-in token only ever goes to the server that issued it. The ?ws= link parameter can point
+  // the client at any server, so each server gets its own identity slot, and the main server's token
+  // is never sent anywhere else.
+  function identityKey() {
+    return settings.serverUrl === DEFAULT_SERVER_URL ? STORAGE.identity : `${STORAGE.identity}@${settings.serverUrl}`;
+  }
+
   function saveIdentity(data) {
-    save(STORAGE.identity, data);
+    save(identityKey(), data);
   }
 
   function loadIdentity() {
-    const saved = load(STORAGE.identity, null);
+    const saved = load(identityKey(), null);
     return saved && typeof saved.token === 'string' && saved.token ? saved : null;
   }
 
@@ -1195,7 +1202,7 @@
       lobbyState.ws = null;
       if (event && event.code === 4001) {
         // This device's session was ended from another device.
-        remove(STORAGE.identity);
+        remove(identityKey());
         lobbyState.player = null;
         toast('This device was signed out.', 'bad');
       }
@@ -1248,10 +1255,12 @@
     renderLobby();
     openLobbySocket();
     refreshLobbyLists();
+    // Only the live list changes on its own; the leaderboard refreshes after your games and on demand.
+    // Once a minute keeps an open lobby tab cheap for the single lobby object on the free plan.
     clearInterval(lobbyState.refreshTimer);
     lobbyState.refreshTimer = setInterval(() => {
-      if (!document.hidden && !$('menuLobby').classList.contains('hidden')) refreshLobbyLists();
-    }, 20_000);
+      if (!document.hidden && !$('menuLobby').classList.contains('hidden')) fetchLive();
+    }, 60_000);
   }
 
   function refreshLobbyLists() {
@@ -1444,7 +1453,7 @@
     }
     if (message.type === TYPES.LOBBY_ERROR) {
       toast(REASON_TEXT[payload.errorCode] || payload.message || 'Lobby error.', 'bad');
-      if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) remove(STORAGE.identity);
+      if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) remove(identityKey());
       lobbyState.findWanted = false;
       lobbyState.status = lobbyState.player ? 'ready' : 'off';
       lobbyState.queued = null;
@@ -1793,7 +1802,7 @@
       lobbyState.player = result.data.player;
     } else if (result.status === 401) {
       // Signed out from another device: this browser starts over as a new guest.
-      remove(STORAGE.identity);
+      remove(identityKey());
       account.me = null;
       lobbyState.player = null;
       account.notice = 'This device was signed out. Sign in again below.';
@@ -2037,7 +2046,7 @@
         toast(result.data.message || 'Could not sign out.', 'bad');
         return;
       }
-      remove(STORAGE.identity);
+      remove(identityKey());
       closeLobbySocket();
       account.me = null;
       lobbyState.player = null;
@@ -2291,7 +2300,8 @@
     net.spectatorNickname = nickname;
     net.pendingTicket = ticket || (reconnect ? net.pendingTicket : '');
     try {
-      await openSocket({ room: roomCode });
+      // seat=1 tells a full room that this connection is coming back to a reserved seat.
+      await openSocket(net.pendingTicket ? { room: roomCode, seat: '1' } : { room: roomCode });
     } catch (error) {
       if (!reconnect) toast(error.message, 'bad');
       setNetStatus('offline');
@@ -2314,7 +2324,7 @@
     if (app.mode !== 'online') enterGame('online');
     renderRoomPanel();
     try {
-      await openSocket({ room: session.roomCode });
+      await openSocket({ room: session.roomCode, seat: '1' });
     } catch {
       if (!auto) toast('Server unreachable. Retrying...', 'bad');
       return; // onSocketClosed schedules the retry

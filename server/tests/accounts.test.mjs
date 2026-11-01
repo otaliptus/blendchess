@@ -370,3 +370,48 @@ test('a rematch puts the room back on the live list with colours swapped', async
   await lobbySession.release(h.store, { roomCode: match.roomCode, players: swapped.map((player) => player.playerId) });
   assert.deepEqual((await h.call('GET', '/api/live', { origin: '' })).body.games, []);
 });
+
+// --- Review fixes ---------------------------------------------------------------------
+
+test('one network is an IPv4 address or an IPv6 /64; loopback is nobody', () => {
+  const key = lobbyLogic.networkKey;
+  assert.equal(key('203.0.113.7'), '203.0.113.7');
+  assert.equal(key('::ffff:203.0.113.7'), '203.0.113.7');
+  // Two devices on one IPv6 Wi-Fi (and one device rotating its address) are one network.
+  assert.equal(key('2001:db8:abcd:12:aaaa:bbbb:cccc:dddd'), '2001:db8:abcd:12::/64');
+  assert.equal(key('2001:db8:abcd:12::1'), '2001:db8:abcd:12::/64');
+  assert.equal(key('2001:DB8:ABCD:0012:1::9%en0'), '2001:db8:abcd:12::/64');
+  assert.notEqual(key('2001:db8:abcd:13::1'), key('2001:db8:abcd:12::1'));
+  for (const local of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '', 'garbage', '1:2:3:4:5:6:7:8:9', '1::2::3']) {
+    assert.equal(key(local), 'unknown', local);
+  }
+});
+
+test('the passkey limit holds even with several registrations in flight', async () => {
+  const h = makeLobby();
+  const ann = await h.guest('Ann');
+  for (let i = 0; i < lobbyLogic.PASSKEYS_PER_PLAYER - 1; i += 1) {
+    assert.equal((await registerPasskey(h, ann.token, `cred-${i}`)).status, 200);
+  }
+  const first = await h.call('POST', '/api/auth/passkey/register/options', { token: ann.token });
+  const second = await h.call('POST', '/api/auth/passkey/register/options', { token: ann.token });
+  const verify = (options, id) => h.call('POST', '/api/auth/passkey/register/verify', {
+    token: ann.token,
+    body: { challengeId: options.body.challengeId, response: { id, challenge: options.body.options.challenge, origin: SITE, rpID: 'blendchess.com' } },
+  });
+  assert.equal((await verify(first, 'cred-last')).status, 200);
+  assert.equal((await verify(second, 'cred-extra')).body.error, 'TOO_MANY_PASSKEYS');
+  assert.equal(h.store.getPlayer(ann.player.id).passkeys.length, lobbyLogic.PASSKEYS_PER_PLAYER);
+});
+
+test('a change queued behind a sign-out of its own session does not go through', async () => {
+  const h = makeLobby();
+  const ann = await h.guest('Ann');
+  const signOut = h.call('POST', '/api/auth/logout', { token: ann.token });
+  const sneaky = h.call('POST', '/api/auth/key/create', { token: ann.token });
+  assert.equal((await signOut).status, 200);
+  const late = await sneaky;
+  assert.equal(late.status, 401);
+  assert.equal(late.body.key, undefined);
+  assert.equal(h.store.getPlayer(ann.player.id).keyHash, '');
+});
