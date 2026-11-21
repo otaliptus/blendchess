@@ -80,6 +80,8 @@ function readReservation(body) {
     clock: clock ? { baseMs, incMs: Math.max(0, Number(clock.incMs) || 0) } : null,
     hardMode: Boolean(body.hardMode),
     spectatorView: body.spectatorView === 'fog' ? 'fog' : 'open',
+    // Clamped by applyReservation; absent for matchmaking.
+    joinWindowMs: Number.isFinite(Number(body.joinWindowMs)) ? Number(body.joinWindowMs) : undefined,
     seats: cleaned,
   };
 }
@@ -166,7 +168,7 @@ export class GameHub extends DurableObject {
     if (clockDeadline) next = Math.min(next, clockDeadline + 100);
     if (this.room.reportRetryAt) next = Math.min(next, this.room.reportRetryAt);
     const waitingForSeat = rl.isLobbyRoom(this.room) && !this.room.gameOver && !rl.isReady(this.room) && this.room.log.length === 0;
-    if (waitingForSeat) next = Math.min(next, this.room.reservedAt + rl.JOIN_DEADLINE_MS + 100);
+    if (waitingForSeat) next = Math.min(next, rl.joinDeadline(this.room) + 100);
     // Never schedule an alarm in the past: the runtime would re-fire it immediately and loop.
     await this.ctx.storage.setAlarm(Math.max(next, now + 1000));
   }
@@ -294,7 +296,7 @@ export class GameHub extends DurableObject {
         rl.finishByTimeout(this.room);
         changed = true;
       } else if (!rl.isReady(this.room) && this.room.log.length === 0
-        && now - this.room.reservedAt >= rl.JOIN_DEADLINE_MS) {
+        && now >= rl.joinDeadline(this.room)) {
         if (rl.connectedPlayerCount(this.room) >= 1) {
           rl.finishByAbandon(this.room);
           changed = true;

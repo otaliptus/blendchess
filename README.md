@@ -18,7 +18,7 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 ## Modes
 
 - `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
-- `Play Online`: pick Blitz 5+3 or Rapid 10+0, then either **Find game** to get paired by rating, or **Invite a friend** to get a link, a QR code and a short code. Your friend opens the link (or types the code under **Join**) and the game starts. Every online game has the same server clock, rating, watchers and replays; reconnects resume your seat automatically.
+- `Play Online`: pick Blitz 5+3 or Rapid 10+0, then either **Invite a friend** to get a link, a QR code and a short code, or **Find game** to get paired by rating. Your friend opens the link (or types the code under **Got a code?**) and the game starts. You can switch apps to send the link: the invite waits for ten minutes, and you are taken to the game when you come back. Copying the game's address from the browser gives a link to watch it. Every online game has the same server clock, rating, watchers and replays; reconnects resume your seat automatically.
 - Friend games have four toggles: **Ranked** (on by default; counts for both ratings), **Party mode** (on: watchers see the whole board; off: they see the fog), **Hard mode** (an illegal try costs your turn) and **No clock** (take your time; never ranked).
 - `Watch`: every online game is listed under **Live now** for anyone to watch.
 - `Profiles`: every player has a public page with their rating, record and recent games. Each game opens as a full replay with a shareable link (`?game=...`); profiles are at `?p=name`.
@@ -59,7 +59,7 @@ What it cannot stop: someone running an engine locally, two accounts on differen
 - Draw logic includes threefold/fivefold repetition, 50/75-move rule, and insufficient material.
 - Online mode is authoritative: the backend validates moves and clocks, and each player only ever receives their own view of the game. Ranked ratings are computed and stored on the server.
 - Hard mode is optional: illegal moves forfeit the turn (recorded as `--` in the PGN), except when the mover is in check.
-- Rules options lock once the first move is played. A draw offer stands until the opponent moves. Rematches swap colours.
+- Rules options lock once the first move is played. A draw offer stands until the opponent moves. A rematch starts when both players ask for it, with colours swapped.
 
 ## How to play
 

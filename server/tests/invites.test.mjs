@@ -60,7 +60,7 @@ test('an invite starts a ranked game with the friend who opens it', async () => 
   assert.equal(match.hardMode, false);
   assert.ok(h.store.getActiveGame(ann.playerId), 'a ranked friend game blocks the queue like any other');
   assert.equal(h.store.getLive()[0].roomCode, forAnn.roomCode);
-  assert.deepEqual(h.store.getInvites(), [], 'an invite is used up');
+  assert.deepEqual(h.store.getInvites().filter((item) => !item.started), [], 'an invite is used up');
 
   // A used invite cannot start a second game.
   const carl = await h.player('Carl');
@@ -96,7 +96,7 @@ test('invite options: unranked, hard mode, no party mode, no clock', async () =>
   assert.equal(h.store.getLive()[0].control, 'untimed');
 });
 
-test('your own invite, an unknown code, and an inviter who left are refused', async () => {
+test('your own invite and an unknown code are refused', async () => {
   const h = makeLobby();
   const ann = await h.player('Ann');
   const bob = await h.player('Bob');
@@ -107,12 +107,123 @@ test('your own invite, an unknown code, and an inviter who left are refused', as
   assert.equal(last(ann, TYPES.LOBBY_ERROR).payload.errorCode, ERROR_CODES.INVITE_NOT_FOUND);
   await send(h, bob, TYPES.LOBBY_ACCEPT, { code: 'ZZZZZZ' });
   assert.equal(last(bob, TYPES.LOBBY_ERROR).payload.errorCode, ERROR_CODES.INVITE_NOT_FOUND);
+  assert.equal(h.created.length, 0);
+});
+
+// Sharing a link on a phone sends the inviter to another app, and the browser drops the lobby
+// socket. The invite must outlive that socket: the game starts when the friend arrives, and the
+// inviter is handed their seat when they come back.
+test('an invite survives the inviter dropping off; their seat is handed over when they return', async () => {
+  const h = makeLobby();
+  const ann = await h.player('Ann');
+  const bob = await h.player('Bob');
+  await send(h, ann, TYPES.LOBBY_INVITE, { control: '5+3' });
+  const { code } = last(ann, TYPES.LOBBY_INVITED).payload;
+  const token = last(ann, TYPES.LOBBY_READY).payload.token;
 
   ann.closed = true;
   await send(h, bob, TYPES.LOBBY_ACCEPT, { code });
+  const forBob = last(bob, TYPES.MATCH_FOUND).payload;
+  assert.equal(h.created.length, 1, 'the game starts without waiting for the inviter');
+  assert.equal(h.created[0].match.joinWindowMs, lobbyLogic.INVITE_TTL_MS, 'the inviter gets the invite lifetime to arrive');
+
+  // Back from the other app: a new socket says hello and names the invite it is waiting on.
+  const back = { id: 'conn-ann-2', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  h.hooks.connections = () => [back, bob];
+  await lobbySession.hello(h.store, h.hooks, back, { token, inviteCode: code });
+  const forAnn = last(back, TYPES.MATCH_FOUND).payload;
+  assert.equal(forAnn.roomCode, forBob.roomCode);
+  assert.notEqual(forAnn.color, forBob.color);
+  assert.equal(forAnn.ticket, h.created[0].tickets[forAnn.color]);
+  assert.equal(forAnn.opponent.name, 'Bob');
+
+  // Handed over once: a later hello does not send the player back into that room.
+  const again = { id: 'conn-ann-3', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, again, { token, inviteCode: code });
+  assert.equal(last(again, TYPES.MATCH_FOUND), undefined);
+  assert.equal(last(again, TYPES.LOBBY_READY).payload.invite, null);
+});
+
+test('the inviter is told the game started even if their socket missed the match', async () => {
+  const h = makeLobby();
+  const ann = await h.player('Ann');
+  const bob = await h.player('Bob');
+  await send(h, ann, TYPES.LOBBY_INVITE, {});
+  const { code } = last(ann, TYPES.LOBBY_INVITED).payload;
+  const token = last(ann, TYPES.LOBBY_READY).payload.token;
+  await send(h, bob, TYPES.LOBBY_ACCEPT, { code });
+  const pushed = last(ann, TYPES.MATCH_FOUND).payload;
+
+  // A half-dead socket swallowed that message; the reconnect asks again.
+  const back = { id: 'conn-ann-2', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, back, { token, inviteCode: code });
+  assert.equal(last(back, TYPES.MATCH_FOUND).payload.ticket, pushed.ticket);
+
+  // Without the code (an older client, or one that moved on) nothing is replayed.
+  const plain = { id: 'conn-ann-3', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, plain, { token });
+  assert.equal(last(plain, TYPES.MATCH_FOUND), undefined);
+});
+
+test('hello reports whether the invite a client waits on is still open', async () => {
+  const h = makeLobby();
+  const ann = await h.player('Ann');
+  await send(h, ann, TYPES.LOBBY_INVITE, { control: '5+3', hardMode: true });
+  const { code } = last(ann, TYPES.LOBBY_INVITED).payload;
+  const token = last(ann, TYPES.LOBBY_READY).payload.token;
+
+  const back = { id: 'conn-ann-2', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, back, { token, inviteCode: code });
+  const ready = last(back, TYPES.LOBBY_READY).payload;
+  assert.equal(ready.invite.code, code);
+  assert.equal(ready.invite.control, '5+3');
+  assert.equal(ready.invite.hardMode, true);
+
+  const other = { id: 'conn-ann-3', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, other, { token, inviteCode: 'ZZZZZZ' });
+  assert.equal(last(other, TYPES.LOBBY_READY).payload.invite, null);
+
+  // Someone else's code is not yours to wait on.
+  const bob = await h.player('Bob');
+  const bobBack = { id: 'conn-bob-2', playerId: '', ipHash: 'net-Bob', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, bobBack, { token: last(bob, TYPES.LOBBY_READY).payload.token, inviteCode: code });
+  assert.equal(last(bobBack, TYPES.LOBBY_READY).payload.invite, null);
+});
+
+test('a cancel made offline rides along with the next hello', async () => {
+  const h = makeLobby();
+  const ann = await h.player('Ann');
+  const bob = await h.player('Bob');
+  await send(h, ann, TYPES.LOBBY_INVITE, {});
+  const { code } = last(ann, TYPES.LOBBY_INVITED).payload;
+  const token = last(ann, TYPES.LOBBY_READY).payload.token;
+  await send(h, ann, TYPES.LOBBY_QUEUE, { control: '5+3' });
+  await send(h, ann, TYPES.LOBBY_INVITE, {});
+  const second = last(ann, TYPES.LOBBY_INVITED).payload.code;
+
+  // Only the named invite goes; a hello never touches the queue or another code.
+  const back = { id: 'conn-ann-2', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, back, { token, cancelInvite: code });
+  assert.equal(h.store.getInvites().length, 1);
+  await lobbySession.hello(h.store, h.hooks, back, { token, cancelInvite: second });
+  assert.deepEqual(h.store.getInvites(), []);
+  await send(h, bob, TYPES.LOBBY_ACCEPT, { code: second });
   assert.equal(last(bob, TYPES.LOBBY_ERROR).payload.errorCode, ERROR_CODES.INVITE_NOT_FOUND);
   assert.equal(h.created.length, 0);
-  assert.deepEqual(h.store.getInvites(), [], 'the dead invite is dropped');
+});
+
+test('a room reserved for an invite waits the invite lifetime for a player to arrive', () => {
+  const seats = [
+    { color: 'w', playerId: 'p-w', nickname: 'Ann', rating: 1200 },
+    { color: 'b', playerId: 'p-b', nickname: 'Bob', rating: 1200 },
+  ];
+  const tickets = { w: 'w'.repeat(24), b: 'b'.repeat(24) };
+  const invited = rl.createRoomState('ROOMXX');
+  rl.applyReservation(invited, lobbyLogic.reservationFor({ control: '10+0', joinWindowMs: lobbyLogic.INVITE_TTL_MS, seats }, 'ROOMXX', tickets));
+  assert.equal(rl.joinDeadline(invited) - invited.reservedAt, lobbyLogic.INVITE_TTL_MS);
+  const matched = rl.createRoomState('ROOMYY');
+  rl.applyReservation(matched, lobbyLogic.reservationFor({ control: '10+0', seats }, 'ROOMYY', tickets));
+  assert.equal(rl.joinDeadline(matched) - matched.reservedAt, rl.JOIN_DEADLINE_MS, 'matchmaking keeps the short no-show window');
 });
 
 test('one thing at a time: inviting leaves the queue, queueing or cancelling withdraws the invite', async () => {

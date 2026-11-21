@@ -1584,6 +1584,33 @@ button {
   color: var(--accent-2);
 }
 
+/* The two ways to play, side by side and big: a friend, or whoever is searching. */
+.play-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 16px 0 6px;
+}
+
+.play-choices .px-btn {
+  min-height: 56px;
+  font-size: 12px;
+  width: 100%;
+}
+
+.play-choices .hidden {
+  display: none;
+}
+
+/* The friend-game toggles, under the two buttons. */
+.friend-options-title {
+  margin: 14px 0 4px;
+}
+
+.lobby-back {
+  justify-content: flex-start;
+}
+
 /* Play a friend: the four toggles in two columns, then the code box and the two buttons. */
 .invite-options {
   display: grid;
@@ -2325,8 +2352,8 @@ button {
     display: none;
   }
 
-  .control-picker {
-    grid-template-columns: 1fr;
+  .control-chip {
+    padding: 8px 10px;
   }
 
   .leaderboard-row {
@@ -2484,6 +2511,40 @@ button {
 
   .umpire-text {
     font-size: 22px;
+  }
+}
+
+@media (max-width: 360px) {
+  .play-choices {
+    grid-template-columns: 1fr;
+  }
+
+  /* The top bar fits a 320px phone: the buttons go under the brand. */
+  .topbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .brand {
+    font-size: 11px;
+    padding: 4px 2px;
+  }
+
+  .palette-dot {
+    width: 16px;
+    height: 16px;
+  }
+
+  .chip-btn {
+    padding-left: 5px;
+    padding-right: 5px;
+    font-size: 8px;
   }
 }
 

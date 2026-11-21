@@ -88,6 +88,11 @@ No token (or an unknown one) creates a new identity. The reply carries the token
 On a later hello the token is not echoed back. Names are unique (case-insensitive); a taken name gets a
 numeric suffix. A hello with a new nickname renames the player.
 
+A client waiting on its own invite adds `"inviteCode": "K7Q2MX"` to the hello. The reply then carries
+`"invite"`: the invite's options while it is still open (it moves to this socket), `{ "code", "started": true }`
+when the friend has already arrived (a `match_found` for this player follows right after), or `null` when
+the invite is gone.
+
 ### `lobby_queue` / `lobby_cancel`
 
 ```json
@@ -122,14 +127,17 @@ The client then opens `?room=ABCD12` and sends `join_room` with `"payload": { "t
 the fog. The inviter gets `{ "type": "lobby_invited", "payload": { "code": "K7Q2MX", "control", "rated",
 "hardMode", "spectatorView" } }` and waits in the lobby; the link is `?invite=K7Q2MX`. An invite replaces a
 place in the queue (and any older invite), and `lobby_queue` or `lobby_cancel` withdraws it. It expires
-after ten minutes, or as soon as the inviter has no lobby socket.
+after ten minutes. The inviter does not have to stay connected: if the friend accepts while the inviter
+is away (on a phone, usually still in the app they sent the link from), the game starts anyway and the
+inviter's `match_found` is kept until their next hello names the invite (see `lobby_hello`).
 
 ```json
 { "type": "lobby_accept", "payload": { "code": "K7Q2MX" }, "version": "2.0.0" }
 ```
 
-Both players then receive `match_found` as above (`clock` is `null` for an untimed game, and `hardMode`
-is set). Invites ignore networks. An unknown, expired, used or own code answers `lobby_error` with
+Both connected players then receive `match_found` as above (`clock` is `null` for an untimed game, and
+`hardMode` is set). The room of an invite game waits ten minutes (instead of two) for both players to
+arrive before calling it a no contest. Invites ignore networks. An unknown, expired, used or own code answers `lobby_error` with
 `INVITE_NOT_FOUND`; a rated invite while either player has an unfinished rated game answers
 `ALREADY_IN_GAME`.
 
@@ -208,6 +216,8 @@ through the offerer's own move and lapses when the opponent moves.
 
 - `resign`: ends the game; the opponent wins.
 - `new_game`: allowed only when the game is over (or before the first move). Players swap colours after a finished game.
+  In a lobby room it is a rematch request: the first `new_game` sets the view's `rematchOffer` to that
+  colour (and adds a `rematch_offer` event); the game restarts when the other player sends `new_game` too.
 - `game_state`: asks for a fresh view.
 - `ping`: answered with `pong`.
 
@@ -272,7 +282,7 @@ Spectators get `{ "role": "spectator", "spectatorId": "..." }`. A `game_state` a
   been reported, and `recordId` once the lobby has stored the game (`GET /api/games/:id`).
 - `you`: `{ role, color, perspective }`. `color` is the seat (players only). `perspective` is always
   `null` from current servers (kept for a switched-off rule that limited same-network watchers).
-- Event kinds: `move`, `capture`, `check`, `illegal`, `forfeit`, `draw_offer`, `draw_declined`, `resign`, `game_over`, `presence`, `options`, `new_game`. Event `id`s increase, so a client can tell which ones are new.
+- Event kinds: `move`, `capture`, `check`, `illegal`, `forfeit`, `draw_offer`, `draw_declined`, `resign`, `game_over`, `presence`, `options`, `new_game`, `rematch_offer`. Event `id`s increase, so a client can tell which ones are new.
 - `check.directions`: any of `file`, `rank`, `diagonal`, `knight`.
 
 ### `move_rejected`

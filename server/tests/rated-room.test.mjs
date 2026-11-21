@@ -260,6 +260,9 @@ test('a rated rematch needs both players present', () => {
   const identity = black.inbox.find((message) => message.type === TYPES.ROOM_JOINED).payload;
   session.joinRoom(h.state, h.hooks, back, h.envelope(TYPES.JOIN_ROOM, { resume: true, resumeToken: identity.resumeToken }, identity.playerId));
   assert.equal(rl.newGame(h.state, whitePlayer).ok, true);
+  assert.equal(h.state.gameId, 1, 'one REMATCH only offers');
+  assert.equal(rl.createView(h.state, { role: 'player', color: 'b' }).rematchOffer, 'w');
+  assert.equal(rl.newGame(h.state, rl.getPlayer(h.state, identity.playerId)).ok, true);
   assert.equal(h.state.gameId, 2);
   assert.equal(h.state.gameOver, false);
   assert.ok(h.state.clock.startedAt);
@@ -273,6 +276,7 @@ test('after a rematch the report colours follow the swapped seats', () => {
   rl.finishByTimeout(h.state);
   h.state.reported = true;
   assert.equal(rl.newGame(h.state, whitePlayer).ok, true);
+  assert.equal(rl.newGame(h.state, rl.getPlayer(h.state, 'player-black')).ok, true);
 
   const identities = rl.playerIdentities(h.state);
   const byId = Object.fromEntries(identities.map((player) => [player.playerId, player.color]));
@@ -323,6 +327,24 @@ test('PGN names a flag fall as a time forfeit', () => {
   assert.match(pgn, /0-1/);
 });
 
+test('a lobby rematch is offered by one player and starts when the other accepts', () => {
+  const h = createRatedHarness();
+  const { white, black } = seatBoth(h);
+  session.handleMessage(h.state, h.hooks, white, h.envelope(TYPES.RESIGN));
+  h.state.reported = true;
+  session.handleMessage(h.state, h.hooks, white, h.envelope(TYPES.NEW_GAME));
+  session.handleMessage(h.state, h.hooks, white, h.envelope(TYPES.NEW_GAME));
+  assert.equal(h.state.gameId, 1, 'asking twice does not start it');
+  const seen = black.inbox.filter((message) => message.type === TYPES.GAME_STATE).at(-1).payload.game;
+  assert.equal(seen.rematchOffer, 'w');
+  assert.equal(seen.events.filter((event) => event.kind === 'rematch_offer').length, 1);
+  session.handleMessage(h.state, h.hooks, black, h.envelope(TYPES.NEW_GAME));
+  assert.equal(h.state.gameId, 2);
+  const fresh = black.inbox.filter((message) => message.type === TYPES.GAME_STATE).at(-1).payload.game;
+  assert.equal(fresh.rematchOffer, null);
+  assert.equal(fresh.you.color, 'w', 'colours swap');
+});
+
 test('a practice rematch waits until the finished game is recorded', () => {
   const h = createRatedHarness({ rated: false });
   const { white, black } = seatBoth(h);
@@ -332,6 +354,7 @@ test('a practice rematch waits until the finished game is recorded', () => {
   assert.equal(rl.newGame(h.state, blackPlayer).reason, ERROR_CODES.ROOM_NOT_READY, 'not before the report lands');
   h.state.reported = true;
   assert.equal(rl.newGame(h.state, blackPlayer).ok, true);
+  assert.equal(rl.newGame(h.state, rl.getPlayer(h.state, 'player-white')).ok, true);
   assert.equal(h.state.gameId, 2);
   assert.ok(black);
 });

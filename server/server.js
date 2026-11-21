@@ -190,7 +190,7 @@ async function tickRatedGames() {
     }
 
     const waitingForSeat = !rl.isReady(state) && state.log.length === 0;
-    if (waitingForSeat && now - state.reservedAt >= rl.JOIN_DEADLINE_MS) {
+    if (waitingForSeat && now >= rl.joinDeadline(state)) {
       if (rl.connectedPlayerCount(state) >= 1) {
         rl.finishByAbandon(state);
         session.broadcastViews(state, hooksFor(room));

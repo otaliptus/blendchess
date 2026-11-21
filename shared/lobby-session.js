@@ -213,12 +213,49 @@
     conn.sessionHash = sessionHash;
     hooks.save(conn);
 
+    // A client that cancelled its invite while offline says so here. Only that open invite goes.
+    const cancelCode = protocol.normalizeRoomCode(payload.cancelInvite);
+    if (cancelCode) {
+      const invites = await store.getInvites();
+      const after = invites.filter((item) => !(item.code === cancelCode && item.playerId === record.id && !item.started));
+      if (after.length !== invites.length) await store.saveInvites(after);
+    }
+
+    // A client waiting on an invite names it. If the friend arrived while this player was away (or
+    // the match message was lost with an old socket), the seat is handed over now; an invite still
+    // open moves to this socket. `invite: null` tells the client its invite is gone.
+    const waitingOn = protocol.normalizeRoomCode(payload.inviteCode);
+    let inviteState;
+    let handOver = null;
+    if (waitingOn) {
+      const invites = (await store.getInvites()).filter((item) => now - item.createdAt < logic.INVITE_TTL_MS);
+      const held = invites.find((item) => item.code === waitingOn && item.playerId === record.id);
+      inviteState = null;
+      if (held && held.started) {
+        handOver = held.match;
+        // The match follows this message: the client should not report the invite as expired.
+        inviteState = { code: held.code, started: true };
+        await store.saveInvites(invites.filter((item) => item !== held));
+      } else if (held) {
+        held.connId = conn.id;
+        held.sessionHash = sessionHash;
+        await store.saveInvites(invites);
+        inviteState = inviteSummary(held);
+      }
+    }
+
     send(hooks, conn, TYPES.LOBBY_READY, {
       player: logic.summary(record),
       token: freshToken || undefined,
       queued: mine ? { control: mine.control, since: mine.joinedAt, waiting: waitingCount(entries, mine.control) } : null,
+      ...(waitingOn ? { invite: inviteState } : {}),
     });
+    if (handOver) send(hooks, conn, TYPES.MATCH_FOUND, handOver);
     return true;
+  }
+
+  function inviteSummary(invite) {
+    return { code: invite.code, control: invite.control, rated: invite.rated, hardMode: invite.hardMode, spectatorView: invite.spectatorView };
   }
 
   async function queueNow(store, hooks, conn, payload = {}) {
@@ -352,7 +389,8 @@
   // Starts a lobby game between two players, from matchmaking or an accepted invite: reserves a
   // room with a ticket for each seat, records it, and tells both sockets where to go.
   // `first`/`second` are { playerId, connId, ipHash }; `game` is { control, rated, hardMode,
-  // spectatorView }. Returns the room code, or null when no room could be made.
+  // spectatorView, joinWindowMs? }. Returns { roomCode, found: { playerId: MATCH_FOUND payload } },
+  // or null when no room could be made.
   async function startGame(store, hooks, first, second, game, now = Date.now()) {
     const [whiteEntry, blackEntry] = Math.random() < 0.5 ? [first, second] : [second, first];
     const whiteRecord = await store.getPlayer(whiteEntry.playerId);
@@ -363,10 +401,11 @@
     // session out later takes the seat away.
     const whiteConn = connFor(hooks, whiteEntry);
     const blackConn = connFor(hooks, blackEntry);
-    const sessionOf = (conn) => (conn && conn.sessionHash) || '';
+    // An inviter may be away when the friend arrives: their seat goes to the session that invited.
+    const sessionOf = (conn, entry) => (conn && conn.sessionHash) || entry.sessionHash || '';
     const seats = [
-      { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: sessionOf(whiteConn) },
-      { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: sessionOf(blackConn) },
+      { color: 'w', playerId: whiteRecord.id, nickname: whiteRecord.name, rating: whiteRecord.rating, ipHash: whiteEntry.ipHash || '', session: sessionOf(whiteConn, whiteEntry) },
+      { color: 'b', playerId: blackRecord.id, nickname: blackRecord.name, rating: blackRecord.rating, ipHash: blackEntry.ipHash || '', session: sessionOf(blackConn, blackEntry) },
     ];
 
     let room = null;
@@ -395,8 +434,9 @@
     await store.savePlayer(blackRecord);
 
     const spec = logic.controlOf(game.control);
+    const found = {};
     const tell = (conn, seat, opponentRecord, ticket) => {
-      send(hooks, conn, TYPES.MATCH_FOUND, {
+      const payload = {
         roomCode: room.roomCode,
         ticket,
         color: seat.color,
@@ -409,11 +449,13 @@
           rating: opponentRecord.rating,
           provisional: opponentRecord.games < rating.PROVISIONAL_GAMES,
         },
-      });
+      };
+      found[seat.playerId] = payload;
+      send(hooks, conn, TYPES.MATCH_FOUND, payload);
     };
     tell(whiteConn, seats[0], blackRecord, room.tickets.w);
     tell(blackConn, seats[1], whiteRecord, room.tickets.b);
-    return room.roomCode;
+    return { roomCode: room.roomCode, found };
   }
 
   // --- Invites ----------------------------------------------------------------------
@@ -460,7 +502,7 @@
       return false;
     }
     const code = makeInviteCode(invites);
-    invites.push({ code, playerId: record.id, connId: conn.id, ipHash: conn.ipHash || '', createdAt: now, ...options });
+    invites.push({ code, playerId: record.id, connId: conn.id, sessionHash: conn.sessionHash || '', ipHash: conn.ipHash || '', createdAt: now, ...options });
     await store.saveInvites(invites);
     send(hooks, conn, TYPES.LOBBY_INVITED, { code, ...options });
     return true;
@@ -472,10 +514,10 @@
     const code = protocol.normalizeRoomCode(payload.code);
     const now = Date.now();
     const invites = (await store.getInvites()).filter((item) => now - item.createdAt < logic.INVITE_TTL_MS);
-    const invite = invites.find((item) => item.code === code);
-    // The inviter must still be in the lobby to be sent to the game.
-    if (!invite || !connFor(hooks, invite)) {
-      if (invite) await store.saveInvites(invites.filter((item) => item !== invite));
+    const invite = invites.find((item) => item.code === code && !item.started);
+    // The inviter does not have to be connected: on a phone they are often still in the app they
+    // sent the link from. The game starts now and their seat is handed over when they come back.
+    if (!invite) {
       fail(hooks, conn, ERROR_CODES.INVITE_NOT_FOUND, 'That invite has expired. Ask your friend for a new one.');
       return false;
     }
@@ -493,11 +535,26 @@
     const queueAfter = queue.filter((entry) => entry.playerId !== record.id && entry.playerId !== invite.playerId);
     if (queueAfter.length !== queue.length) await store.saveQueue(queueAfter);
     const friend = { playerId: record.id, connId: conn.id, ipHash: conn.ipHash || '' };
-    const game = { control: invite.control, rated: invite.rated, hardMode: invite.hardMode, spectatorView: invite.spectatorView };
-    if (!(await startGame(store, hooks, invite, friend, game, now))) {
+    const game = {
+      control: invite.control,
+      rated: invite.rated,
+      hardMode: invite.hardMode,
+      spectatorView: invite.spectatorView,
+      joinWindowMs: logic.INVITE_TTL_MS,
+    };
+    const started = await startGame(store, hooks, invite, friend, game, now);
+    if (!started) {
       await store.saveInvites([...(await store.getInvites()), invite]);
       fail(hooks, conn, ERROR_CODES.RATE_LIMIT, 'Could not start the game. Try again.');
       return false;
+    }
+    // Kept until the inviter's client collects it (see hello), in case the match message never
+    // reached them. Inviting again, queueing or cancelling drops it.
+    const forInviter = started.found[invite.playerId];
+    if (forInviter) {
+      const after = await store.getInvites();
+      after.push({ ...invite, started: true, match: forInviter, createdAt: now });
+      await store.saveInvites(after);
     }
     return true;
   }

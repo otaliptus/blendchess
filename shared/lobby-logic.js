@@ -43,7 +43,7 @@
   const UNTIMED = 'untimed';
 
   // What a lobby room is told when it is reserved; both transports send exactly this. `match` is
-  // { control, rated, hardMode, spectatorView, seats }. Null for a control nobody offers.
+  // { control, rated, hardMode, spectatorView, joinWindowMs?, seats }. Null for a control nobody offers.
   function reservationFor(match, roomCode, tickets) {
     const spec = controlOf(match.control);
     if (!spec && match.control !== UNTIMED) return null;
@@ -54,6 +54,9 @@
       clock: spec ? { baseMs: spec.baseMs, incMs: spec.incMs } : null,
       hardMode: Boolean(match.hardMode),
       spectatorView: match.spectatorView === 'fog' ? 'fog' : 'open',
+      // How long the room waits for both players before calling it a no-show. Invites wait longer:
+      // the inviter may still be in another app, sending the link.
+      joinWindowMs: Number(match.joinWindowMs) > 0 ? Number(match.joinWindowMs) : undefined,
       seats: match.seats.map((seat) => ({ ...seat, ticket: tickets[seat.color] || '' })),
     };
   }
