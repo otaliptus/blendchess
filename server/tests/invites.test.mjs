@@ -190,6 +190,28 @@ test('hello reports whether the invite a client waits on is still open', async (
   assert.equal(last(bobBack, TYPES.LOBBY_READY).payload.invite, null);
 });
 
+test('a cancel made offline rides along with the next hello', async () => {
+  const h = makeLobby();
+  const ann = await h.player('Ann');
+  const bob = await h.player('Bob');
+  await send(h, ann, TYPES.LOBBY_INVITE, {});
+  const { code } = last(ann, TYPES.LOBBY_INVITED).payload;
+  const token = last(ann, TYPES.LOBBY_READY).payload.token;
+  await send(h, ann, TYPES.LOBBY_QUEUE, { control: '5+3' });
+  await send(h, ann, TYPES.LOBBY_INVITE, {});
+  const second = last(ann, TYPES.LOBBY_INVITED).payload.code;
+
+  // Only the named invite goes; a hello never touches the queue or another code.
+  const back = { id: 'conn-ann-2', playerId: '', ipHash: 'net-Ann', inbox: [] };
+  await lobbySession.hello(h.store, h.hooks, back, { token, cancelInvite: code });
+  assert.equal(h.store.getInvites().length, 1);
+  await lobbySession.hello(h.store, h.hooks, back, { token, cancelInvite: second });
+  assert.deepEqual(h.store.getInvites(), []);
+  await send(h, bob, TYPES.LOBBY_ACCEPT, { code: second });
+  assert.equal(last(bob, TYPES.LOBBY_ERROR).payload.errorCode, ERROR_CODES.INVITE_NOT_FOUND);
+  assert.equal(h.created.length, 0);
+});
+
 test('a room reserved for an invite waits the invite lifetime for a player to arrive', () => {
   const seats = [
     { color: 'w', playerId: 'p-w', nickname: 'Ann', rating: 1200 },

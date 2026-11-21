@@ -1602,18 +1602,9 @@ button {
   display: none;
 }
 
-/* Friend-game options fold away; the summary line still says what is on. */
-.invite-settings {
-  margin: 10px 0 2px;
-}
-
-.invite-settings summary {
-  padding: 8px 0;
-  line-height: 1.6;
-}
-
-.invite-settings[open] summary {
-  margin-bottom: 4px;
+/* The friend-game toggles, under the two buttons. */
+.friend-options-title {
+  margin: 14px 0 4px;
 }
 
 .lobby-back {
@@ -2526,6 +2517,34 @@ button {
 @media (max-width: 360px) {
   .play-choices {
     grid-template-columns: 1fr;
+  }
+
+  /* The top bar fits a 320px phone: the buttons go under the brand. */
+  .topbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .brand {
+    font-size: 11px;
+    padding: 4px 2px;
+  }
+
+  .palette-dot {
+    width: 16px;
+    height: 16px;
+  }
+
+  .chip-btn {
+    padding-left: 5px;
+    padding-right: 5px;
+    font-size: 8px;
   }
 }
 

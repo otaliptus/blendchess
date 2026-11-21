@@ -43,6 +43,7 @@
     identity: 'blendchess.identity.v1',
     lobbyControl: 'blendchess.lobbyControl.v1',
     invite: 'blendchess.invite.v1',
+    inviteCancel: 'blendchess.inviteCancel.v1',
   };
   const ARCHIVE_MAX = 30;
   const isLocalHost = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
@@ -213,12 +214,26 @@
     else remove(STORAGE.invite);
   }
 
+  // Withdraws the invite we hold. Offline, the cancel waits for the next hello: otherwise a friend
+  // opening the link later would start a game against nobody.
+  function withdrawInvite() {
+    const invite = lobbyState.invite;
+    if (!invite) return;
+    if (!lobbySend(TYPES.LOBBY_CANCEL, {})) save(STORAGE.inviteCancel, { code: invite.code, serverUrl: settings.serverUrl });
+    holdInvite(null);
+    if (lobbyState.status === 'inviting' || lobbyState.status === 'invite-pending') lobbyState.status = lobbyState.ws ? 'ready' : 'off';
+  }
+
+  function pendingCancelCode() {
+    const saved = load(STORAGE.inviteCancel, null);
+    return saved && saved.serverUrl === settings.serverUrl && typeof saved.code === 'string' ? saved.code : undefined;
+  }
+
   // Starting something else (a local game, a replay, watching) withdraws an open invite.
   function dropHeldInvite() {
     if (!lobbyState.invite) return;
-    lobbySend(TYPES.LOBBY_CANCEL, {});
-    holdInvite(null);
-    if (lobbyState.status === 'inviting' || lobbyState.status === 'invite-pending') lobbyState.status = lobbyState.ws ? 'ready' : 'off';
+    withdrawInvite();
+    toast('Your friend invite was cancelled.');
   }
 
   // The lobby socket stays open while the lobby panel shows, while a request waits for it, and
@@ -1081,6 +1096,7 @@
   }
 
   function enterGame(mode) {
+    lobbyState.pendingAction = null;
     dropHeldInvite();
     if (lobbyState.ws) closeLobbySocket();
     app.mode = mode;
@@ -1233,19 +1249,7 @@
     });
     $('inviteBtn').disabled = queued || lobbyState.status === 'matched';
     $('acceptBtn').disabled = queued || lobbyState.status === 'matched';
-    renderInviteOptions();
     renderInvite();
-  }
-
-  // The folded options line: what a friend game will be with the toggles as they are.
-  function renderInviteOptions() {
-    const untimed = $('inviteUntimed').checked;
-    $('inviteOptionsSummary').textContent = [
-      untimed ? 'NO CLOCK' : controlLabel(lobbyState.control),
-      !untimed && $('inviteRated').checked ? 'RANKED' : 'UNRANKED',
-      $('inviteParty').checked ? 'PARTY MODE' : '',
-      $('inviteHard').checked ? 'HARD MODE' : '',
-    ].filter(Boolean).join(' · ');
   }
 
   // While an invite is out, the friend section shows its code, QR and link instead of the options.
@@ -1330,6 +1334,7 @@
         nickname: settings.nickname,
         // Asks after the invite we hold: the friend may have arrived while we were away.
         inviteCode: lobbyState.invite ? lobbyState.invite.code : undefined,
+        cancelInvite: pendingCancelCode(),
       })));
     };
     ws.onmessage = (event) => {
@@ -1371,7 +1376,15 @@
     const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
     lobbyState.status = 'off';
     renderLobby();
-    if ((wasQueued || lobbyState.pendingAction) && lobbyState.reconnectAttempts < 5) scheduleLobbyReconnect({ requeue: wasQueued });
+    if ((wasQueued || lobbyState.pendingAction) && lobbyState.reconnectAttempts < 5) {
+      scheduleLobbyReconnect({ requeue: wasQueued });
+    } else if (lobbyState.pendingAction || wasQueued) {
+      // Gave up: say so, and leave nothing to fire later.
+      lobbyState.pendingAction = null;
+      lobbyState.reconnectAttempts = 0;
+      setJoinBusy(false);
+      toast("Can't reach the game server. Check your connection and try again.", 'bad');
+    }
   }
 
   // A phone that sleeps or changes networks can leave a socket that looks open but is dead. While
@@ -1515,12 +1528,14 @@
     if (queued) lobbySend(TYPES.LOBBY_CANCEL, {});
     lobbyState.resumeQueue = null;
     lobbyState.queued = null;
+    // A request still waiting for the lobby belongs to the panel being left.
+    lobbyState.pendingAction = null;
+    setJoinBusy(false);
     if (lobbyState.invite) {
       if (queued) lobbyState.status = 'ready';
       return;
     }
     lobbyState.reconnectAttempts = 0;
-    if (lobbyState.pendingAction) return;
     closeLobbySocket();
   }
 
@@ -1591,8 +1606,7 @@
 
   function cancelInvite() {
     sfx.play('click');
-    lobbySend(TYPES.LOBBY_CANCEL, {});
-    holdInvite(null);
+    withdrawInvite();
     lobbyState.status = lobbyState.ws ? 'ready' : 'off';
     renderLobby();
     if (!lobbyWanted()) closeLobbySocket();
@@ -1708,6 +1722,7 @@
         saveIdentity({ ...identity, playerId: payload.player.id, name: payload.player.name });
       }
       lobbyState.player = payload.player;
+      remove(STORAGE.inviteCancel);
       // The lobby answers for the invite we asked after: still open, already started (the match
       // follows), or gone.
       if (Object.prototype.hasOwnProperty.call(payload, 'invite') && lobbyState.invite) {
@@ -2157,6 +2172,9 @@
   // The next lobby visit starts a new guest.
   function forgetAccount(notice = '') {
     remove(identityKey());
+    // An invite belongs to the account that made it.
+    holdInvite(null);
+    remove(STORAGE.inviteCancel);
     lobbyState.player = null;
     account.me = null;
     account.notice = notice;
@@ -2308,6 +2326,8 @@
   }
 
   async function adoptSession(data) {
+    holdInvite(null);
+    remove(STORAGE.inviteCancel);
     saveIdentity({ token: data.token, playerId: data.player.id, name: data.player.name });
     // The lobby renames an account to the nickname it is greeted with: keep them in step.
     settings.nickname = data.player.name;
@@ -3447,7 +3467,6 @@
     $('inviteShare').hidden = typeof navigator.share !== 'function';
     // Without a share sheet, copying the link is the main action.
     $('inviteCopy').classList.toggle('primary', typeof navigator.share !== 'function');
-    for (const id of ['inviteRated', 'inviteParty', 'inviteHard', 'inviteUntimed']) $(id).addEventListener('change', renderInviteOptions);
     $('inviteShare').addEventListener('click', shareFriendInvite);
     // A game without a clock is never ranked.
     let rankedChoice = true;

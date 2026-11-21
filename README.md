@@ -19,7 +19,7 @@ Well, blindchess is taken, and blind+chess is too long, and the game is literall
 
 - `Local Duel`: pass-and-play on one device. The board flips to the side to move and shows only their pieces; a banner on top says whose turn it is and what the opponent just did.
 - `Play Online`: pick Blitz 5+3 or Rapid 10+0, then either **Invite a friend** to get a link, a QR code and a short code, or **Find game** to get paired by rating. Your friend opens the link (or types the code under **Got a code?**) and the game starts. You can switch apps to send the link: the invite waits for ten minutes, and you are taken to the game when you come back. Copying the game's address from the browser gives a link to watch it. Every online game has the same server clock, rating, watchers and replays; reconnects resume your seat automatically.
-- Friend games have four toggles, folded under the **Friend game** line (which lists what is on): **Ranked** (on by default; counts for both ratings), **Party mode** (on: watchers see the whole board; off: they see the fog), **Hard mode** (an illegal try costs your turn) and **No clock** (take your time; never ranked).
+- Friend games have four toggles: **Ranked** (on by default; counts for both ratings), **Party mode** (on: watchers see the whole board; off: they see the fog), **Hard mode** (an illegal try costs your turn) and **No clock** (take your time; never ranked).
 - `Watch`: every online game is listed under **Live now** for anyone to watch.
 - `Profiles`: every player has a public page with their rating, record and recent games. Each game opens as a full replay with a shareable link (`?game=...`); profiles are at `?p=name`.
 - `Archive`: finished games are saved on your device for replay and PGN export.

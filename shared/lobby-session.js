@@ -213,6 +213,14 @@
     conn.sessionHash = sessionHash;
     hooks.save(conn);
 
+    // A client that cancelled its invite while offline says so here. Only that open invite goes.
+    const cancelCode = protocol.normalizeRoomCode(payload.cancelInvite);
+    if (cancelCode) {
+      const invites = await store.getInvites();
+      const after = invites.filter((item) => !(item.code === cancelCode && item.playerId === record.id && !item.started));
+      if (after.length !== invites.length) await store.saveInvites(after);
+    }
+
     // A client waiting on an invite names it. If the friend arrived while this player was away (or
     // the match message was lost with an old socket), the seat is handed over now; an invite still
     // open moves to this socket. `invite: null` tells the client its invite is gone.
