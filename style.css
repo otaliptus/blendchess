@@ -1584,6 +1584,42 @@ button {
   color: var(--accent-2);
 }
 
+/* The two ways to play, side by side and big: a friend, or whoever is searching. */
+.play-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 16px 0 6px;
+}
+
+.play-choices .px-btn {
+  min-height: 56px;
+  font-size: 12px;
+  width: 100%;
+}
+
+.play-choices .hidden {
+  display: none;
+}
+
+/* Friend-game options fold away; the summary line still says what is on. */
+.invite-settings {
+  margin: 10px 0 2px;
+}
+
+.invite-settings summary {
+  padding: 8px 0;
+  line-height: 1.6;
+}
+
+.invite-settings[open] summary {
+  margin-bottom: 4px;
+}
+
+.lobby-back {
+  justify-content: flex-start;
+}
+
 /* Play a friend: the four toggles in two columns, then the code box and the two buttons. */
 .invite-options {
   display: grid;
@@ -2325,8 +2361,8 @@ button {
     display: none;
   }
 
-  .control-picker {
-    grid-template-columns: 1fr;
+  .control-chip {
+    padding: 8px 10px;
   }
 
   .leaderboard-row {
@@ -2484,6 +2520,12 @@ button {
 
   .umpire-text {
     font-size: 22px;
+  }
+}
+
+@media (max-width: 360px) {
+  .play-choices {
+    grid-template-columns: 1fr;
   }
 }
 

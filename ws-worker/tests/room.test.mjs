@@ -405,6 +405,28 @@ test('a reserved room nobody ever joins is released and deleted, not left loopin
   assert.deepEqual(release.body.players.sort(), ['ghost-black', 'ghost-white']);
 });
 
+test('a room reserved for an invite waits its longer window before calling a no-show', async () => {
+  const { hub } = await createHub(new Map(), {});
+  const reserved = await hub.fetch(reserveRequest({
+    roomCode: 'INVITE',
+    rated: true,
+    control: '10+0',
+    clock: { baseMs: 600_000, incMs: 0 },
+    joinWindowMs: 10 * 60 * 1000,
+    seats: [
+      { color: 'w', playerId: 'p-w', nickname: 'W', rating: 1200, ticket: 'w'.repeat(24) },
+      { color: 'b', playerId: 'p-b', nickname: 'B', rating: 1200, ticket: 'b'.repeat(24) },
+    ],
+  }));
+  assert.equal(reserved.status, 200);
+  assert.equal(hub.room.joinWindowMs, 10 * 60 * 1000);
+  // Past the matchmaking window, inside the invite window: the alarm leaves the room alone.
+  hub.room.reservedAt = Date.now() - 200_000;
+  await hub.alarm();
+  assert.ok(hub.room, 'the room still waits for the inviter');
+  assert.equal(hub.room.gameOver, false);
+});
+
 test('the alarm is never scheduled in the past', async () => {
   const { hub, ctx } = await createHub(new Map(), {});
   await hub.fetch(reserveRequest({

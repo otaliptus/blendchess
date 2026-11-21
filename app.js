@@ -42,6 +42,7 @@
     archive: 'blendchess.archive.v2',
     identity: 'blendchess.identity.v1',
     lobbyControl: 'blendchess.lobbyControl.v1',
+    invite: 'blendchess.invite.v1',
   };
   const ARCHIVE_MAX = 30;
   const isLocalHost = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
@@ -189,7 +190,42 @@
     leaderboard: null,
     live: null,
     refreshTimer: null,
+    heartbeatTimer: null,
+    lastMessageAt: 0,
+    // What the last lobby request was, so an error can say what to do next.
+    lastAction: null,
   };
+
+  // The lobby keeps an invite for ten minutes. The client keeps it too (per server), so a reload,
+  // a dropped socket or a trip to another app does not lose it: the next hello asks after it.
+  const INVITE_TTL_MS = 10 * 60 * 1000;
+
+  function loadHeldInvite() {
+    const saved = load(STORAGE.invite, null);
+    if (!saved || typeof saved.code !== 'string' || saved.serverUrl !== settings.serverUrl) return null;
+    if (!(Date.now() - (Number(saved.at) || 0) < INVITE_TTL_MS)) return null;
+    return saved;
+  }
+
+  function holdInvite(invite) {
+    lobbyState.invite = invite ? { ...invite, at: invite.at || Date.now() } : null;
+    if (lobbyState.invite) save(STORAGE.invite, { ...lobbyState.invite, serverUrl: settings.serverUrl });
+    else remove(STORAGE.invite);
+  }
+
+  // Starting something else (a local game, a replay, watching) withdraws an open invite.
+  function dropHeldInvite() {
+    if (!lobbyState.invite) return;
+    lobbySend(TYPES.LOBBY_CANCEL, {});
+    holdInvite(null);
+    if (lobbyState.status === 'inviting' || lobbyState.status === 'invite-pending') lobbyState.status = lobbyState.ws ? 'ready' : 'off';
+  }
+
+  // The lobby socket stays open while the lobby panel shows, while a request waits for it, and
+  // while an invite is out.
+  function lobbyWanted() {
+    return !$('menuLobby').classList.contains('hidden') || Boolean(lobbyState.pendingAction) || Boolean(lobbyState.invite);
+  }
 
   // The signed-in account as /api/me describes it, and where the profile panel returns to.
   const account = { me: null, busy: false, notice: '' };
@@ -200,6 +236,8 @@
 
   const RECONNECT_MAX_ATTEMPTS = 30;
   const HEARTBEAT_MS = 10_000;
+  const LOBBY_HEARTBEAT_MS = 20_000;
+  const LOBBY_STALE_MS = 50_000;
   const STALE_SOCKET_MS = 25_000;
   const PENDING_TIMEOUT_MS = 9_000;
 
@@ -354,6 +392,9 @@
     if (session && session.roomCode) {
       item.hidden = false;
       item.dataset.kind = 'online';
+    } else if (lobbyState.invite || loadHeldInvite()) {
+      item.hidden = false;
+      item.dataset.kind = 'invite';
     } else if (localSave && localSave.state && !localSave.state.gameOver) {
       item.hidden = false;
       item.dataset.kind = 'local';
@@ -376,7 +417,9 @@
     else if (action === 'archive') showMenuPanel('menuArchive');
     else if (action === 'help') showMenuPanel('menuHelp');
     else if (action === 'continue') {
-      if ($('continueItem').dataset.kind === 'online') resumeOnline(load(STORAGE.session, null));
+      const kind = $('continueItem').dataset.kind;
+      if (kind === 'online') resumeOnline(load(STORAGE.session, null));
+      else if (kind === 'invite') openLobbyPanel();
       else continueLocal();
     }
   }
@@ -784,7 +827,7 @@
         return { text: `${who} tried an illegal move and lost the turn!`, tone: 'good', sound: 'opponentIllegal', effect: 'opponentForfeit' };
       case 'draw_offer':
         if (mine) return { text: 'You offered a draw. It stands until your opponent moves.', sound: 'drawOffer' };
-        return { text: `${who} offers a draw. Press DRAW to accept, or just move to decline.`, tone: 'warn', sound: 'drawOffer', effect: 'drawOffer' };
+        return { text: `${who} offers a draw. Press ACCEPT DRAW, or just move to decline.`, tone: 'warn', sound: 'drawOffer', effect: 'drawOffer' };
       case 'draw_declined':
         return { text: mine ? 'Your draw offer was declined.' : 'Draw offer declined.', tone: 'warn' };
       case 'resign':
@@ -809,6 +852,9 @@
         };
       case 'new_game':
         return { text: `New game!${event.swapped ? ' Colours swapped.' : ''} White moves first.`, tone: 'good', sound: 'start' };
+      case 'rematch_offer':
+        if (mine) return { text: 'You asked for a rematch. Waiting for your opponent to accept.' };
+        return { text: `${who} wants a rematch! Press ACCEPT REMATCH to play again.`, tone: 'good', sound: 'drawOffer', effect: 'rematchOffer' };
       default:
         return null;
     }
@@ -850,6 +896,9 @@
       case 'drawOffer':
         fx.banner('DRAW?', 'warn', 1600);
         break;
+      case 'rematchOffer':
+        fx.banner('REMATCH?', 'good', 1600);
+        break;
       default:
         break;
     }
@@ -865,7 +914,7 @@
     if (!lines.length) return maxId;
 
     const sound = SOUND_PRIORITY.find((name) => lines.some((line) => line.sound === name));
-    if (sound && !view.gameOver) sfx.play(sound);
+    if (sound && (!view.gameOver || lines.some((line) => line.effect === 'rematchOffer'))) sfx.play(sound);
     requestAnimationFrame(() => lines.forEach(runEffect));
 
     const spoken = lines.filter((line) => line.tone || line.effect).slice(-2);
@@ -915,6 +964,25 @@
     }, 1500);
   }
 
+  // REMATCH, ACCEPT REMATCH, or the state of our own request. A lobby rematch needs both players.
+  function rematchState(view) {
+    if (app.mode === 'local') return { label: 'NEW GAME', disabled: false, pulse: false };
+    const mine = view.you && view.you.color;
+    const opponent = view.players.find((seat) => seat.color !== mine);
+    const shared = view.rated || view.reserved;
+    if (shared && (!opponent || !opponent.connected)) return { label: 'OPPONENT LEFT', disabled: true, pulse: false };
+    if (view.rematchOffer && view.rematchOffer === mine) return { label: 'REMATCH ASKED', disabled: true, pulse: false };
+    if (view.rematchOffer) return { label: 'ACCEPT REMATCH', disabled: false, pulse: true };
+    return { label: 'REMATCH', disabled: false, pulse: false };
+  }
+
+  function applyRematchState(button, view) {
+    const state = rematchState(view);
+    button.textContent = state.label;
+    button.disabled = state.disabled || (app.mode === 'online' && net.status !== 'online');
+    button.classList.toggle('pulse', state.pulse);
+  }
+
   function ratingChangeText(view) {
     if (!view.ratings || !view.you || view.you.role !== 'player') return '';
     const mine = view.ratings[view.you.color];
@@ -933,6 +1001,8 @@
       share.dataset.share = view.recordId;
       share.hidden = false;
     }
+    const rematch = $('gameOverButtons').querySelector('[data-rematch]');
+    if (app.gameOverShown === key && rematch) applyRematchState(rematch, view);
     if (app.gameOverShown === key || app.mode === 'archive') return;
     app.gameOverShown = key;
     const viewer = app.mode === 'online' && view.you.role === 'player' ? view.you.color : null;
@@ -974,7 +1044,9 @@
         el('button', { class: 'px-btn', type: 'button', text: 'PGN', onclick: exportPgn }),
       ];
       if (app.mode === 'local' || (app.mode === 'online' && view.you.role === 'player')) {
-        buttons.push(el('button', { class: 'px-btn primary', type: 'button', text: app.mode === 'local' ? 'NEW GAME' : 'REMATCH', onclick: () => { $('gameOver').classList.add('hidden'); newGame(); } }));
+        const rematch = el('button', { class: 'px-btn primary', type: 'button', dataset: { rematch: '1' }, onclick: () => { $('gameOver').classList.add('hidden'); newGame(); } });
+        applyRematchState(rematch, app.view && app.view.gameId === view.gameId ? app.view : view);
+        buttons.push(rematch);
       }
       if (app.mode === 'online' && (view.rated || view.reserved) && view.you.role === 'player') {
         buttons.push(el('button', { class: 'px-btn', type: 'button', text: 'NEW OPPONENT', onclick: () => { $('gameOver').classList.add('hidden'); playAgain(); } }));
@@ -1009,6 +1081,8 @@
   }
 
   function enterGame(mode) {
+    dropHeldInvite();
+    if (lobbyState.ws) closeLobbySocket();
     app.mode = mode;
     app.view = null;
     app.prevView = null;
@@ -1122,13 +1196,17 @@
     if (lobbyState.status === 'off') return lobbyState.player ? 'Lobby offline. Press FIND GAME to reconnect.' : 'Lobby offline. Press FIND GAME to retry.';
     if (lobbyState.status === 'queued' || lobbyState.status === 'queued-pending') {
       const queued = lobbyState.queued;
-      const waiting = queued && queued.waiting
-        ? `${queued.waiting} player${queued.waiting === 1 ? '' : 's'} waiting`
-        : 'Searching';
+      // `waiting` counts you too.
+      const others = queued && queued.waiting ? queued.waiting - 1 : 0;
+      const waiting = others > 0 ? `${others} other player${others === 1 ? '' : 's'} searching` : 'Nobody else is searching yet';
       return `Looking for a ${controlLabel(lobbyState.control)} opponent. ${waiting}.`;
     }
     if (lobbyState.status === 'invite-pending') return 'Making your invite...';
-    if (lobbyState.status === 'inviting') return 'Waiting for your friend to open the link.';
+    if (lobbyState.status === 'inviting') {
+      return lobbyState.ws && lobbyState.ws.readyState === WebSocket.OPEN
+        ? 'Waiting for your friend to open the link.'
+        : 'Reconnecting... your invite is still valid.';
+    }
     if (lobbyState.status === 'matched') return 'Match found!';
     return '';
   }
@@ -1155,12 +1233,24 @@
     });
     $('inviteBtn').disabled = queued || lobbyState.status === 'matched';
     $('acceptBtn').disabled = queued || lobbyState.status === 'matched';
+    renderInviteOptions();
     renderInvite();
+  }
+
+  // The folded options line: what a friend game will be with the toggles as they are.
+  function renderInviteOptions() {
+    const untimed = $('inviteUntimed').checked;
+    $('inviteOptionsSummary').textContent = [
+      untimed ? 'NO CLOCK' : controlLabel(lobbyState.control),
+      !untimed && $('inviteRated').checked ? 'RANKED' : 'UNRANKED',
+      $('inviteParty').checked ? 'PARTY MODE' : '',
+      $('inviteHard').checked ? 'HARD MODE' : '',
+    ].filter(Boolean).join(' · ');
   }
 
   // While an invite is out, the friend section shows its code, QR and link instead of the options.
   function renderInvite() {
-    const invite = lobbyState.status === 'inviting' ? lobbyState.invite : null;
+    const invite = lobbyState.invite;
     $('inviteSetup').classList.toggle('hidden', Boolean(invite));
     $('inviteBox').classList.toggle('hidden', !invite);
     if (!invite) return;
@@ -1206,6 +1296,7 @@
 
   // The server was reset while we were connected (or between visits): start over as a new guest.
   function onDataReset() {
+    holdInvite(null);
     leaveLobbyPanel();
     leaveGameScreen();
     forgetAccount();
@@ -1217,28 +1308,33 @@
   async function openLobbySocket() {
     if (lobbyState.ws && (lobbyState.ws.readyState === WebSocket.OPEN || lobbyState.ws.readyState === WebSocket.CONNECTING)) return;
     await syncDataVersion();
-    if (app.mode || $('menuLobby').classList.contains('hidden') || lobbyState.ws) return;
+    if (app.mode || !lobbyWanted() || lobbyState.ws) return;
     clearTimeout(lobbyState.reconnectTimer);
     let ws;
     try {
       ws = new WebSocket(buildSocketUrl({ lobby: '1' }));
     } catch {
-      lobbyState.status = 'off';
-      renderLobby();
+      onLobbyClosed(null, {});
       return;
     }
     lobbyState.ws = ws;
-    lobbyState.status = 'connecting';
+    if (!lobbyState.invite) lobbyState.status = 'connecting';
     renderLobby();
     ws.onopen = () => {
+      if (ws !== lobbyState.ws) return;
       const identity = loadIdentity();
+      lobbyState.lastMessageAt = Date.now();
+      startLobbyHeartbeat(ws);
       ws.send(JSON.stringify(protocol.createMessage(TYPES.LOBBY_HELLO, '', '', {
         token: identity ? identity.token : '',
         nickname: settings.nickname,
+        // Asks after the invite we hold: the friend may have arrived while we were away.
+        inviteCode: lobbyState.invite ? lobbyState.invite.code : undefined,
       })));
     };
     ws.onmessage = (event) => {
       if (ws !== lobbyState.ws) return;
+      lobbyState.lastMessageAt = Date.now();
       let message;
       try {
         message = JSON.parse(event.data);
@@ -1247,34 +1343,106 @@
       }
       onLobbyMessage(message);
     };
-    ws.onclose = (event) => {
-      if (ws !== lobbyState.ws) return;
-      lobbyState.ws = null;
-      if (event && event.code === protocol.DATA_RESET_CLOSE_CODE) {
-        onDataReset();
-        return;
-      }
-      if (event && event.code === 4001) {
-        // This device's session was ended from another device.
-        forgetAccount();
-        toast('This device was signed out.', 'bad');
-      }
-      const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
-      if (lobbyState.status === 'inviting' && lobbyState.reconnectAttempts < 5) {
-        renderLobby();
-        scheduleLobbyReconnect({ requeue: false });
-        return;
-      }
-      lobbyState.status = 'off';
-      lobbyState.invite = null;
-      renderLobby();
-      if (wasQueued && lobbyState.reconnectAttempts < 5) scheduleLobbyReconnect();
-    };
+    ws.onclose = (event) => onLobbyClosed(ws, event || {});
     ws.onerror = () => {};
+  }
+
+  function onLobbyClosed(ws, event) {
+    if (ws && ws !== lobbyState.ws) return;
+    lobbyState.ws = null;
+    stopLobbyHeartbeat();
+    if (event.code === protocol.DATA_RESET_CLOSE_CODE) {
+      onDataReset();
+      return;
+    }
+    if (event.code === 4001) {
+      // This device's session was ended from another device.
+      forgetAccount();
+      holdInvite(null);
+      toast('This device was signed out.', 'bad');
+    }
+    // An invite outlives the socket: keep trying until it expires.
+    if (lobbyState.invite) {
+      lobbyState.status = 'inviting';
+      renderLobby();
+      scheduleLobbyReconnect({ requeue: false });
+      return;
+    }
+    const wasQueued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+    lobbyState.status = 'off';
+    renderLobby();
+    if ((wasQueued || lobbyState.pendingAction) && lobbyState.reconnectAttempts < 5) scheduleLobbyReconnect({ requeue: wasQueued });
+  }
+
+  // A phone that sleeps or changes networks can leave a socket that looks open but is dead. While
+  // something waits on the lobby (an invite, the queue) it is pinged, and dropped if it goes quiet.
+  function startLobbyHeartbeat(ws) {
+    stopLobbyHeartbeat();
+    lobbyState.heartbeatTimer = setInterval(() => {
+      if (ws !== lobbyState.ws || ws.readyState !== WebSocket.OPEN) return;
+      const waiting = lobbyState.invite || lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+      if (!waiting) return;
+      if (Date.now() - lobbyState.lastMessageAt > LOBBY_STALE_MS) {
+        dropStaleLobbySocket();
+        return;
+      }
+      lobbySend(TYPES.PING, {});
+    }, LOBBY_HEARTBEAT_MS);
+  }
+
+  function stopLobbyHeartbeat() {
+    clearInterval(lobbyState.heartbeatTimer);
+    lobbyState.heartbeatTimer = null;
+  }
+
+  // Treats a silent socket as closed right away (a dead connection can take a minute to report it).
+  function dropStaleLobbySocket() {
+    const ws = lobbyState.ws;
+    if (!ws) return;
+    try {
+      ws.close();
+    } catch {
+      // already closed
+    }
+    onLobbyClosed(ws, {});
+  }
+
+  // Back from another app, or back online: pick the lobby up again if something waits on it.
+  function wakeLobby() {
+    if (document.hidden || app.mode || !lobbyState.invite) return;
+    if (!loadHeldInvite()) {
+      expireInvite();
+      return;
+    }
+    const ws = lobbyState.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      if (Date.now() - lobbyState.lastMessageAt > LOBBY_HEARTBEAT_MS) {
+        // Probably dead after a sleep: ask, and reconnect if no answer comes soon.
+        lobbySend(TYPES.PING, {});
+        const asked = Date.now();
+        setTimeout(() => {
+          if (lobbyState.ws === ws && lobbyState.lastMessageAt < asked) dropStaleLobbySocket();
+        }, 4000);
+      }
+      return;
+    }
+    if (!ws) {
+      lobbyState.reconnectAttempts = 0;
+      openLobbySocket();
+    }
+  }
+
+  function expireInvite() {
+    if (!lobbyState.invite) return;
+    holdInvite(null);
+    if (lobbyState.status === 'inviting') lobbyState.status = lobbyState.ws ? 'ready' : 'off';
+    renderLobby();
+    toast('Your invite expired. Make a new one.', 'bad');
   }
 
   function closeLobbySocket() {
     clearTimeout(lobbyState.reconnectTimer);
+    stopLobbyHeartbeat();
     const ws = lobbyState.ws;
     lobbyState.ws = null;
     lobbyState.status = 'off';
@@ -1290,9 +1458,13 @@
   function scheduleLobbyReconnect({ requeue = true } = {}) {
     clearTimeout(lobbyState.reconnectTimer);
     lobbyState.reconnectAttempts += 1;
-    const delay = Math.min(8000, 600 * 2 ** lobbyState.reconnectAttempts);
+    const delay = Math.min(8000, 600 * 2 ** Math.min(lobbyState.reconnectAttempts, 4));
     lobbyState.reconnectTimer = setTimeout(() => {
-      if ($('menuLobby').classList.contains('hidden')) return;
+      if (app.mode || !lobbyWanted() || lobbyState.ws) return;
+      if (lobbyState.invite && !loadHeldInvite()) {
+        expireInvite();
+        return;
+      }
       if (lobbyState.status !== 'off' && lobbyState.status !== 'inviting') return;
       if (requeue) lobbyState.resumeQueue = lobbyState.control;
       openLobbySocket();
@@ -1310,6 +1482,13 @@
     $('lobbyNameInput').value = settings.nickname || (identity && identity.name) || '';
     lobbyState.control = load(STORAGE.lobbyControl, lobbyState.control);
     if (!CONTROL_LABELS[lobbyState.control]) lobbyState.control = '10+0';
+    if (!lobbyState.invite) {
+      const held = loadHeldInvite();
+      if (held) {
+        lobbyState.invite = held;
+        lobbyState.status = 'inviting';
+      }
+    }
     showMenuPanel('menuLobby');
     renderLobby();
     openLobbySocket();
@@ -1328,21 +1507,27 @@
   }
 
   // Leaving the panel gives up the queue: nothing should happen while the player is not looking.
+  // An invite stays out (your friend may be about to open it), and its socket stays open, so the
+  // game still starts from the profile, account or main menu.
   function leaveLobbyPanel() {
     clearInterval(lobbyState.refreshTimer);
-    if (['queued', 'queued-pending', 'inviting', 'invite-pending'].includes(lobbyState.status)) lobbySend(TYPES.LOBBY_CANCEL, {});
-    lobbyState.pendingAction = null;
-    lobbyState.invite = null;
+    const queued = lobbyState.status === 'queued' || lobbyState.status === 'queued-pending';
+    if (queued) lobbySend(TYPES.LOBBY_CANCEL, {});
     lobbyState.resumeQueue = null;
     lobbyState.queued = null;
+    if (lobbyState.invite) {
+      if (queued) lobbyState.status = 'ready';
+      return;
+    }
     lobbyState.reconnectAttempts = 0;
+    if (lobbyState.pendingAction) return;
     closeLobbySocket();
   }
 
   // Runs `action` once the lobby knows who we are, connecting first if needed. A changed name in
   // the field is sent along first.
-  function whenLobbyReady(action) {
-    const name = rememberNickname($('lobbyNameInput').value);
+  function whenLobbyReady(action, nameInput = $('lobbyNameInput')) {
+    const name = rememberNickname(nameInput.value);
     const open = lobbyState.ws && lobbyState.ws.readyState === WebSocket.OPEN;
     if (!lobbyState.player || !open) {
       lobbyState.pendingAction = action;
@@ -1370,6 +1555,7 @@
       hardMode: $('inviteHard').checked,
       party: $('inviteParty').checked,
     };
+    lobbyState.lastAction = { kind: 'invite', options };
     whenLobbyReady(() => {
       lobbyState.status = 'invite-pending';
       if (!lobbySend(TYPES.LOBBY_INVITE, options)) lobbyState.status = 'off';
@@ -1377,23 +1563,39 @@
     });
   }
 
-  function acceptInvite(code) {
+  // `nameInput` is the name field of the panel the code was entered on.
+  function acceptInvite(code, nameInput = $('lobbyNameInput'), codeInput = $('inviteCodeInput')) {
     const clean = protocol.normalizeRoomCode(code);
     if (clean.length !== protocol.ROOM_CODE_LENGTH) {
       toast('Codes have 6 characters.', 'bad');
-      $('inviteCodeInput').focus();
+      codeInput.focus();
+      return;
+    }
+    if (lobbyState.invite && lobbyState.invite.code === clean) {
+      toast('That is your own invite: send it to a friend.', 'bad');
       return;
     }
     sfx.play('click');
-    whenLobbyReady(() => lobbySend(TYPES.LOBBY_ACCEPT, { code: clean }));
+    lobbyState.lastAction = { kind: 'accept', code: clean };
+    setJoinBusy(true);
+    whenLobbyReady(() => {
+      if (!lobbySend(TYPES.LOBBY_ACCEPT, { code: clean })) setJoinBusy(false);
+    }, nameInput);
+  }
+
+  // The JOIN panel's PLAY button waits for the lobby's answer.
+  function setJoinBusy(busy) {
+    $('joinGo').disabled = busy;
+    $('joinGo').textContent = busy ? 'JOINING...' : 'PLAY';
   }
 
   function cancelInvite() {
     sfx.play('click');
     lobbySend(TYPES.LOBBY_CANCEL, {});
-    lobbyState.invite = null;
+    holdInvite(null);
     lobbyState.status = lobbyState.ws ? 'ready' : 'off';
     renderLobby();
+    if (!lobbyWanted()) closeLobbySocket();
   }
 
   async function shareFriendInvite() {
@@ -1506,7 +1708,12 @@
         saveIdentity({ ...identity, playerId: payload.player.id, name: payload.player.name });
       }
       lobbyState.player = payload.player;
-      // A reconnect while inviting keeps the invite: the lobby holds it for this player.
+      // The lobby answers for the invite we asked after: still open, already started (the match
+      // follows), or gone.
+      if (Object.prototype.hasOwnProperty.call(payload, 'invite') && lobbyState.invite) {
+        if (payload.invite && !payload.invite.started) holdInvite({ ...lobbyState.invite, ...payload.invite });
+        else if (!payload.invite) expireInvite();
+      }
       lobbyState.status = lobbyState.invite ? 'inviting' : 'ready';
       lobbyState.reconnectAttempts = 0;
       if (!settings.nickname) {
@@ -1529,7 +1736,7 @@
       return;
     }
     if (message.type === TYPES.LOBBY_QUEUED) {
-      lobbyState.invite = null;
+      holdInvite(null);
       lobbyState.status = 'queued';
       lobbyState.queued = { control: payload.control, waiting: payload.waiting, position: payload.position };
       renderLobby();
@@ -1538,8 +1745,9 @@
     if (message.type === TYPES.LOBBY_CANCELLED) {
       lobbyState.status = 'ready';
       lobbyState.queued = null;
-      lobbyState.invite = null;
+      holdInvite(null);
       renderLobby();
+      if (!lobbyWanted()) closeLobbySocket();
       return;
     }
     if (message.type === TYPES.LOBBY_RATING) {
@@ -1553,9 +1761,10 @@
     }
     if (message.type === TYPES.LOBBY_INVITED) {
       lobbyState.status = 'inviting';
-      lobbyState.invite = payload;
+      holdInvite({ ...payload, at: Date.now() });
       sfx.play('select');
       renderLobby();
+      $('inviteBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       return;
     }
     if (message.type === TYPES.MATCH_FOUND) {
@@ -1563,20 +1772,62 @@
       return;
     }
     if (message.type === TYPES.LOBBY_ERROR) {
-      toast(REASON_TEXT[payload.errorCode] || payload.message || 'Lobby error.', 'bad');
+      const action = lobbyState.lastAction;
+      lobbyState.lastAction = null;
+      setJoinBusy(false);
       if (payload.errorCode === ERROR_CODES.NOT_AUTHENTICATED) forgetAccount();
       lobbyState.pendingAction = null;
-      lobbyState.invite = null;
-      lobbyState.status = lobbyState.player ? 'ready' : 'off';
+      if (lobbyState.status === 'invite-pending') holdInvite(null);
+      lobbyState.status = lobbyState.invite ? 'inviting' : lobbyState.player ? 'ready' : 'off';
       lobbyState.queued = null;
       renderLobby();
+      explainLobbyError(payload, action);
+      if (!lobbyWanted()) closeLobbySocket();
     }
+  }
+
+  // Some refusals have a way forward: offer it instead of only showing the message.
+  async function explainLobbyError(payload, action) {
+    const message = REASON_TEXT[payload.errorCode] || payload.message || 'Lobby error.';
+    if (payload.errorCode === ERROR_CODES.INVITE_NOT_FOUND && action && action.kind === 'accept') {
+      // The six letters on the game screen are the room, not an invite: offer to watch it.
+      const live = await api('/api/live');
+      const game = live.ok && (live.data.games || []).find((item) => item.roomCode === action.code);
+      if (game) {
+        const watch = await confirmDialog('GAME IN PROGRESS', `${action.code} is ${game.white.name} vs ${game.black.name}, already playing. Watch it?`, 'WATCH');
+        if (watch) watchRoom(action.code);
+        return;
+      }
+      toast(payload.message || message, 'bad');
+      return;
+    }
+    if (payload.errorCode === ERROR_CODES.ALREADY_IN_GAME) {
+      const session = load(STORAGE.session, null);
+      const buttons = [{ label: 'OK', kind: 'ghost', value: null }];
+      if (action && action.kind === 'invite') buttons.push({ label: 'INVITE UNRANKED', value: 'unranked' });
+      if (session && session.roomCode) buttons.push({ label: 'BACK TO MY GAME', kind: 'primary', value: 'resume' });
+      const choice = await dialog({
+        title: 'RANKED GAME RUNNING',
+        body: `${payload.message || message} A ranked game ends by checkmate, resignation, a draw or the clock.`,
+        buttons,
+      });
+      if (choice === 'resume') resumeOnline(load(STORAGE.session, null));
+      else if (choice === 'unranked') {
+        $('inviteRated').checked = false;
+        inviteFriend();
+      }
+      return;
+    }
+    toast(message, 'bad');
   }
 
   function onMatchFound(payload) {
     lobbyState.status = 'matched';
     lobbyState.queued = null;
-    lobbyState.invite = null;
+    lobbyState.lastAction = null;
+    lobbyState.pendingAction = null;
+    holdInvite(null);
+    setJoinBusy(false);
     lobbyState.resumeQueue = null;
     closeLobbySocket();
     sfx.play('join');
@@ -2843,15 +3094,23 @@
   function turnNote(view, viewer) {
     const anchor = viewer || view.turn;
     const events = view.events;
-    let start = 0;
+    // Only this game: the room's log runs on through rematches.
+    let floor = 0;
     for (let i = events.length - 1; i >= 0; i -= 1) {
+      if (events[i].kind === 'new_game') {
+        floor = i + 1;
+        break;
+      }
+    }
+    let start = floor;
+    for (let i = events.length - 1; i >= floor; i -= 1) {
       if (events[i].color === anchor && (events[i].kind === 'move' || events[i].kind === 'forfeit')) {
         start = i + 1;
         break;
       }
     }
     let recent = events.slice(start).filter((event) => NOTE_KINDS.includes(event.kind));
-    if (!recent.length && start > 0) recent = [events[start - 1]];
+    if (!recent.length && start > floor) recent = [events[start - 1]];
 
     const lines = [];
     let illegalTries = 0;
@@ -3006,7 +3265,8 @@
       ? controlLabel((view && view.control) || net.control)
       : `${controlLabel((view && view.control) || net.control)} · PRACTICE`;
     $('qrBtn').hidden = shared;
-    $('copyLink').hidden = shared;
+    // Lobby games are open to watchers: the link lets anyone watch (players are seated by ticket).
+    $('copyLink').textContent = shared ? 'WATCH LINK' : 'COPY LINK';
     $('watchers').textContent = !shared && view && view.spectatorCount ? `${view.spectatorCount} watching` : '';
     const options = $('roomOptions');
     if (!view) {
@@ -3057,7 +3317,11 @@
     } else if (view.gameOver) {
       buttons.push(actionButton('REPLAY', () => startReplay(0)));
       buttons.push(actionButton('PGN', exportPgn));
-      if (isPlayer) buttons.push(actionButton(app.mode === 'local' ? 'NEW GAME' : 'REMATCH', newGame, { kind: 'primary', disabled: app.mode === 'online' && net.status !== 'online' }));
+      if (isPlayer) {
+        const rematch = actionButton('REMATCH', newGame, { kind: 'primary' });
+        applyRematchState(rematch, view);
+        buttons.push(rematch);
+      }
     }
     buttons.push(actionButton(app.mode === 'online' ? 'LEAVE' : 'MENU', backToMenu, { kind: 'ghost' }));
     container.replaceChildren(...buttons);
@@ -3181,6 +3445,9 @@
     $('inviteCancel').addEventListener('click', cancelInvite);
     $('inviteCopy').addEventListener('click', () => copyLink({ invite: lobbyState.invite.code }, 'Invite link copied!'));
     $('inviteShare').hidden = typeof navigator.share !== 'function';
+    // Without a share sheet, copying the link is the main action.
+    $('inviteCopy').classList.toggle('primary', typeof navigator.share !== 'function');
+    for (const id of ['inviteRated', 'inviteParty', 'inviteHard', 'inviteUntimed']) $(id).addEventListener('change', renderInviteOptions);
     $('inviteShare').addEventListener('click', shareFriendInvite);
     // A game without a clock is never ranked.
     let rankedChoice = true;
@@ -3194,8 +3461,12 @@
       event.target.value = protocol.normalizeRoomCode(event.target.value);
     });
     const join = (spectator) => {
-      sfx.play('click');
-      joinRoom($('roomCodeInput').value, { spectator, nickname: rememberNickname($('joinNicknameInput').value) });
+      if (spectator) {
+        rememberNickname($('joinNicknameInput').value);
+        watchRoom($('roomCodeInput').value);
+        return;
+      }
+      acceptInvite($('roomCodeInput').value, $('joinNicknameInput'), $('roomCodeInput'));
     };
     $('joinGo').addEventListener('click', () => join(false));
     $('watchGo').addEventListener('click', () => join(true));
@@ -3233,7 +3504,11 @@
     boardEl.addEventListener('keydown', onBoardKey);
     boardEl.addEventListener('contextmenu', (event) => event.preventDefault());
     $('waitingCopy').addEventListener('click', copyInvite);
-    $('copyLink').addEventListener('click', copyInvite);
+    $('copyLink').addEventListener('click', () => {
+      const view = app.view;
+      if ((view && (view.rated || view.reserved)) || net.rated) copyLink({ watch: net.roomCode }, 'Watch link copied!');
+      else copyInvite();
+    });
     $('qrBtn').addEventListener('click', showQrDialog);
     $('waitingShare').addEventListener('click', shareInvite);
     document.querySelectorAll('[data-replay]').forEach((button) => {
@@ -3333,10 +3608,24 @@
 
     window.addEventListener('online', () => {
       if (app.mode === 'online' && !net.ws) reconnectNow();
+      wakeLobby();
     });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden && app.mode === 'online' && !net.ws && !net.intentionalClose) reconnectNow();
+      wakeLobby();
     });
+    window.addEventListener('pageshow', wakeLobby);
+    window.addEventListener('focus', wakeLobby);
+  }
+
+  function showJoinPanel(code) {
+    $('roomCodeInput').value = code;
+    $('joinNicknameInput').value = settings.nickname;
+    // An invite code is a seat, not a game to watch.
+    $('watchGo').hidden = true;
+    setJoinBusy(false);
+    showMenuPanel('menuJoin');
+    setTimeout(() => ($('joinNicknameInput').value ? $('joinGo') : $('joinNicknameInput')).focus(), 0);
   }
 
   function boot() {
@@ -3370,13 +3659,18 @@
       openProfile(profileParam, 'menuMain');
       return;
     }
-    // A friend's invite link: straight into the lobby, and into the game once it answers.
+    // A friend's invite link. Someone who has played before goes straight into the game; a first
+    // visit asks for a name on the JOIN panel, with PLAY one tap away.
     const inviteParam = protocol.normalizeRoomCode(params.get('invite'));
     if (inviteParam.length === protocol.ROOM_CODE_LENGTH) {
       setUrl({});
-      openLobbyPanel();
-      $('inviteCodeInput').value = inviteParam;
-      acceptInvite(inviteParam);
+      if (settings.nickname) {
+        openLobbyPanel();
+        $('inviteCodeInput').value = inviteParam;
+        acceptInvite(inviteParam);
+      } else {
+        showJoinPanel(inviteParam);
+      }
       return;
     }
     const watchParam = protocol.normalizeRoomCode(params.get('watch'));
@@ -3392,13 +3686,15 @@
       resumeOnline(session, { auto: true });
       return;
     }
-    if (room) {
-      // Arrived from an invite link or QR code: the code is filled in, so PLAY is one tap away.
-      $('roomCodeInput').value = room;
-      $('joinNicknameInput').value = settings.nickname;
-      $('joinTitle').textContent = `JOIN ROOM ${room}`;
-      showMenuPanel('menuJoin');
-      setTimeout(() => $('joinGo').focus(), 0);
+    if (room.length === protocol.ROOM_CODE_LENGTH) {
+      // A game's address (copied from a player's address bar): seats belong to the two players,
+      // so anyone else watches.
+      watchRoom(room);
+      return;
+    }
+    // An invite we are still waiting on: back to it, and into the game if the friend came.
+    if (loadHeldInvite()) {
+      openLobbyPanel();
       return;
     }
     showMenuPanel('title');

@@ -13,6 +13,8 @@
   const NICKNAME_MAX_LENGTH = 16;
   const MAX_CLOCK_MS = 60 * 60 * 1000;
   const JOIN_DEADLINE_MS = 2 * 60 * 1000;
+  // A friend's invite may wait longer for the inviter, who might be in another app sending the link.
+  const MAX_JOIN_WINDOW_MS = 15 * 60 * 1000;
   const DRAW_REASON_PRIORITY = ['fivefold', 'seventyFiveMove', 'threefold', 'fiftyMove', 'insufficientMaterial'];
 
   function cleanNickname(value, fallback) {
@@ -288,6 +290,8 @@
     }
     state.reservedSeats = reserved;
     state.reservedAt = now;
+    const joinWindowMs = Math.round(Number(reservation.joinWindowMs) || 0);
+    state.joinWindowMs = joinWindowMs > 0 ? Math.max(30_000, Math.min(MAX_JOIN_WINDOW_MS, joinWindowMs)) : null;
     state.hardMode = Boolean(reservation.hardMode);
     // Party mode, the default for lobby games: watchers see the whole board. Players are trusted.
     state.spectatorView = reservation.spectatorView === 'fog' ? 'fog' : 'open';
@@ -300,6 +304,11 @@
     //   if (seat && seat.playerId) noteSeatNetwork(state, String(seat.playerId), seat.ipHash);
     // }
     return state;
+  }
+
+  // When a lobby room gives up on a player who never arrived.
+  function joinDeadline(state) {
+    return (state.reservedAt || 0) + (Number(state.joinWindowMs) > 0 ? Number(state.joinWindowMs) : JOIN_DEADLINE_MS);
   }
 
   function isLobbyRoom(state) {
@@ -532,7 +541,7 @@
   // Starts the next game in the same room. Players trade colours after a finished game.
   function resetGame(state, options = {}) {
     const fresh = createRoomState(state.roomCode, state);
-    const keep = ['players', 'playerOrder', 'spectators', 'spectatorOrder', 'events', 'eventSeq', 'createdAt'];
+    const keep = ['players', 'playerOrder', 'spectators', 'spectatorOrder', 'events', 'eventSeq', 'createdAt', 'joinWindowMs'];
     for (const key of keep) fresh[key] = state[key];
     fresh.gameId = state.gameId + 1;
     fresh.boardVersion = state.boardVersion + 1;
@@ -563,6 +572,16 @@
     // nobody should be handed a loss while away, and no result may land on the next game.
     if (isLobbyRoom(state) && !isReady(state)) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
     if (isLobbyRoom(state) && state.gameOver && !state.reported) return { ok: false, reason: ERROR_CODES.ROOM_NOT_READY };
+
+    // In a lobby room a rematch is offered and accepted: one player's click must not drop the
+    // other into a new game with their clock running. The second REMATCH starts it.
+    if (isLobbyRoom(state) && state.gameOver && state.rematchOffer !== core.otherColor(player.color)) {
+      if (state.rematchOffer !== player.color) {
+        state.rematchOffer = player.color;
+        addEvent(state, 'rematch_offer', { color: player.color });
+      }
+      return { ok: true, rematchOffered: true };
+    }
 
     const swapColors = state.gameOver;
     resetGame(state, { swapColors });
@@ -847,6 +866,8 @@
         ? { color: state.turn, directions: core.checkDirections(state.board, state.turn) }
         : null,
       drawOffer: state.pendingDrawOffer,
+      // The colour that asked for a rematch after a lobby game, until the other accepts.
+      rematchOffer: state.gameOver ? state.rematchOffer || null : null,
       gameOver: state.gameOver,
       winner: state.winner,
       result: state.result,
@@ -983,6 +1004,7 @@
     finishByTimeout,
     finishByAbandon,
     JOIN_DEADLINE_MS,
+    joinDeadline,
     removePlayer,
     removeSpectator,
     resetGame,

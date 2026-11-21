@@ -98,7 +98,12 @@ ratings, finished-game records and the live list. It never holds a game.
   matched by its code instead of by rating, with its own options (rated, hard mode, party mode, or no
   clock, which is never rated). `startGame` in `lobby-session.js` starts every lobby game, from the queue
   or from an accepted invite, and `reservationFor` in `lobby-logic.js` is what both transports send the
-  room. Invites ignore networks.
+  room. Invites ignore networks. An invite does not depend on the inviter's socket: phones drop it as
+  soon as the link is shared from another app. When the friend accepts, the game starts; the inviter's
+  match message is kept on a `started` copy of the invite and handed over when their client says hello
+  again naming the invite code. The client keeps the invite in local storage, pings the lobby while it
+  waits, and reconnects when the page comes back to the foreground or the network returns. Invite rooms
+  give players ten minutes to arrive (`joinWindowMs`), matchmaking rooms two.
 - **Rooms.** The lobby picks a room code, generates two tickets, and asks the `GameHub` for that code to
   `POST /reserve` with both seats. The room stores the tickets (server-side only) and accepts a seat
   only from the matching ticket. This is the only way a lobby room is created, and its `/reserve` path
@@ -140,7 +145,7 @@ ratings, finished-game records and the live list. It never holds a game.
 - A forfeit clears the en passant square.
 - Options (hard mode, party mode) are locked between the first move and the end of the game, and for good in lobby-arranged games.
 - A lobby game's clock is authoritative (ranked and practice alike): time is charged on the server, each played move earns the increment, and a flag fall (or a no-show for two minutes) ends the game and is reported like any other result.
-- `new_game` is refused while a game is in progress; after a finished game the players swap colours.
+- `new_game` is refused while a game is in progress; after a finished game the players swap colours. In a lobby room a rematch is offered by one player and starts when the other accepts.
 - Automatic draws: stalemate, fivefold repetition, the 75-move rule, and dead positions (K v K, a single minor piece, or same-coloured bishops only). Threefold and the 50-move rule must be claimed.
 
 ## Client
